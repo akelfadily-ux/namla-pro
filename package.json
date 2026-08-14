@@ -1,0 +1,33 @@
+{
+  "name": "namla-pro",
+  "version": "0.1.0-alpha",
+  "private": true,
+  "description": "Experimental multi-agent system for software engineering: ant-colony-inspired coordination with fail-closed execution boundaries, sandbox isolation and evidence-based receipts.",
+  "license": "UNLICENSED",
+  "type": "commonjs",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "tsc",
+    "demo": "node dist/tools/reviewerDemo.js",
+    "test": "node dist/tools/p0SecurityRunner.js",
+    "test:golden": "node dist/examples/demoGoldenOutputs.js",
+    "colony:mission": "node dist/cli/colonyMissionCli.js",
+    "colony:real-smoke": "node dist/cli/colonyRealSmokeCli.js",
+    "academy:real-pilot": "node dist/cli/academyRealPilotCli.js",
+    "digital:real-objective": "node dist/cli/digitalRealObjectiveCli.js",
+    "digital:live-objective": "node dist/cli/digitalLiveObjectiveCli.js",
+    "civilization:live": "node dist/cli/civilizationLiveCli.js",
+    "twin:live": "node dist/cli/twinEmpireLiveCli.js",
+    "twin:resume": "node dist/cli/twinResumeCli.js",
+    "test:p0": "node dist/tools/p0SecurityRunner.js",
+    "test:p0:windows": "node --test dist/tools/workspaceSecurityTests.js dist/tools/processTreeTests.js dist/tools/ciInvariantTests.js",
+    "test:p0:posix": "node --test dist/tools/workspaceSecurityTests.js dist/tools/trustedExecutableTests.js dist/tools/processTreeTests.js dist/tools/ciInvariantTests.js",
+    "test:p0:sandbox-capability": "node dist/tools/sandboxCapabilityReport.js",
+    "test:p0:container-sandbox": "node dist/tools/verifyContainerSandbox.js",
+    "test:p0:bisect-docker": "node dist/tools/bisectDockerStages.js"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "@types/node": "^20.11.0"
+  }
+}

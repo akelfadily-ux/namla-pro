@@ -1,0 +1,11 @@
+node_modules/
+dist/
+*.log
+.env
+.env.*
+!.env.example
+.claude/
+coverage/
+.DS_Store
+Thumbs.db
+workspaces/

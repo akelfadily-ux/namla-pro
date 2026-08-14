@@ -1,0 +1,245 @@
+# P0 Cross-Platform Security CI
+#
+# Windows verifies junction containment and the Windows process-tree fixture
+# locally. Linux and macOS exist in this matrix to verify what Windows CANNOT:
+# file symlinks and POSIX process groups. On those platforms a skip in the
+# corresponding security test is treated as a FAILURE, because they are always
+# capable of the operation - a skip there would mean the escape is untested
+# everywhere.
+#
+# Security constraints for this workflow:
+#   - no repository secrets, no API keys, no provider authentication
+#   - no provider network calls, no browser automation, no git push
+#   - no golden baseline rewriting, no ignored failures, no warning downgrades
+#   - artifacts carry safe summaries only (never env dumps, host paths,
+#     credentials, prompts, provider output, or workspace contents)
+
+name: P0 Security
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: p0-security-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  p0-security:
+    name: P0 security (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies (lockfile present)
+        run: npm ci
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Build
+        run: npx tsc
+
+      # The runner enforces the platform skip rules, fails on ANY nonzero exit,
+      # and requires allGoldensPassed === true. It emits the safe report.
+      - name: Run P0 security gate
+        id: gate
+        run: npm run test:p0 -- --report p0-report-${{ matrix.os }}.json
+
+      # EXACT per-suite diagnostics, run ONLY when the gate failed. This forces
+      # --test-reporter=tap, so the parsed format is identical on Node 20 (TAP
+      # by default) and Node 24 (spec by default) - the version split that made
+      # the previous parser report "no parsed failures" on Linux and macOS.
+      #
+      # It is a REPORTER: it exits 0 by design and runs only in the failure
+      # branch, so it can never turn a failed security job green.
+      - name: Exact failure diagnostics (POSIX suites)
+        if: always() && steps.gate.outcome == 'failure' && runner.os != 'Windows'
+        run: |
+          node dist/tools/safeSuiteFailureDiagnostics.js             dist/tools/processTreeTests.js             dist/tools/trustedExecutableTests.js             dist/tools/workspaceSecurityTests.js             --out p0-failure-diagnostics-${{ matrix.os }}.json
+
+      - name: Exact failure diagnostics (Windows suites)
+        if: always() && steps.gate.outcome == 'failure' && runner.os == 'Windows'
+        run: node dist/tools/safeSuiteFailureDiagnostics.js dist/tools/processTreeTests.js dist/tools/trustedExecutableTests.js dist/tools/workspaceSecurityTests.js --out p0-failure-diagnostics-${{ matrix.os }}.json
+
+      - name: Upload exact failure diagnostics
+        if: always() && steps.gate.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: p0-failure-diagnostics-${{ matrix.os }}
+          path: p0-failure-diagnostics-${{ matrix.os }}.json
+          if-no-files-found: warn
+
+      # Platform-specific proof, run explicitly so the log names the tests.
+      - name: Windows platform proof (junctions + process tree)
+        if: runner.os == 'Windows'
+        run: npm run test:p0:windows
+
+      - name: POSIX platform proof (file symlinks + process groups)
+        if: runner.os != 'Windows'
+        run: npm run test:p0:posix
+
+      # The gate already prints sanitized assertions before exiting; this step
+      # re-prints them from the artifact so a red job is diagnosable from the
+      # step summary alone, without repository authentication.
+      - name: Print safe failure diagnostics
+        if: failure()
+        shell: bash
+        run: |
+          echo "=== SAFE FAILURE DIAGNOSTICS (${{ matrix.os }}) ==="
+          node -e "const r=require('./p0-report-${{ matrix.os }}.json');if(!r.failures||!r.failures.length){console.log('no parsed failures');process.exit(0)}for(const f of r.failures){console.log('SUITE   :',f.suite);console.log('TEST    :',f.testName);console.log('CODE    :',f.assertionCode);console.log('MESSAGE :',f.message);console.log('EXPECTED:',f.expectedSummary);console.log('ACTUAL  :',f.actualSummary);console.log('AT      :',f.location);console.log('---')}" || echo "report not produced"
+
+      - name: Print skipped tests and reasons
+        if: always()
+        shell: bash
+        run: |
+          echo "=== SKIPPED TESTS ON ${{ matrix.os }} ==="
+          node -e "const r=require('./p0-report-${{ matrix.os }}.json');let n=0;for(const s of r.suites){for(let i=0;i<s.skippedNames.length;i++){n++;console.log('SKIP:',s.suite,'-',s.skippedNames[i],'|',s.skipReasons[i]||'(no reason given)')}}if(n===0)console.log('none')"
+
+      - name: Upload safe P0 report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: p0-report-${{ matrix.os }}
+          path: p0-report-${{ matrix.os }}.json
+          if-no-files-found: error
+
+  sandbox-capability:
+    name: Container runtime capability (detection only)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npx tsc
+
+      # Detection ONLY: resolves docker/podman through TrustedExecutableRegistry
+      # and reads a version token. No image pull, no image build, no mission
+      # container, no package install, no network service.
+      # Direct node execution, NOT `npm run ... >`: npm writes a banner to stdout
+      # before the script output, so the redirected file began with npm's text
+      # and JSON.parse failed with "Unexpected token '>'".
+      - name: Detect container runtime capability
+        run: node dist/tools/sandboxCapabilityReport.js > sandbox-capability.json
+
+      - name: Validate capability report is pure JSON and claims no verification
+        shell: bash
+        run: |
+          cat sandbox-capability.json
+          node dist/tools/validateCapabilityReport.js sandbox-capability.json
+
+      - name: Upload capability report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sandbox-capability
+          path: sandbox-capability.json
+          if-no-files-found: error
+
+  real-container-sandbox:
+    name: Real container sandbox (isolation verification)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npx tsc
+
+      # Build the FIXED approved image LOCALLY. Nothing is pulled at mission
+      # time; the backend only ever runs `docker image inspect`.
+      - name: Build the approved sandbox image
+        run: docker build -f sandbox/Dockerfile -t namla-sandbox:v1 sandbox
+
+      # Block scalar is REQUIRED here: the command contains ": " inside the
+      # --format string, and a PLAIN YAML scalar may not contain a colon-space
+      # sequence - that is the mapping indicator. Written plainly, GitHub
+      # rejected the entire workflow and created no jobs at all.
+      - name: Confirm the approved image is present locally
+        run: |
+          docker image inspect namla-sandbox:v1 --format 'image present: {{.Id}}'
+
+      # Starts ONE disposable container under production flags and reads the
+      # isolation probe's findings. Exits nonzero unless every property holds,
+      # so an unverified sandbox fails the job rather than being recorded as ok.
+      - name: Verify real container isolation
+        id: verify
+        run: npm run test:p0:container-sandbox -- --out container-sandbox-capability.json
+
+      # Exit 125 means DOCKER refused the invocation before the container
+      # command ran, so the fault is a flag rather than the workload. This
+      # re-applies the flags in eight cumulative stages under the approved
+      # image and reports the FIRST stage rejected, bracketing the offending
+      # flag. It is a REPORT, not a gate: the job has already failed.
+      - name: Bisect rejected Docker arguments
+        if: always() && steps.verify.outcome == 'failure'
+        run: npm run test:p0:bisect-docker -- --capability container-sandbox-capability.json --out docker-stage-bisection.json
+
+      - name: Upload safe stage bisection
+        if: always() && steps.verify.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-stage-bisection
+          path: docker-stage-bisection.json
+          if-no-files-found: warn
+
+      # Safe receipt ONLY: verdict, claims, reason code. Container stdout is
+      # never printed or uploaded, because it could carry host information.
+      - name: Assert detection was not mistaken for verification
+        shell: bash
+        run: |
+          node -e "const r=require('./container-sandbox-capability.json');if(r.capabilityState!=='available-and-verified'||r.verified!==true){console.error('FAIL: sandbox not verified:',r.safeReasonCode);process.exit(1)}if(r.detectionMethod!=='isolation-probe'){console.error('FAIL: detection must never be recorded as verification');process.exit(1)}console.log('verified via',r.detectionMethod,'| image',r.imageReference,'| pinned',r.imagePinned)"
+
+      - name: Confirm no container survived
+        if: always()
+        run: |
+          echo "containers still running:"
+          docker ps -a --filter "name=namla-" --format "{{.Names}} {{.Status}}" || true
+          test -z "$(docker ps -aq --filter 'name=namla-')" || (echo "FAIL: a namla container survived" && exit 1)
+
+      - name: Upload safe capability receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: container-sandbox-capability
+          path: container-sandbox-capability.json
+          if-no-files-found: error
