@@ -14,9 +14,10 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync, realpathSync } from "fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync, realpathSync, readFileSync, existsSync } from "fs";
+import { createHash } from "crypto";
 import { tmpdir } from "os";
-import { resolve, join, delimiter, isAbsolute, basename } from "path";
+import { resolve, join, dirname, delimiter, isAbsolute, basename } from "path";
 import { resolveTrustedExecutable, TRUSTED_EXECUTABLE_IDS, VERIFICATION_ARGUMENT_TEMPLATES, type TrustedExecutableId } from "../cognitive/trustedExecutableRegistry";
 
 const IS_WINDOWS = process.platform === "win32";
@@ -34,6 +35,34 @@ function plantDecoy(dir: string, id: string): string {
   const p = join(dir, name);
   writeFileSync(p, IS_WINDOWS ? "@echo off\r\necho HIJACKED\r\n" : "#!/bin/sh\necho HIJACKED\n", { mode: 0o755 });
   return p;
+}
+
+/**
+ * The identities a TRUSTED CALLER would configure for npm/npx (§38).
+ *
+ * npm/npx execute TWO files — the node interpreter and the CLI script — so a
+ * platform that cannot prove ownership needs an external identity for BOTH.
+ *
+ * INDEPENDENT BY CONSTRUCTION: both digests are hashed from the filesystem
+ * here, never copied from `resolveTrustedExecutable(...).value.identity`. A pin
+ * taken from the resolver would only show the resolver agreeing with itself.
+ * Production never derives a pin either — the registry only READS
+ * `expectedSha256` and nothing in `src/` writes it.
+ */
+function npmTrustPins(id: "npm" | "npx"): { expectedInterpreterSha256: string; expectedSha256: string } {
+  const interpreter = realpathSync(process.execPath);
+  const nodeDir = dirname(interpreter);
+  const candidates = [
+    join(nodeDir, "node_modules", "npm", "bin", `${id}-cli.js`),
+    join(nodeDir, "lib", "node_modules", "npm", "bin", `${id}-cli.js`),
+    join(nodeDir, "..", "lib", "node_modules", "npm", "bin", `${id}-cli.js`),
+  ];
+  const script = candidates.find((c) => existsSync(c));
+  if (!script) throw new Error(`could not independently locate ${id}-cli.js`);
+  return {
+    expectedInterpreterSha256: createHash("sha256").update(readFileSync(interpreter)).digest("hex"),
+    expectedSha256: createHash("sha256").update(readFileSync(realpathSync(script))).digest("hex"),
+  };
 }
 
 // ------------------------------------------------------------- ACCEPTANCE ---
@@ -56,10 +85,38 @@ test("the npm resolution is actually runnable — not the EINVAL that npm.cmd gi
   // This is the defect that motivated the change: on Node >= 18.20.2,
   // spawnSync("npm.cmd", …, {shell:false}) fails with EINVAL, so the whole
   // verification path was dead. A version probe proves the new form works.
-  const r = resolveTrustedExecutable("npm", { probeVersion: true });
-  assert.equal(r.ok, true, "npm must resolve AND probe successfully");
+  //
+  // §38: a probe is EXECUTION, so it requires execution authority. Where the
+  // platform can prove ownership that comes from provenance; where it cannot
+  // (Windows) it comes from the caller-supplied identities below. Either way
+  // the runnable form is `node <cli-script>`, never a `.cmd` shim.
+  const r = resolveTrustedExecutable("npm", { probeVersion: true, ...npmTrustPins("npm") });
+  assert.equal(r.ok, true, `npm must resolve AND probe successfully: ${r.reasonCode}`);
   if (!r.ok) return;
   assert.match(r.value.version, /^\d+\.\d+\.\d+/, "a real npm version must come back");
+  assert.equal(r.value.executionAuthorized, true, "the probe only ran because execution was authorized");
+  assert.equal(/\.(cmd|bat)$/i.test(r.value.command), false, "the interpreter is not a shim");
+  assert.equal(/\.(cmd|bat)$/i.test(r.value.realPath), false, "the target is not a shim");
+});
+
+test("an UNPINNED npm probe is refused on a platform that cannot prove provenance", (t) => {
+  // The counterpart of the test above: discovery still succeeds, execution
+  // authority does not, and no process starts.
+  if (!IS_WINDOWS) {
+    t.skip("this host proves POSIX ownership, so provenance already grants execution authority");
+    return;
+  }
+  let calls = 0;
+  const r = resolveTrustedExecutable("npm", {
+    probeVersion: true,
+    processRunner: () => {
+      calls += 1;
+      return { status: 0, stdout: "should never run\n", failed: false };
+    },
+  });
+  assert.equal(r.ok, false, "an unpinned npm must not be authorized for execution here");
+  assert.equal(r.reasonCode, "executable-provenance-unprovable");
+  assert.equal(calls, 0, "ZERO processes started before trust");
 });
 
 test("a sha256 hash can be computed and a pinned mismatch is refused", () => {
@@ -73,9 +130,11 @@ test("a sha256 hash can be computed and a pinned mismatch is refused", () => {
   assert.equal(pinned.ok, false, "a mismatched pinned hash must refuse");
   assert.equal(pinned.reasonCode, "hash-mismatch");
 
-  // The genuine hash, pinned, must be accepted.
-  const good = resolveTrustedExecutable("npm", { expectedSha256: ok.value.hash });
-  assert.equal(good.ok, true, "the correct pinned hash must be accepted");
+  // The genuine identity, pinned, must be accepted — and it is hashed from the
+  // filesystem by this test rather than copied from the resolver, so acceptance
+  // is a genuine cross-check instead of the resolver agreeing with itself.
+  const good = resolveTrustedExecutable("npm", npmTrustPins("npm"));
+  assert.equal(good.ok, true, `the correct pinned identity must be accepted: ${good.reasonCode}`);
 });
 
 // --------------------------------------------------------------- REJECTION ---
@@ -204,6 +263,10 @@ test("executable candidate names are correct for this OS", () => {
   try {
     // Plant the genuine platform-appropriate name OUTSIDE any workspace root.
     const planted = plantDecoy(dir, "codex");
+    // §38 (S-9): where the platform cannot prove ownership, a candidate needs an
+    // independent anchor. This fixture supplies the trusted-host declaration
+    // that a real deployment would supply at construction, so the test still
+    // exercises PATHEXT expansion rather than the provenance gate.
     const r = resolveTrustedExecutable("codex", { searchPath: dir });
     if (IS_WINDOWS) {
       // codex.cmd is a valid Windows basename, so it resolves (it is not inside

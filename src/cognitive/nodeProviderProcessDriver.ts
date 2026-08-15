@@ -25,7 +25,7 @@ import { truncateUtf8 } from "./safeWorkspacePath";
 // The env allowlist lives in the ONE outbound request boundary (§26) so there is
 // a single definition of which variable names may ever reach a child process.
 import { buildSafeChildEnv } from "./safeProviderRequest";
-import { resolveTrustedExecutable, VERIFICATION_ARGUMENT_TEMPLATES, type TrustedExecutableId } from "./trustedExecutableRegistry";
+import { resolveTrustedExecutable, revalidateResolvedExecutable, VERIFICATION_ARGUMENT_TEMPLATES, type TrustedExecutableId } from "./trustedExecutableRegistry";
 import { NodeProcessTreeDriver, buildProcessTreeHandle, DEFAULT_TERMINATION_POLICY, type ProcessTreeDriver, type ProcessTreeCleanupReceipt, type TerminationReason } from "./processTree";
 // §35: the verification path no longer constructs a sandbox of its own. It
 // receives a trusted executor and routes the permit through it, so the
@@ -92,6 +92,19 @@ export class NodeProviderProcessDriver implements ProviderProcessDriver {
 
     // Bounded in real UTF-8 bytes: a 10-emoji prompt is 10 chars but 40 bytes.
     const stdin = truncateUtf8(spec.stdinData, spec.maxStdinBytes).text;
+
+    // §38: an unauthorized resolution is discoverable, never runnable.
+    if (!resolved.value.executionAuthorized) {
+      return { ran: false, exitCode: null, terminationSignalCategory: "none", stdout: "", stderr: "", stdoutTruncated: false, stderrTruncated: false, failureCategory: "spawn-failed" };
+    }
+
+    // §38 TOCTOU: the executable was proven above; re-prove its sealed identity
+    // at the last instruction before the process is created, so a file swapped
+    // in between validation and spawn is refused rather than run.
+    const stillTrusted = revalidateResolvedExecutable(resolved.value);
+    if (stillTrusted !== "ok") {
+      return { ran: false, exitCode: null, terminationSignalCategory: "none", stdout: "", stderr: "", stdoutTruncated: false, stderrTruncated: false, failureCategory: "spawn-failed" };
+    }
 
     const outcome = spawnSync(resolved.value.command, [...resolved.value.prefixArgs, ...spec.argumentList], {
       shell: false, // never a shell
@@ -241,10 +254,21 @@ export interface ProviderAvailability {
 }
 
 /** Probe one provider's local availability via its `--version` (safe, unpaid, bounded). */
-export function detectProviderAvailability(provider: ProviderExecutableId, timeoutMs = 8000): ProviderAvailability {
-  const resolved = resolveTrustedExecutable(provider as TrustedExecutableId, {});
+export function detectProviderAvailability(provider: ProviderExecutableId, timeoutMs = 8000, untrustedRoots: readonly string[] = []): ProviderAvailability {
+  // §38: the trust context is an explicit parameter rather than an omitted one.
+  // This call previously passed `{}`, so a provider binary sitting inside the
+  // very workspace being processed was eligible for a `--version` execution.
+  const resolved = resolveTrustedExecutable(provider as TrustedExecutableId, { workspaceRoots: untrustedRoots });
   if (!resolved.ok) {
     return { provider, available: false, version: "", failureCategory: resolved.reasonCode };
+  }
+  if (!resolved.value.executionAuthorized) {
+    return { provider, available: false, version: "", failureCategory: resolved.value.authorizationReason };
+  }
+  // TOCTOU: re-prove the sealed identity at the last instruction before spawn.
+  const stillTrusted = revalidateResolvedExecutable(resolved.value);
+  if (stillTrusted !== "ok") {
+    return { provider, available: false, version: "", failureCategory: stillTrusted };
   }
   const outcome = spawnSync(resolved.value.command, [...resolved.value.prefixArgs, "--version"], {
     shell: false,

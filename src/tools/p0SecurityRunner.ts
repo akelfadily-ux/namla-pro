@@ -51,6 +51,7 @@ const SUITES: readonly string[] = [
   "dist/tools/credentialPatternTests.js",
   "dist/tools/secretValueDetectionTests.js",
   "dist/tools/commandSafetyPolicyTests.js",
+  "dist/tools/executableProvenanceTests.js",
 ];
 
 const DEMOS: readonly string[] = [

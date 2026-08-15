@@ -334,9 +334,16 @@ export interface ContainerSandboxBackend extends SandboxBackend {
  * execution. Reaching `available-and-verified` requires a real verification run
  * that this codebase does not perform.
  */
-export function detectContainerRuntime(options: { readonly probe?: boolean } = {}): SandboxCapabilityReport {
+export function detectContainerRuntime(options: { readonly probe?: boolean; readonly untrustedRoots?: readonly string[] } = {}): SandboxCapabilityReport {
   for (const id of ["docker", "podman"] as const) {
-    const resolved = resolveTrustedExecutable(id, { probeVersion: options.probe === true });
+    // §38: the trust context is passed explicitly. Detection previously called
+    // `resolveTrustedExecutable(id, { probeVersion })` with no roots at all, so
+    // a runtime sitting inside untrusted territory was eligible, and the probe
+    // was reached through a resolution that had proven far less than it looked
+    // like it had. Probing is still permitted here, but only AFTER the resolver
+    // has established provenance and identity — a `--version` can no longer be
+    // what decides whether a candidate was trustworthy.
+    const resolved = resolveTrustedExecutable(id, { probeVersion: options.probe === true, workspaceRoots: options.untrustedRoots ?? [] });
     if (!resolved.ok) continue;
     return {
       backendId: id,

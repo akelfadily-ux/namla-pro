@@ -55,8 +55,15 @@ BISECTION SKIPPED: ${gate.reason}`);
     process.exit(0);
   }
 
-  const resolved = resolveTrustedExecutable("docker", {});
-  if (!resolved.ok) {
+  // §38: a tool still declares its trust context; the repo working tree holds
+  // generated artefacts and must not supply the runtime binary.
+  const resolved = resolveTrustedExecutable("docker", { workspaceRoots: [process.cwd()] });
+  // §38: DISCOVERED is not AUTHORIZED. This tool starts real containers, so a
+  // runtime whose provenance the platform cannot prove — and for which no
+  // trusted identity was configured — is reported unavailable rather than
+  // executed. Without this the tool would spawn a binary the resolver had
+  // explicitly declined to vouch for.
+  if (!resolved.ok || !resolved.value.executionAuthorized) {
     const payload = { available: false, safeReasonCode: "sandbox-runtime-unavailable", platform: process.platform };
     const json = JSON.stringify(payload, null, 2);
     if (outPath) writeFileSync(resolve(outPath), json, "utf8");

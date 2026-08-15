@@ -28,7 +28,7 @@
 import { spawnSync } from "child_process";
 import { statSync } from "fs";
 import { resolve } from "path";
-import { resolveTrustedExecutable, type TrustedExecutableId } from "./trustedExecutableRegistry";
+import { resolveTrustedExecutable, revalidateResolvedExecutable, type TrustedExecutableId } from "./trustedExecutableRegistry";
 import { buildSandboxReceipt, describeMountPolicy, detectContainerRuntime, isIssuedPermit, validateSandboxPolicySpec, NO_ISOLATION_CLAIMS, type ContainerSandboxBackend, type SandboxCapabilityReport, type SandboxExecutionPermit, type SandboxExecutionReceipt, type SandboxReasonCode, type SandboxIsolationClaims } from "./sandboxPolicy";
 import type { NetworkPolicy } from "./networkPolicy";
 import { redactedText } from "./safeRedactor";
@@ -416,6 +416,27 @@ export function verificationWorkspaceRoots(options: ContainerBackendOptions, pro
 }
 
 /** Roots for probe (build-artefact) mounts. Never a workspace, never itself. */
+/**
+ * Roots that must never supply the container RUNTIME EXECUTABLE (§38).
+ *
+ * Every entry comes from trusted construction: `authorizedMountRoots` is where
+ * untrusted workspaces are allowed to live, and `trustedBuildRoot` (defaulting
+ * to the process working directory) is where generated and mounted build
+ * artefacts sit. An executable found inside either is refused, because the
+ * territory a workspace is mounted from is exactly the territory an attacker
+ * can write into.
+ *
+ * Nothing here reads a permit, policy, mission or provider value. That is the
+ * whole point: S-3 established that a caller who supplies both the path and the
+ * authority for that path has authorized itself, and the same rule applies to
+ * choosing which directories are considered untrusted.
+ */
+export function untrustedExecutableRoots(options: ContainerBackendOptions): readonly string[] {
+  const roots = [...(options.authorizedMountRoots ?? [])];
+  if (options.trustedBuildRoot) roots.push(options.trustedBuildRoot);
+  return roots;
+}
+
 export function probeMountRoots(options: ContainerBackendOptions): readonly string[] {
   return [options.trustedBuildRoot ?? process.cwd()];
 }
@@ -468,9 +489,24 @@ export class DockerContainerSandboxBackend implements ContainerSandboxBackend {
       safeReasonCode: reason,
     });
 
-    const resolved = resolveTrustedExecutable(this.runtimeExecutableId, {});
+    // §38: the runtime executable is resolved against the TRUSTED HOST CONTEXT
+    // this backend was constructed with, never with an empty one. Before S-9
+    // this read `resolveTrustedExecutable(this.runtimeExecutableId, {})`, so a
+    // `docker` planted inside an authorized mount root — territory that exists
+    // precisely to hold untrusted workspaces — was eligible to be executed.
+    // The roots come from construction (`authorizedMountRoots`,
+    // `trustedBuildRoot`), NOT from a permit, policy, mission or provider: a
+    // caller who supplies its own exclusion list has excluded nothing.
+    const resolved = resolveTrustedExecutable(this.runtimeExecutableId, { workspaceRoots: untrustedExecutableRoots(this.options) });
     if (!resolved.ok) return unverified("sandbox-runtime-unavailable", "runtime not resolvable");
+    // §38: DISCOVERED is not AUTHORIZED. Where the platform cannot prove
+    // ownership and no trusted identity pin is configured, the runtime is
+    // resolvable but must not be executed.
+    if (!resolved.value.executionAuthorized) return unverified("sandbox-runtime-unavailable", "runtime not authorized for execution");
     const runtime = resolved.value.command;
+
+    // TOCTOU: re-prove the runtime binary immediately before it is used.
+    if (revalidateResolvedExecutable(resolved.value) !== "ok") return unverified("sandbox-runtime-unavailable", "runtime identity changed");
 
     // A tag that is not digest-pinned is refused when pinning is required.
     if (REQUIRE_PINNED_IMAGE && !imageIsPinned()) return unverified("sandbox-image-unpinned", "image reference is not digest-pinned");
@@ -521,6 +557,13 @@ export class DockerContainerSandboxBackend implements ContainerSandboxBackend {
     // source swapped between validation and use must not be mounted.
     const recheck = this.revalidateMounts(verificationWorkspaceRoots(this.options, probeWorkspace), mounts.sources.workspace, null, mounts.sources.probe);
     if (recheck !== "ok") return unverified(recheck, "bind-mount source changed before use");
+
+    // §38: and the RUNTIME BINARY too, at the same last instruction. The
+    // resolution above is followed by an image-inspect spawn before reaching
+    // here, so re-proving once at resolution time would leave this spawn the
+    // furthest from its check. Mounts and executable are now both re-proved
+    // immediately before the container starts.
+    if (revalidateResolvedExecutable(resolved.value) !== "ok") return unverified("sandbox-runtime-unavailable", "runtime identity changed before use");
 
     const out = spawnSync(runtime, args, { shell: false, encoding: "utf8", timeout: this.options.verifyTimeoutMs ?? 120000, maxBuffer: 4 * 1024 * 1024, windowsHide: true });
 
@@ -639,8 +682,10 @@ export class DockerContainerSandboxBackend implements ContainerSandboxBackend {
     const network = enforcedNetworkModeFor(permit.policy.network.policy);
     if (!network.ok) return blocked(network.reasonCode);
 
-    const resolved = resolveTrustedExecutable(this.runtimeExecutableId, {});
+    // §38: same trusted context as verifyIsolation, for the same reason.
+    const resolved = resolveTrustedExecutable(this.runtimeExecutableId, { workspaceRoots: untrustedExecutableRoots(this.options) });
     if (!resolved.ok) return blocked("sandbox-runtime-unavailable");
+    if (!resolved.value.executionAuthorized) return blocked("sandbox-runtime-unavailable");
 
     // §31: the permit's mount paths are CALLER-SUPPLIED and are the sharpest
     // input in this method — they decide which part of the host filesystem the
@@ -679,6 +724,10 @@ export class DockerContainerSandboxBackend implements ContainerSandboxBackend {
     // Re-prove the mounts at the last instruction before the spawn (TOCTOU).
     const recheck = this.revalidateMounts(executionMountRoots(this.options), mounts.sources.workspace, mounts.sources.readOnlySource, null);
     if (recheck !== "ok") return blocked(recheck);
+
+    // §38: and re-prove the runtime EXECUTABLE too. Mount identity was already
+    // rechecked here; the binary about to be spawned was not.
+    if (revalidateResolvedExecutable(resolved.value) !== "ok") return blocked("sandbox-runtime-unavailable");
 
     const out = spawnSync(resolved.value.command, args, { shell: false, encoding: "utf8", timeout: permit.policy.limits.timeoutMs, maxBuffer: permit.policy.limits.maxOutputBytes + 4096, windowsHide: true });
     const cleanupComplete = this.forceRemove(resolved.value.command, containerName);
