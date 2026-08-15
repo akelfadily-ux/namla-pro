@@ -21,6 +21,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { parseSkips } from "./p0SecurityRunner";
 import { mkdtempSync, writeFileSync, symlinkSync, rmSync, lstatSync } from "fs";
 import { spawn } from "child_process";
 import { tmpdir } from "os";
@@ -177,4 +178,102 @@ test("an unknown network observation is NEVER projected as zero", () => {
 test("the platform is reported explicitly so a matrix job cannot be mistaken", () => {
   assert.equal(["win32", "linux", "darwin"].includes(PLATFORM), true, `unexpected CI platform: ${PLATFORM}`);
   assert.equal(["win32", "posix"].includes(platformKind()), true);
+});
+
+// ================= SKIP-NAME PARSER, BOTH node:test REPORTERS ==============
+// CI run 31882257990 failed on windows-latest with:
+//   "parsed 0 skip names but the runner reported 2 skipped —
+//    skip enforcement cannot be trusted"
+//
+// The guard was right and the parser was wrong. `node:test` emits the spec
+// shape when stdout is a TTY and the TAP shape otherwise, and CI pins Node 20,
+// where every `spawnSync` run is non-TTY. The runner only understood spec, so
+// on every CI platform it parsed zero names while the summary counted skips.
+//
+// These fixtures are the literal shapes both reporters produce.
+
+const SPEC_OUTPUT = [
+  "✔ a trusted candidate resolves (1.2345ms)",
+  "﹣ a file replaced by a SYMLINK after trust is refused (3.2595ms) # platform does not permit file symlink creation",
+  "﹣ POSIX: a world-writable parent directory is refused (0.2516ms) # win32 has no POSIX mode bits",
+  "✖ something failed (0.9ms)",
+  "ℹ tests 4",
+  "ℹ pass 1",
+  "ℹ fail 1",
+  "ℹ skipped 2",
+].join("\n");
+
+/** The exact shape Node 20 emits under CI — the one that parsed zero names. */
+const TAP_OUTPUT = [
+  "TAP version 13",
+  "ok 1 - a trusted candidate resolves",
+  "ok 19 - a file replaced by a SYMLINK after trust is refused # SKIP platform does not permit file symlink creation",
+  "ok 23 - POSIX: a world-writable parent directory is refused # SKIP win32 has no POSIX mode bits",
+  "not ok 24 - something failed",
+  "# tests 4",
+  "# pass 1",
+  "# fail 1",
+  "# skipped 2",
+].join("\n");
+
+test("the SPEC reporter's skip lines are parsed with names and reasons", () => {
+  const { skippedNames, skipReasons } = parseSkips(SPEC_OUTPUT);
+  assert.equal(skippedNames.length, 2, "both skips are named");
+  assert.equal(skippedNames[0], "a file replaced by a SYMLINK after trust is refused");
+  assert.equal(skippedNames[1], "POSIX: a world-writable parent directory is refused");
+  assert.equal(skipReasons[0], "platform does not permit file symlink creation");
+  assert.equal(skipReasons[1], "win32 has no POSIX mode bits");
+});
+
+test("the TAP reporter's skip lines are parsed — the exact CI shape that parsed zero", () => {
+  const { skippedNames, skipReasons } = parseSkips(TAP_OUTPUT);
+  assert.equal(skippedNames.length, 2, "the CI shape must yield the same two names");
+  assert.equal(skippedNames[0], "a file replaced by a SYMLINK after trust is refused");
+  assert.equal(skippedNames[1], "POSIX: a world-writable parent directory is refused");
+  assert.equal(skipReasons[0], "platform does not permit file symlink creation");
+  assert.equal(skipReasons[1], "win32 has no POSIX mode bits");
+});
+
+test("both reporters yield IDENTICAL skip accounting for the same run", () => {
+  // The property that matters: which reporter Node happens to choose must not
+  // change what the gate concludes.
+  const spec = parseSkips(SPEC_OUTPUT);
+  const tap = parseSkips(TAP_OUTPUT);
+  assert.deepEqual(spec.skippedNames, tap.skippedNames);
+  assert.deepEqual(spec.skipReasons, tap.skipReasons);
+});
+
+test("a FAILING TAP line is never counted as a skip", () => {
+  // `not ok` is a failure, not a skip. Counting it would hide a failure and
+  // inflate the skip tally.
+  const { skippedNames } = parseSkips("not ok 24 - something failed\nnot ok 25 - other # TODO later");
+  assert.equal(skippedNames.length, 0);
+});
+
+test("a skip with no reason is recorded, not dropped", () => {
+  const spec = parseSkips("﹣ nameless (0.1ms)");
+  assert.equal(spec.skippedNames.length, 1);
+  assert.equal(spec.skipReasons[0], "(no reason given)");
+  const tap = parseSkips("ok 3 - nameless # SKIP");
+  assert.equal(tap.skippedNames.length, 1);
+  assert.equal(tap.skipReasons[0], "(no reason given)");
+});
+
+test("the SKIP directive is matched case-insensitively, per the TAP spec", () => {
+  assert.equal(parseSkips("ok 1 - a # skip lowercase").skippedNames.length, 1);
+  assert.equal(parseSkips("ok 2 - b # Skip mixed").skippedNames.length, 1);
+});
+
+test("an UNRECOGNISED shape yields no names, so the gate fails closed", () => {
+  // The parser never infers names from a count. An unknown format produces
+  // fewer names than the summary reports, which is exactly what made run
+  // 31882257990 fail rather than silently pass.
+  const unknown = ["~ weird 1 - a skipped thing", "SKIPPED: b", "# skipped 2"].join("\n");
+  assert.equal(parseSkips(unknown).skippedNames.length, 0, "no guessing");
+});
+
+test("an ASCII hyphen is not mistaken for the skip marker", () => {
+  // The spec reporter uses U+FE63, not "-". Accepting "-" would swallow
+  // ordinary diagnostic lines as skips.
+  assert.equal(parseSkips("- not a skip marker (1ms) # nope").skippedNames.length, 0);
 });

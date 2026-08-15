@@ -133,7 +133,15 @@ function parseFailures(suite: string, text: string): SafeFailure[] {
   const seen = new Set<string>();
 
   for (let i = 0; i < lines.length; i += 1) {
-    const head = /^\s*✖\s+(.+?)\s*\(\d+(?:\.\d+)?ms\)\s*$/.exec(lines[i]);
+    // Both reporter shapes, for the same reason as `parseSkips`: the spec
+    // reporter prints `✖ name (1.2ms)`, while TAP — Node 20's default when
+    // stdout is not a TTY, which is every CI run — prints `not ok 7 - name`.
+    // Reading only the spec shape is why CI run 31882257990 reported "no parsed
+    // failures" for a suite that had four, leaving the failure invisible in the
+    // artifact.
+    const spec = /^\s*✖\s+(.+?)\s*\(\d+(?:\.\d+)?ms\)\s*$/.exec(lines[i]);
+    const tap = spec ? null : /^\s*not ok\s+\d+\s*-\s*(.+?)\s*$/.exec(lines[i]);
+    const head = spec ?? tap;
     if (!head) continue;
     const testName = head[1].trim();
     if (testName === "failing tests:") continue;
@@ -203,6 +211,53 @@ interface SuiteResult {
   readonly exitCode: number;
 }
 
+/**
+ * Extract skipped test NAMES and REASONS from `node --test` output.
+ *
+ * `node:test` emits two different shapes, and the runner must read BOTH,
+ * because which one appears is decided by the Node version and by whether
+ * stdout is a TTY — neither of which this gate controls:
+ *
+ *   spec reporter : `﹣ name (1.23ms) # reason`
+ *                   the marker is U+FE63 SMALL HYPHEN-MINUS, not an ASCII "-".
+ *   TAP reporter  : `ok 12 - name # SKIP reason`
+ *                   Node 20 (which CI pins) defaults to TAP when stdout is not
+ *                   a TTY, which is always true under `spawnSync`.
+ *
+ * Reading only the spec shape is what broke CI run 31882257990: Windows parsed
+ * ZERO names while the summary reported skips, so the reconciliation below
+ * correctly refused to trust skip enforcement. The parser was wrong; the guard
+ * was right.
+ *
+ * Nothing here infers names from a count. If a format appears that neither
+ * branch understands, this returns fewer names than the summary reports and the
+ * caller fails closed — which is the behaviour that caught this defect.
+ */
+export function parseSkips(text: string): { readonly skippedNames: string[]; readonly skipReasons: string[] } {
+  const skippedNames: string[] = [];
+  const skipReasons: string[] = [];
+  const push = (name: string, reason: string) => {
+    skippedNames.push(name.trim());
+    skipReasons.push(reason.trim() || "(no reason given)");
+  };
+
+  for (const line of text.split(/\r?\n/)) {
+    // spec: the small-hyphen marker, a name, a duration, then an optional "# reason".
+    const spec = /^\s*[﹣⁃]\s+(.+?)\s*\(\d+(?:\.\d+)?ms\)\s*(?:#\s*(.*))?$/.exec(line);
+    if (spec) {
+      push(spec[1], spec[2] ?? "");
+      continue;
+    }
+    // TAP: `ok <n> - <name> # SKIP <reason>`. The directive is case-insensitive
+    // per the TAP spec. `not ok` is deliberately NOT accepted: a failing test is
+    // not a skip, and treating it as one would hide a failure.
+    const tap = /^\s*ok\s+\d+\s*-\s*(.+?)\s*#\s*SKIP\b[ \t]*(.*)$/i.exec(line);
+    if (tap) push(tap[1], tap[2] ?? "");
+  }
+
+  return { skippedNames, skipReasons };
+}
+
 /** Run one node --test suite and parse its TAP-ish summary. Output is not stored. */
 function runSuite(file: string): SuiteResult {
   const out = spawnSync(process.execPath, ["--test", file], { shell: false, encoding: "utf8", maxBuffer: 16 * 1024 * 1024, timeout: 600000, windowsHide: true });
@@ -211,22 +266,7 @@ function runSuite(file: string): SuiteResult {
     const m = new RegExp(`^\\u2139 ${key} (\\d+)$`, "m").exec(text) ?? new RegExp(`${key} (\\d+)`, "m").exec(text);
     return m ? Number(m[1]) : 0;
   };
-  // Skipped test NAMES and REASONS only — never assertion payloads.
-  //
-  // node --test marks a skipped test with U+FE63 (SMALL HYPHEN-MINUS), NOT an
-  // ASCII hyphen. Matching the wrong character silently yields zero skips,
-  // which would disable the POSIX skip enforcement below — the entire point of
-  // this runner. The parsed count is therefore reconciled against the reported
-  // count, so a future format change fails loudly instead of quietly.
-  const skippedNames: string[] = [];
-  const skipReasons: string[] = [];
-  for (const line of text.split(/\r?\n/)) {
-    const m = /^\s*[﹣⁃]\s+(.+?)\s*\(\d+(?:\.\d+)?ms\)\s*(?:#\s*(.*))?$/.exec(line);
-    if (m) {
-      skippedNames.push(m[1].trim());
-      skipReasons.push((m[2] ?? "").trim() || "(no reason given)");
-    }
-  }
+  const { skippedNames, skipReasons } = parseSkips(text);
   return { suite: basename(file), passed: num("pass"), failed: num("fail"), skipped: num("skipped"), skippedNames, skipReasons, failures: parseFailures(basename(file), text), exitCode: out.status ?? 1 };
 }
 
@@ -344,4 +384,11 @@ function main(): void {
   console.error(`\nP0 security gate PASSED on ${PLATFORM}: ${totals.passed} passed, ${totals.failed} failed, ${totals.skipped} skipped.`);
 }
 
-main();
+// Run the gate ONLY when this file is the entry point. Without this guard,
+// importing it — which the parser tests must do to exercise `parseSkips`
+// against captured reporter output — would execute the whole gate as a side
+// effect and could call `process.exit`. Invocation via
+// `node dist/tools/p0SecurityRunner.js` is unchanged.
+if (require.main === module) {
+  main();
+}

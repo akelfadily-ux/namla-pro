@@ -454,19 +454,37 @@ test("provenance is reported honestly for what this platform can prove", (t) => 
   }
 });
 
+/**
+ * Plant a fixture the POSIX rule genuinely refuses, on ANY host.
+ *
+ * CI run 31882257990 caught the original version of this being platform-blind.
+ * It relied on Windows reporting a synthesised mode 0o666 for every file, which
+ * the POSIX rule reads as world-writable — so forcing `platform: "linux"` on
+ * win32 drove the refusal branch. On a REAL Linux/macOS runner the same fixture
+ * has honest permissions (file 0644, mkdtemp parent 0700), the rule correctly
+ * ACCEPTS it, and the assertion inverted.
+ *
+ * The fixture is now made world-writable explicitly where `chmod` is meaningful,
+ * so the refusal is a property of the fixture rather than of the host.
+ */
+function plantOtherWritable(tag: string): string {
+  const dir = tempDir(tag);
+  const file = plant(dir, "docker");
+  if (!IS_WINDOWS) {
+    chmodSync(file, 0o666);
+    chmodSync(dir, 0o777);
+  }
+  return dir;
+}
+
 test("the POSIX provenance RULE is exercised deterministically on every host", () => {
-  // Platform injection, not platform simulation. `statSync` on Windows reports
-  // uid 0 and mode 0o666 for an ordinary temp file — measured — which under the
-  // POSIX rule is "other-writable", so forcing `platform: "linux"` drives the
-  // real rule down its refusal branch on any host.
+  // Platform injection, not platform simulation: the real rule runs, against a
+  // fixture that is genuinely other-writable on this host.
   //
   // This proves the RULE's logic everywhere. It does NOT claim to prove how a
   // genuine Linux or macOS filesystem is laid out; the two tests below do that,
   // and they honestly skip where the evidence does not exist.
-  const dir = tempDir("forcedposix");
-  // The forced platform also decides which candidate FILENAMES are tried, so
-  // the fixture must carry the POSIX name rather than this host's.
-  plant(dir, "docker");
+  const dir = plantOtherWritable("forcedposix");
 
   const forced = resolveTrustedExecutable("docker", { searchPath: dir, platform: "linux" });
   assert.equal(forced.ok, false, "the POSIX rule refuses a world-writable candidate");
@@ -474,13 +492,40 @@ test("the POSIX provenance RULE is exercised deterministically on every host", (
 });
 
 test("a candidate refused by the POSIX rule starts zero processes even with probeVersion", () => {
-  const dir = tempDir("forcednoexec");
-  plant(dir, "docker");
+  const dir = plantOtherWritable("forcednoexec");
   const runner = countingRunner();
 
   const forced = resolveTrustedExecutable("docker", { searchPath: dir, platform: "linux", probeVersion: true, processRunner: runner.run });
   assert.equal(forced.ok, false, "refused on provenance");
+  assert.ok(forced.reasonCode === "untrusted-executable-owner" || forced.reasonCode === "untrusted-executable-parent", `refused for provenance, got ${forced.reasonCode}`);
   assert.equal(runner.calls.length, 0, "provenance is decided before any process could start");
+});
+
+test("a CLEAN fixture passes the POSIX rule — proving the refusals above are not vacuous", () => {
+  // The counterpart: same code path, honest permissions. On POSIX the rule
+  // accepts; on win32 the synthesised mode is world-writable so the rule
+  // refuses. Both outcomes are asserted explicitly rather than a single
+  // expectation being assumed to hold everywhere.
+  //
+  // The permissions are set explicitly rather than inherited from the process
+  // umask. `writeFileSync` creates 0666 & ~umask, so a runner with umask 002
+  // would produce a GROUP-WRITABLE 0664 file, which this rule correctly
+  // refuses — and this test would then fail for a reason that has nothing to
+  // do with the rule being wrong. The fixture must be clean by construction.
+  const dir = tempDir("cleanposix");
+  const file = plant(dir, "docker");
+  if (!IS_WINDOWS) {
+    chmodSync(file, 0o755);
+    chmodSync(dir, 0o700);
+  }
+  const forced = resolveTrustedExecutable("docker", { searchPath: dir, platform: "linux" });
+
+  if (IS_WINDOWS) {
+    assert.equal(forced.ok, false, "win32 reports a synthesised world-writable mode, so the rule refuses");
+  } else {
+    assert.equal(forced.ok, true, `a clean POSIX fixture reaches the identity stage: ${forced.reasonCode}`);
+    if (forced.ok) assert.equal(forced.value.provenance, "posix-owner-verified", "provenance was genuinely proven, not skipped");
+  }
 });
 
 test("POSIX: a world-writable parent directory is refused", (t) => {
@@ -489,12 +534,18 @@ test("POSIX: a world-writable parent directory is refused", (t) => {
     return;
   }
   const dir = tempDir("wwparent");
-  plant(dir);
+  const planted = plant(dir);
+  // The FILE must be clean by construction, or this test cannot isolate the
+  // parent rule. `writeFileSync` yields 0666 & ~umask, so a runner with umask
+  // 002 produces a group-writable 0664 file; the file check then fires first
+  // and the reason code below is `untrusted-executable-owner` instead. Same
+  // host-dependent-permissions defect that broke the forced-platform tests.
+  chmodSync(planted, 0o755);
   chmodSync(dir, 0o777);
 
   const resolved = resolveTrustedExecutable("docker", { searchPath: dir });
   assert.equal(resolved.ok, false, "a directory anyone can write cannot supply an executable");
-  assert.equal(resolved.reasonCode, "untrusted-executable-parent");
+  assert.equal(resolved.reasonCode, "untrusted-executable-parent", "the PARENT rule is what refused, not the file rule");
 });
 
 test("POSIX: a world-writable executable FILE is refused", (t) => {
@@ -504,6 +555,9 @@ test("POSIX: a world-writable executable FILE is refused", (t) => {
   }
   const dir = tempDir("wwfile");
   const planted = plant(dir);
+  // Parent clean by construction (mkdtemp is 0700, but state it rather than
+  // inherit it) so the FILE rule is unambiguously what refuses.
+  chmodSync(dir, 0o700);
   chmodSync(planted, 0o777);
 
   const resolved = resolveTrustedExecutable("docker", { searchPath: dir });
