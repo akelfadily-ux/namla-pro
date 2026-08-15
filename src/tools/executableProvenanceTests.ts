@@ -78,6 +78,38 @@ function locateCliScriptIndependently(name: "npm" | "npx"): string {
 }
 
 /**
+ * The `node_modules` subtree that CONTAINS the CLI script, on any layout.
+ *
+ * Derived by walking up from the independently located script to the nearest
+ * ancestor literally named `node_modules` — never from the resolver, and never
+ * by assembling a path out of `dirname(process.execPath)`.
+ *
+ * That last point is what CI run 31884674631 caught. The npm CLI script is
+ * only a DESCENDANT of the node binary's directory on Windows:
+ *
+ *   Windows : <nodeDir>\node_modules\npm\bin\npm-cli.js      (under nodeDir)
+ *   POSIX   : <prefix>/lib/node_modules/npm/bin/npm-cli.js   (SIBLING of bin/)
+ *
+ * Production already resolves both — `findNodeCliScript` enumerates the three
+ * supported layouts. Only the tests had baked in the Windows shape, so they
+ * passed there and failed on ubuntu and macOS.
+ *
+ * The returned subtree contains the SCRIPT but not the INTERPRETER on every
+ * layout, which is exactly what the isolation test below needs; it asserts that
+ * separation rather than assuming it.
+ */
+function cliScriptSubtreeIndependently(name: "npm" | "npx"): string {
+  const script = locateCliScriptIndependently(name);
+  let dir = dirname(script);
+  while (basename(dir) !== "node_modules") {
+    const up = dirname(dir);
+    if (up === dir) throw new Error(`no node_modules ancestor above ${script}`);
+    dir = up;
+  }
+  return dir;
+}
+
+/**
  * The identities a TRUSTED CALLER would configure for npm/npx (§38).
  *
  * INDEPENDENT BY CONSTRUCTION. These digests are computed by hashing the files
@@ -196,19 +228,46 @@ test("the npm/npx CLI script is subject to workspaceRoots like any other file", 
 });
 
 test("the CLI SCRIPT is checked independently of the node binary", () => {
-  // Isolates the script's own provenance. The node binary sits in the node
-  // directory while the CLI script sits under `<nodeDir>/node_modules/...`, so
-  // declaring only the node_modules subtree untrusted leaves the interpreter
-  // acceptable and the SCRIPT refused. Without this, a test that marks the
-  // whole node directory untrusted would still pass on the node check alone
-  // and prove nothing about the script.
+  // Isolates the script's own provenance: declare ONLY the subtree holding the
+  // CLI script untrusted, leaving the interpreter acceptable, and require the
+  // refusal anyway. Without that separation, a test that marks the whole node
+  // directory untrusted would be satisfied by the node check alone and would
+  // prove nothing about the script — which is precisely what the test above it
+  // does on POSIX, where the interpreter is what lands inside `<prefix>/bin`.
+  //
+  // Everything expected here is established WITHOUT the resolver: the
+  // interpreter from `process.execPath`, the script and its subtree from the
+  // independent layout search, the digests by hashing those two files. Nothing
+  // is read back out of `resolveTrustedExecutable(...).value` and re-asserted
+  // against itself.
+  const interpreter = realpathSync(process.execPath);
+  const script = locateCliScriptIndependently("npm");
+  const scriptSubtree = cliScriptSubtreeIndependently("npm");
+  const pins = independentIdentities("npm");
+
   const npm = resolveTrustedExecutable("npm", {});
-  assert.equal(npm.ok, true);
+  assert.equal(npm.ok, true, `npm must resolve on a Node host: ${npm.reasonCode}`);
   if (!npm.ok) return;
 
-  const scriptSubtree = join(dirname(process.execPath), "node_modules");
-  assert.ok(npm.value.realPath.startsWith(scriptSubtree), "precondition: the script lives under node_modules");
-  assert.equal(npm.value.command.startsWith(scriptSubtree), false, "precondition: the interpreter does not");
+  // TWO DISTINCT ARTIFACTS, each the independently known file — semantic
+  // identity, not a directory shape.
+  assert.equal(npm.value.command, interpreter, "the interpreter is the running node binary");
+  assert.equal(npm.value.realPath, script, "the target is the independently located CLI script");
+  assert.notEqual(npm.value.command, npm.value.realPath, "interpreter and script are different files");
+
+  // BOTH are measured, and each digest belongs to the file it claims to.
+  assert.equal(npm.value.identity.length, 2, "both executed artifacts are sealed");
+  assert.equal(npm.value.identity[0].path, interpreter, "identity[0] is the interpreter");
+  assert.equal(npm.value.identity[1].path, script, "identity[1] is the CLI script");
+  assert.equal(npm.value.identity[0].sha256, pins.expectedInterpreterSha256, "interpreter identity is node's own digest");
+  assert.equal(npm.value.identity[1].sha256, pins.expectedSha256, "CLI identity is the script's own digest");
+  assert.notEqual(pins.expectedInterpreterSha256, pins.expectedSha256, "two distinct artifacts have two distinct identities");
+
+  // The isolation itself. Both preconditions are ASSERTED, not assumed, so a
+  // layout where they do not hold fails loudly instead of silently making the
+  // refusal below prove something weaker.
+  assert.equal(script.startsWith(scriptSubtree), true, "precondition: the script is inside the untrusted subtree");
+  assert.equal(interpreter.startsWith(scriptSubtree), false, "precondition: the interpreter is NOT — otherwise this proves nothing about the script");
 
   const refused = resolveTrustedExecutable("npm", { workspaceRoots: [scriptSubtree] });
   assert.equal(refused.ok, false, "an untrusted CLI script must be refused even when node itself is fine");
@@ -715,9 +774,12 @@ test("npm routes through the running interpreter and its CLI script, never a shi
   const npm = resolveTrustedExecutable("npm", {});
   assert.equal(npm.ok, true, `npm must remain resolvable: ${npm.reasonCode}`);
   if (!npm.ok) return;
-  const nodeDir = dirname(process.execPath);
   assert.equal(npm.value.command, realpathSync(process.execPath), "the interpreter is THIS node binary");
-  assert.ok(npm.value.realPath.startsWith(nodeDir), "the CLI script lives beside it");
+  // WHICH FILE, not which directory. The previous `startsWith(dirname(execPath))`
+  // was a Windows-only layout claim; on POSIX the script is a sibling subtree of
+  // bin/, so it passed on Windows and failed on ubuntu and macOS.
+  assert.equal(npm.value.realPath, locateCliScriptIndependently("npm"), "the target is the independently located CLI script, on whatever layout this platform uses");
+  assert.deepEqual(npm.value.prefixArgs, [npm.value.realPath], "node is invoked WITH that script as its argument");
   assert.equal(/\.(cmd|bat)$/i.test(npm.value.command), false, "no .cmd interpreter");
   assert.equal(/\.(cmd|bat)$/i.test(npm.value.realPath), false, "no .cmd target");
 });
@@ -869,7 +931,12 @@ test("with the CLI script present, npm and npx both route through node + script"
     assert.equal(r.ok, true, `${id} must resolve: ${r.reasonCode}`);
     if (!r.ok) continue;
     assert.equal(r.value.command, realpathSync(process.execPath), `${id}: interpreter is THIS node`);
+    // The same principle as the npm routing test: identify the CLI script by
+    // independently locating it, not by its basename alone — a basename match
+    // would accept an `npx-cli.js` sitting anywhere at all.
+    assert.equal(r.value.realPath, locateCliScriptIndependently(id), `${id}: target is the independently located CLI script`);
     assert.equal(basename(r.value.realPath), `${id}-cli.js`, `${id}: target is the CLI script`);
+    assert.deepEqual(r.value.prefixArgs, [r.value.realPath], `${id}: node is invoked with that script`);
     assert.equal(r.value.identity.length, 2, `${id}: two sealed identities`);
     assert.equal(/\.(cmd|bat)$/i.test(r.value.command), false, `${id}: no shim interpreter`);
     assert.equal(/\.(cmd|bat)$/i.test(r.value.realPath), false, `${id}: no shim target`);
