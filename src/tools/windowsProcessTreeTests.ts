@@ -23,7 +23,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, symlinkSync, realpathSync } from "fs";
 import { tmpdir } from "os";
-import { resolve, join, isAbsolute, sep, delimiter } from "path";
+import { execFileSync } from "child_process";
+import { resolve, join, dirname, basename, isAbsolute, sep, delimiter } from "path";
 import { resolveWindowsSystemTool, windowsSystemToolEnvironment, authoritativeSystemRoot, type WindowsSystemToolId, type WindowsSystemToolResult } from "../cognitive/windowsSystemTools";
 import {
   NodeProcessTreeDriver,
@@ -41,8 +42,35 @@ import {
 const IS_WINDOWS = process.platform === "win32";
 const ALL_TOOLS: readonly WindowsSystemToolId[] = ["tasklist", "taskkill", "wmic"];
 
+/**
+ * A fixture directory whose path is CANONICAL from the moment it is created.
+ *
+ * CI run 31936728011 failed ten Windows tests on this, and every one of them
+ * died at the system-root stage with `system-root-not-a-windows-install`
+ * before reaching the condition it was written to check.
+ *
+ * The cause is a property of the fixture path, not of the resolver. Production
+ * requires `realpath(candidate) === literal candidate`, which is what stops a
+ * junction from redirecting a system directory. `mkdtemp` builds on
+ * `os.tmpdir()`, and a temp directory can sit beneath a NON-CANONICAL alias —
+ * classically an 8.3 short name. Measured on this workstation:
+ *
+ *   literal   C:\Users\...\AppData\Local\Temp\NAF379~1
+ *   canonical C:\Users\...\AppData\Local\Temp\namla-diag-whW5Ei   -> not equal
+ *
+ * A runner whose TEMP contains such a component therefore hands the resolver a
+ * path that is correctly refused for being non-canonical. The resolver is
+ * right; the fixture was lying about where it was. macOS has the same shape
+ * via `/var` -> `/private/var`.
+ *
+ * Canonicalising HERE fixes the fixture without touching the production rule:
+ * the test now names the directory the way the filesystem does, so the check
+ * under test is reached instead of being short-circuited. It grants no
+ * exemption — a genuine reparse redirect is still refused, which the tests
+ * below continue to prove.
+ */
 function tempDir(tag: string): string {
-  return mkdtempSync(resolve(tmpdir(), `namla-s10-${tag}-`));
+  return realpathSync.native(mkdtempSync(resolve(tmpdir(), `namla-s10-${tag}-`)));
 }
 
 /**
@@ -255,28 +283,69 @@ test("M: an invalid root PID starts ZERO processes", () => {
 
 // ==================================== I / J — THE ENVIRONMENT HANDED OVER ===
 
-test("I: the environment given to the tool cannot redirect binary or DLL loading", () => {
-  const env = windowsSystemToolEnvironment("C:\\Windows", "C:\\Windows\\System32");
-  const parts = (env.PATH ?? "").split(delimiter);
+// A POSIX host's `path` module must never become evidence about Windows.
+// `path.delimiter` is ":" there, `path.isAbsolute("C:\\Windows")` is false, and
+// `path.parse("C:\\Windows").root` is "". Production composes the child
+// environment with the HOST path module, which is correct — on Windows. So the
+// assertions that read those results are Windows-host-only, and the ones that
+// are genuinely host-independent stay cross-platform.
 
-  // PATH is REBUILT. It cannot select the binary (absolute path, no shell), but
-  // the Windows DLL search order reads it, so an inherited PATH would be a way
-  // to load an attacker's DLL inside a trusted executable.
-  assert.deepEqual(parts, ["C:\\Windows\\System32", "C:\\Windows", "C:\\Windows\\System32\\wbem"], "only proven system directories");
-  for (const p of parts) assert.equal(isAbsolute(p), true, `PATH entry must be absolute: ${p}`);
-  assert.equal(parts.includes("."), false, "the current directory is never on PATH");
+test("I: the environment given to the tool carries nothing that could redirect it", () => {
+  // CROSS-PLATFORM HALF: only properties that hold whatever the host `path`
+  // module does. NOTHING here may assert Windows path FORMAT.
+  //
+  // Review caught the previous version claiming that
+  // `PATH.includes("C:\\Windows\\System32\\wbem")` was host-independent. It is
+  // not: production builds that entry with `join(systemDirectory, "wbem")`
+  // using the HOST path module, so on POSIX it comes out as
+  // `C:\Windows\System32/wbem` — forward slash — and the assertion fails.
+  // Measured, not assumed. Anything separator- or drive-shaped now lives in
+  // the Windows-host test below.
+  const env = windowsSystemToolEnvironment("C:\\Windows", "C:\\Windows\\System32");
+
   assert.equal(env.PATHEXT, ".EXE", "no .CMD/.BAT interpretation anywhere downstream");
 
   // Deliberately absent, each for a stated reason.
-  for (const absent of ["COMSPEC", "ComSpec", "TEMP", "TMP", "USERPROFILE", "APPDATA", "NODE_OPTIONS"]) {
+  for (const absent of ["COMSPEC", "ComSpec", "TEMP", "TMP", "USERPROFILE", "APPDATA", "NODE_OPTIONS", "Path", "PSModulePath"]) {
     assert.equal(Object.prototype.hasOwnProperty.call(env, absent), false, `${absent} must not be handed to a privileged system tool`);
   }
+
+  // The environment is BUILT, never inherited: every key is one this module
+  // chose. A subset check, so it holds on a host where SystemDrive cannot be
+  // derived. This is a key-set property, not a path-format one.
+  const allowed = new Set(["SystemRoot", "windir", "SystemDrive", "PATH", "PATHEXT"]);
+  for (const key of Object.keys(env)) {
+    assert.equal(allowed.has(key), true, `unexpected variable handed to a system tool: ${key}`);
+  }
+  assert.equal(Object.keys(env).length <= allowed.size, true, "no caller-provided environment is merged in");
+});
+
+test("I (Windows host): PATH is exactly the proven system directories, in order", (t) => {
+  if (!IS_WINDOWS) {
+    t.skip("PATH format is composed with the host path module; POSIX separators and drive parsing cannot be evidence about Windows");
+    return;
+  }
+  const env = windowsSystemToolEnvironment("C:\\Windows", "C:\\Windows\\System32");
+  const parts = (env.PATH ?? "").split(delimiter);
+  assert.deepEqual(parts, ["C:\\Windows\\System32", "C:\\Windows", "C:\\Windows\\System32\\wbem"], "only proven system directories, in order");
+  for (const p of parts) assert.equal(isAbsolute(p), true, `PATH entry must be absolute: ${p}`);
+  assert.equal(parts.includes("."), false, "the current directory is never on PATH");
+  assert.equal(parts.length, 3, "and nothing else is on PATH");
 });
 
 test("J: the variables Windows genuinely needs ARE preserved", () => {
   const env = windowsSystemToolEnvironment("C:\\Windows", "C:\\Windows\\System32");
+  // Copied verbatim from the proven root, so host-independent.
   assert.equal(env.SystemRoot, "C:\\Windows", "system components resolve their own resources through SystemRoot");
   assert.equal(env.windir, "C:\\Windows", "the legacy spelling is still consulted by some tooling");
+});
+
+test("J (Windows host): SystemDrive is derived from the proven root", (t) => {
+  if (!IS_WINDOWS) {
+    t.skip("SystemDrive is derived with path.parse().root, which has no drive concept under POSIX path semantics");
+    return;
+  }
+  const env = windowsSystemToolEnvironment("C:\\Windows", "C:\\Windows\\System32");
   assert.equal(env.SystemDrive, "C:", "derived from the proven root, never from the caller");
 });
 
@@ -965,24 +1034,75 @@ test("R7: a non-standard root simulation is never redirected back to C:\\Windows
   rmSync(elsewhere, { recursive: true, force: true });
 });
 
-test("R8: an unprovable authority yields zero subprocess starts and a closed result", () => {
+/**
+ * R8, split in two because the original form was DANGEROUS ON POSIX.
+ *
+ * It called `driver.terminate(handleFor(process.pid), …)` unguarded. On Linux
+ * and macOS that is not a Windows code path at all: `identityMatches` returns
+ * true immediately off-Windows, `processGroupCreated` is false for this handle,
+ * so control reaches `process.kill(handle.rootPid, "SIGTERM")` — and
+ * `rootPid === process.pid`, so the suite SIGTERMs its own `node --test`
+ * process. The runner dies mid-file, which is exactly the CI signature:
+ * `passed=0, failed=1, ERR_TEST_FAILURE`, no test name, no assertion detail.
+ *
+ * The Windows tool seams are irrelevant there — they are never consulted on
+ * POSIX — so no amount of resolver stubbing made it safe.
+ *
+ * R8 is a WINDOWS claim: an unprovable Windows root authority starts zero
+ * Windows system-tool subprocesses and fails closed. The resolver half is
+ * host-independent and stays cross-platform; the driver-integration half needs
+ * the Windows branch and is guarded.
+ */
+test("R8: an unprovable authority is refused and starts ZERO subprocesses", () => {
   const unusable = join(tempDir("noauthority"), "not-a-windows-root");
+
+  // (A) Pure resolver, forced platform: host-independent, safe everywhere.
+  for (const id of ALL_TOOLS) {
+    const r = resolveWindowsSystemTool(id, { platform: "win32", testOnlySystemRoot: unusable });
+    assert.equal(r.ok, false, `${id}: an unprovable root must be refused`);
+    assert.equal(r.value, null, `${id}: and must yield no tool`);
+  }
+
+  // (B) Driver enumeration only — never termination. `enumerateDescendants`
+  //     touches no signal on any platform, so this is safe off-Windows.
+  const runner = countingRunner();
+  const driver = new NodeProcessTreeDriver({
+    toolResolver: (id) => resolveWindowsSystemTool(id, { platform: "win32", testOnlySystemRoot: unusable }),
+    toolRunner: runner.run,
+  });
+  const e = driver.enumerateDescendants(handleFor(process.pid), DEFAULT_TERMINATION_POLICY);
+  driver.listDescendants(handleFor(process.pid), DEFAULT_TERMINATION_POLICY);
+
+  assert.equal(runner.calls.length, 0, "no Windows tool may be started without a proven authority");
+  if (IS_WINDOWS) {
+    assert.equal(e.evidence, "unavailable", "and nothing may be claimed");
+    assert.equal(e.proven, false);
+  }
+});
+
+test("R8 (Windows): termination with an unprovable authority claims nothing and signals nothing", (t) => {
+  if (!IS_WINDOWS) {
+    // NOT a convenience skip. Off-Windows `terminate` takes the POSIX branch and
+    // would signal a REAL pid; there is no Windows integration to observe here.
+    t.skip("terminate() takes the POSIX signalling branch off-Windows; Windows cleanup integration is UNVERIFIED on this platform");
+    return;
+  }
+  const unusable = join(tempDir("noauthority-win"), "not-a-windows-root");
   const runner = countingRunner();
   const driver = new NodeProcessTreeDriver({
     toolResolver: (id) => resolveWindowsSystemTool(id, { platform: "win32", testOnlySystemRoot: unusable }),
     toolRunner: runner.run,
   });
 
-  const e = driver.enumerateDescendants(handleFor(process.pid), DEFAULT_TERMINATION_POLICY);
-  driver.listDescendants(handleFor(process.pid), DEFAULT_TERMINATION_POLICY);
+  // On Windows this is safe by construction: `identityMatches` cannot confirm
+  // the image without a trusted `tasklist`, so termination refuses BEFORE any
+  // signal — the receipt below proves it did not proceed.
   const receipt = driver.terminate(handleFor(process.pid), DEFAULT_TERMINATION_POLICY, "completed", 1000);
 
-  assert.equal(runner.calls.length, 0, "no tool may be started without a proven authority");
-  if (IS_WINDOWS) {
-    assert.equal(e.evidence, "unavailable");
-    assert.equal(e.proven, false);
-    assert.equal(receipt.cleanupComplete, false, "and nothing may be claimed complete");
-  }
+  assert.equal(runner.calls.length, 0, "zero Windows tools started");
+  assert.equal(receipt.cleanupComplete, false, "nothing may be claimed complete");
+  assert.equal(receipt.gracefulAttempted, false, "and no signal may be attempted");
+  assert.equal(receipt.safeReasonCode, "process-tree-identity-mismatch", "refused because identity could not be confirmed");
 });
 
 test("R10: production supplies NO root override anywhere", () => {
@@ -1001,6 +1121,123 @@ test("R10: production supplies NO root override anywhere", () => {
     assert.equal(withEverythingPoisoned.value.command, defaultResolution.value.command);
   }
   rmSync(fake, { recursive: true, force: true });
+});
+
+// ============== CI REGRESSION — FIXTURE PATH CANONICALITY (run 31936728011) ==
+//
+// Ten Windows tests failed in CI because the PLANTED FIXTURE sat beneath a
+// non-canonical alias, so the resolver refused it at the root stage before the
+// condition under test was ever reached. This pins the distinction: an alias is
+// refused, the canonical name of the SAME directory is accepted, and neither
+// fact weakens the reparse protection that the canonicality rule exists for.
+
+/** The 8.3 short name of a path, when the volume has one. Windows only. */
+function shortNameAlias(target: string): string | null {
+  try {
+    const parent = dirname(target);
+    const leaf = basename(target);
+    const out = execFileSync("cmd", ["/c", "dir", "/x", "/ad", parent], { encoding: "utf8", timeout: 20000, windowsHide: true });
+    const row = out.split(/\r?\n/).find((l: string) => l.trimEnd().endsWith(leaf));
+    if (!row) return null;
+    // Parse relative to the `<DIR>` marker rather than by pattern: the columns
+    // before it are a locale-dependent date and time, and matching "8.3-shaped"
+    // text anywhere on the line happily selects "PM" out of the timestamp.
+    // After `<DIR>` come the short name (possibly blank) and then the long name.
+    const marker = row.indexOf("<DIR>");
+    if (marker < 0) return null;
+    const afterMarker = row.slice(marker + "<DIR>".length).trimEnd();
+    const shortName = afterMarker.slice(0, afterMarker.length - leaf.length).trim();
+    if (shortName.length === 0) return null; // this volume generated no alias
+    const alias = join(parent, shortName);
+    return alias.toLowerCase() === target.toLowerCase() ? null : alias;
+  } catch {
+    return null;
+  }
+}
+
+test("CI-REGRESSION: a non-canonical ALIAS to a valid fixture is refused, the canonical name is not", (t) => {
+  if (!IS_WINDOWS) {
+    t.skip("8.3 aliases are a Windows filesystem feature; the canonicality rule itself is proven on every platform above");
+    return;
+  }
+  const root = plantWindowsRoot("aliasreg");
+  const alias = shortNameAlias(root);
+  if (!alias) {
+    t.skip("this volume generates no 8.3 alias for the fixture; alias refusal UNVERIFIED here");
+    rmSync(root, { recursive: true, force: true });
+    return;
+  }
+
+  // (1) The alias names the very same directory, yet is refused — because it is
+  //     not how the filesystem names it. This is the CI failure, reproduced.
+  assert.equal(realpathSync.native(alias), root, "precondition: the alias really does point at the fixture");
+  const viaAlias = resolveWindowsSystemTool("tasklist", { platform: "win32", testOnlySystemRoot: alias });
+  assert.equal(viaAlias.ok, false, "a non-canonical alias must be refused");
+  assert.equal(viaAlias.reasonCode, "system-root-not-a-windows-install", "and refused at the ROOT stage — exactly what CI reported");
+
+  // (2) The canonical name of the SAME fixture reaches the intended stage.
+  const viaCanonical = resolveWindowsSystemTool("tasklist", { platform: "win32", testOnlySystemRoot: root });
+  assert.equal(viaCanonical.ok, true, `the canonical name must resolve: ${viaCanonical.reasonCode}`);
+  if (viaCanonical.ok) assert.equal(viaCanonical.value.command, join(root, "System32", "tasklist.exe"));
+
+  // (3) Canonicalising the FIXTURE grants no exemption: the rule is unchanged,
+  //     as the alias refusal above demonstrates on the identical directory.
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("CI-REGRESSION: canonical fixtures do NOT weaken reparse refusal", (t) => {
+  // (4) The repair must not have turned the canonicality rule into a formality.
+  //     A genuine junction, inside a fully canonical fixture, is still refused.
+  const base = tempDir("canonreparse");
+  const root = join(base, "root");
+  const evil = join(base, "evil");
+  mkdirSync(join(evil, "wbem"), { recursive: true });
+  writeFileSync(join(evil, "kernel32.dll"), "fake");
+  writeFileSync(join(evil, "tasklist.exe"), "HOSTILE");
+  mkdirSync(root, { recursive: true });
+  try {
+    symlinkSync(evil, join(root, "System32"), "junction");
+  } catch {
+    t.skip("this host cannot create junctions; reparse refusal UNVERIFIED here");
+    rmSync(base, { recursive: true, force: true });
+    return;
+  }
+
+  assert.equal(realpathSync.native(base), base, "precondition: the fixture path is already canonical");
+  const r = resolveWindowsSystemTool("tasklist", { platform: "win32", testOnlySystemRoot: root });
+  assert.equal(r.ok, false, "a junctioned System32 is still refused inside a canonical fixture");
+  assert.equal(r.value, null);
+  rmSync(base, { recursive: true, force: true });
+});
+
+test("CI-REGRESSION: every planted fixture root is canonical by construction", () => {
+  // The repair itself, asserted directly: if `tempDir` ever stops
+  // canonicalising, this fails immediately rather than in CI ten tests later.
+  for (const tag of ["c1", "c2", "c3"]) {
+    const d = tempDir(tag);
+    assert.equal(realpathSync.native(d), d, `fixture ${tag} must be canonical at creation`);
+    const planted = plantWindowsRoot(`${tag}-planted`);
+    assert.equal(realpathSync.native(planted), planted, `planted root ${tag} must be canonical`);
+    assert.equal(realpathSync.native(join(planted, "System32")), join(planted, "System32"), `its System32 must be canonical too`);
+    rmSync(d, { recursive: true, force: true });
+    rmSync(planted, { recursive: true, force: true });
+  }
+
+  // The assertions above are only NON-VACUOUS on a host whose temp directory is
+  // itself aliased — which is the CI runner, and is not this workstation. So
+  // the repair MECHANISM is exercised directly here: take a genuinely aliased
+  // name and show that the transform `tempDir` applies converts it back to the
+  // form production requires. Without that transform an aliased fixture reaches
+  // the resolver unchanged, which is precisely how CI failed.
+  const root = plantWindowsRoot("mechanism");
+  const alias = IS_WINDOWS ? shortNameAlias(root) : null;
+  if (alias) {
+    assert.notEqual(alias, root, "precondition: the alias is a different string");
+    assert.equal(resolveWindowsSystemTool("tasklist", { platform: "win32", testOnlySystemRoot: alias }).ok, false, "an aliased fixture is refused by production");
+    assert.equal(realpathSync.native(alias), root, "the transform tempDir applies rescues it");
+    assert.equal(resolveWindowsSystemTool("tasklist", { platform: "win32", testOnlySystemRoot: realpathSync.native(alias) }).ok, true, "and the transformed path resolves");
+  }
+  rmSync(root, { recursive: true, force: true });
 });
 
 test("resolution refuses outright on a non-Windows platform", () => {

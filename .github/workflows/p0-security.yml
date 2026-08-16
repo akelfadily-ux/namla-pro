@@ -74,11 +74,11 @@ jobs:
       - name: Exact failure diagnostics (POSIX suites)
         if: always() && steps.gate.outcome == 'failure' && runner.os != 'Windows'
         run: |
-          node dist/tools/safeSuiteFailureDiagnostics.js             dist/tools/processTreeTests.js             dist/tools/trustedExecutableTests.js             dist/tools/workspaceSecurityTests.js             --out p0-failure-diagnostics-${{ matrix.os }}.json
+          node dist/tools/safeSuiteFailureDiagnostics.js             dist/tools/processTreeTests.js             dist/tools/windowsProcessTreeTests.js             dist/tools/trustedExecutableTests.js             dist/tools/workspaceSecurityTests.js             --out p0-failure-diagnostics-${{ matrix.os }}.json
 
       - name: Exact failure diagnostics (Windows suites)
         if: always() && steps.gate.outcome == 'failure' && runner.os == 'Windows'
-        run: node dist/tools/safeSuiteFailureDiagnostics.js dist/tools/processTreeTests.js dist/tools/trustedExecutableTests.js dist/tools/workspaceSecurityTests.js --out p0-failure-diagnostics-${{ matrix.os }}.json
+        run: node dist/tools/safeSuiteFailureDiagnostics.js dist/tools/processTreeTests.js dist/tools/windowsProcessTreeTests.js dist/tools/trustedExecutableTests.js dist/tools/workspaceSecurityTests.js --out p0-failure-diagnostics-${{ matrix.os }}.json
 
       - name: Upload exact failure diagnostics
         if: always() && steps.gate.outcome == 'failure'
