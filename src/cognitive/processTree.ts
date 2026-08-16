@@ -8,21 +8,27 @@
  * A provider CLI that detaches a helper therefore leaks a live process on every
  * timeout, holding the workspace open and consuming resources indefinitely.
  *
- * Two platform strategies, both bounded and both fixed-template:
+ * Two platform strategies:
  *
- *   POSIX — the root is spawned in its own session, so pgid == root pid. A
- *     process GROUP outlives its leader, so `kill(-pgid, …)` still reaches
- *     surviving members after the root is dead. Graceful SIGTERM, bounded
- *     grace, then SIGKILL. Only ever the group we created.
+ *   POSIX — REFUSES (S-11). The synchronous provider path cannot prove it owns
+ *     anything by the time cleanup starts, so it signals nothing at all. See
+ *     `posixOwnershipProven` for why, including the part that is easy to miss:
+ *     a recycled root's descendants are real processes with valid identities,
+ *     so per-PID checks cannot supply the missing lineage. The earlier
+ *     session-based design described here was never actually reachable —
+ *     `spawnSync` creates no session, and no production caller ever claimed one.
  *
  *   WINDOWS — `taskkill /PID <root> /T` walks the live parent/child tree.
- *     `/F` is used only after the grace period expires.
+ *     `/F` is used only after the grace period expires. Identity is proven
+ *     through a trusted `tasklist` before any signal (S-10), and that path is
+ *     unchanged by S-11.
  *
  * IDENTITY IS VERIFIED BEFORE ANY SIGNAL. A dead root's PID can be recycled by
  * the OS, and killing a recycled PID would terminate an unrelated process — the
- * exact harm this module exists to prevent. A handle therefore carries the
- * expected image basename, and termination refuses with
- * `process-tree-identity-mismatch` when it cannot confirm it.
+ * exact harm this module exists to prevent. Where identity cannot be confirmed,
+ * termination refuses with `process-tree-identity-mismatch`. Note that the
+ * image basename a handle carries is CORROBORATION only: a recycled PID can
+ * trivially run the same executable.
  *
  * Honesty rule: `cleanupComplete` is only true when descendants were actually
  * confirmed gone. When the platform cannot prove it, the receipt says
@@ -42,7 +48,17 @@ export type ProcessTreeReasonCode = "ok" | "provider-timeout" | "provider-cancel
 /** Identity of one spawned root. Carries no command line, prompt, or environment. */
 export interface ProcessTreeHandle {
   readonly rootPid: number;
-  /** True when the root was spawned into its own group/session. */
+  /**
+   * CALLER-SUPPLIED METADATA describing how the process was spawned. It is NOT
+   * proof of process-group ownership and NOT a capability: any caller can set
+   * it, and nothing verifies it.
+   *
+   * Current production has no trusted POSIX group provenance — `spawnSync`
+   * creates no group, no production caller passes true, and there is no
+   * `detached: true` anywhere in production. S-11 therefore grants this field
+   * NO destructive signalling authority: a POSIX handle is refused whatever it
+   * says here.
+   */
   readonly processGroupCreated: boolean;
   /** Expected image basename, used to refuse a recycled PID. */
   readonly expectedImageBasename: string;
@@ -286,6 +302,51 @@ const spawnWindowsTool: WindowsToolRunner = (invocation) => {
 export interface ProcessTreeDriverOptions {
   readonly toolRunner?: WindowsToolRunner;
   readonly toolResolver?: (id: WindowsSystemToolId) => WindowsSystemToolResult;
+  /** Platform seam, so the POSIX refusal is provable from any host. */
+  readonly platform?: NodeJS.Platform;
+  /**
+   * Test seam that OBSERVES enumeration. Production never passes it. It exists
+   * so a test can prove the destructive path never even asks for a descendant
+   * list under an unproven handle.
+   */
+  readonly onPosixEnumeration?: () => void;
+}
+
+/**
+ * Can Namla prove it OWNS this POSIX process tree?
+ *
+ * Under the current synchronous provider architecture the answer is always no,
+ * and that is a fact about the architecture rather than a policy choice:
+ *
+ *   `spawnSync` does not return until the child has fully closed, so by the
+ *   time a handle is built the root is already exited and reaped. Measured:
+ *   `process.kill(outcome.pid, 0)` throws immediately after return.
+ *
+ * Two things follow, and the second is the one that is easy to miss.
+ *
+ *   ROOT     nothing observed AFTER the child is gone can identify it. Probing
+ *            `/proc/<pid>/stat` for a live process at that number proves only
+ *            that SOMETHING is there now. Treating that as the child's identity
+ *            is laundering, not evidence.
+ *   LINEAGE  neither can its tree be recovered. If the number was reused by an
+ *            unrelated process B, enumerating "descendants of <pid>" returns
+ *            B's real children. Each has a perfectly valid, stable start time,
+ *            so per-process identity checks pass — and every one of them is a
+ *            stranger. IDENTITY IS NOT LINEAGE.
+ *
+ * `processGroupCreated` cannot rescue it either. It is an ordinary boolean on
+ * an interface, not a capability: any caller can construct a handle with it set
+ * to true, and an audit found ZERO production callers that pass true and no
+ * `detached: true` anywhere in production. A field that asserts ownership is
+ * not ownership, so the group path is refused on the same terms.
+ *
+ * S-11 therefore chooses NEVER SIGNAL AN UNPROVEN PROCESS over best-effort
+ * cleanup. Regaining POSIX cleanup safely needs an async `spawn` that creates a
+ * real session while the child is alive — recorded as a future architectural
+ * milestone, deliberately not attempted here.
+ */
+function posixOwnershipProven(_handle: ProcessTreeHandle): boolean {
+  return false;
 }
 
 /**
@@ -450,6 +511,10 @@ export class NodeProcessTreeDriver implements ProcessTreeDriver {
 
   constructor(private readonly seams: ProcessTreeDriverOptions = {}) {}
 
+  private kind(): ProcessTreePlatformKind {
+    return platformKind(this.seams.platform ?? process.platform);
+  }
+
   /**
    * Run a trusted Windows system tool, or refuse WITHOUT running anything.
    *
@@ -503,7 +568,7 @@ export class NodeProcessTreeDriver implements ProcessTreeDriver {
    */
   enumerateDescendants(handle: ProcessTreeHandle, policy: ProcessTreeTerminationPolicy): DescendantEnumeration {
     const unavailable: DescendantEnumeration = { evidence: "unavailable", proven: false, pids: [] };
-    const kind = platformKind();
+    const kind = this.kind();
     if (kind === "unsupported") return unavailable;
 
     // POSIX IS DELIBERATELY UNCHANGED IN S-10.
@@ -521,7 +586,10 @@ export class NodeProcessTreeDriver implements ProcessTreeDriver {
     // baseline had no notion of unproven enumeration, so POSIX is always
     // "complete", which makes `cleanupComplete` resolve exactly as it did at
     // HEAD.
-    if (kind === "posix") return { evidence: "complete", proven: true, pids: this.listPosixDescendants(handle, policy) };
+    if (kind === "posix") {
+      this.seams.onPosixEnumeration?.();
+      return { evidence: "complete", proven: true, pids: this.listPosixDescendants(handle, policy) };
+    }
 
     if (!isSpawnablePid(handle.rootPid)) return unavailable;
 
@@ -581,11 +649,27 @@ export class NodeProcessTreeDriver implements ProcessTreeDriver {
   }
 
   terminate(handle: ProcessTreeHandle, policy: ProcessTreeTerminationPolicy, reason: TerminationReason, timeoutMs: number): ProcessTreeCleanupReceipt {
-    const platform = platformKind();
+    const platform = this.kind();
     const base = { rootProcessId: handle.rootPid, platform, terminationReason: reason, timeoutMs };
 
     if (platform === "unsupported") {
       return buildCleanupReceipt({ ...base, gracefulAttempted: false, gracefulSucceeded: false, forcedAttempted: false, forcedSucceeded: false, descendantsTargeted: 0, descendantsRemaining: 0, cleanupComplete: false, safeReasonCode: "process-tree-platform-unsupported" });
+    }
+
+    // S-11: POSIX REFUSES BEFORE IT LOOKS.
+    //
+    // The refusal comes first deliberately. Enumerating a stale numeric root
+    // would produce a descendant list belonging to whoever inherited the PID,
+    // and merely HAVING that list invites treating it as ours — so the list is
+    // never requested. Nothing is enumerated, nothing is signalled, and the
+    // receipt says the tree was not cleaned rather than implying it was.
+    //
+    // `process-tree-identity-mismatch` is the existing code for exactly this:
+    // "termination refuses when it cannot confirm identity". No new reason code
+    // is invented, and the success codes are not reused — `ok`,
+    // `provider-timeout` and `provider-cancelled` all imply a completed sweep.
+    if (platform === "posix" && !posixOwnershipProven(handle)) {
+      return buildCleanupReceipt({ ...base, gracefulAttempted: false, gracefulSucceeded: false, forcedAttempted: false, forcedSucceeded: false, descendantsTargeted: 0, descendantsRemaining: 0, cleanupComplete: false, safeReasonCode: "process-tree-identity-mismatch" });
     }
 
     const enumeration = this.enumerateDescendants(handle, policy);
@@ -618,20 +702,12 @@ export class NodeProcessTreeDriver implements ProcessTreeDriver {
       // honest outcome — far better than a bare-name fallback that would hand
       // the kill to whatever binary the search order happened to find.
       this.runTool("taskkill", ["/PID", String(handle.rootPid), "/T"], 8000, 16384);
-    } else if (handle.processGroupCreated) {
-      // Signal ONLY the group we created. A group outlives its leader.
-      try {
-        process.kill(-handle.rootPid, "SIGTERM");
-      } catch {
-        /* group already gone */
-      }
-    } else {
-      try {
-        process.kill(handle.rootPid, "SIGTERM");
-      } catch {
-        /* already gone */
-      }
     }
+    // NO POSIX BRANCH EXISTS ANY MORE. Every POSIX handle is refused above, so
+    // a signalling path here could only ever be dead code — and dead code that
+    // sends SIGKILL is exactly the kind of machinery that gets re-enabled by
+    // accident. When ownership becomes provable, the branch comes back WITH the
+    // proof, not before it.
     waitBounded(policy.gracePeriodMs, () => stillAlive() === 0);
     gracefulSucceeded = stillAlive() === 0;
 
@@ -648,21 +724,8 @@ export class NodeProcessTreeDriver implements ProcessTreeDriver {
           // become an option or a second command.
           if (isSpawnablePid(pid) && pidAlive(pid)) this.runTool("taskkill", ["/PID", String(pid), "/T", "/F"], 5000, 8192);
         }
-      } else if (handle.processGroupCreated) {
-        try {
-          process.kill(-handle.rootPid, "SIGKILL");
-        } catch {
-          /* gone */
-        }
-      } else {
-        for (const pid of [handle.rootPid, ...descendants]) {
-          try {
-            process.kill(pid, "SIGKILL");
-          } catch {
-            /* gone */
-          }
-        }
       }
+      // Likewise: no POSIX forced branch. See the refusal above.
       waitBounded(500, () => stillAlive() === 0);
       forcedSucceeded = stillAlive() === 0;
     }

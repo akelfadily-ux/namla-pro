@@ -112,20 +112,30 @@ export class NodeProviderProcessDriver implements ProviderProcessDriver {
       cwd: spec.workingDirectoryAbsolute,
       timeout: spec.timeoutMs,
       killSignal: "SIGKILL",
-      // NOTE: spawnSync does NOT support `detached`, so this path cannot create
-      // a process group. The sweep below therefore targets the root plus
-      // ENUMERATED descendants rather than a group. Callers that need true
-      // group semantics must spawn asynchronously; see processTree.ts.
+      // NOTE: spawnSync does NOT support `detached`, so this path establishes no
+      // trusted POSIX process-group ownership. It also does not return until the
+      // child has fully closed, so once it does, POSIX ownership can no longer be
+      // proven at all. S-11 therefore REFUSES POSIX destructive cleanup rather
+      // than enumerating or signalling stale PIDs. Windows is unaffected and
+      // still uses its separately proven S-10 process-tree path.
       maxBuffer: spec.maxStdoutBytes + spec.maxStderrBytes + 1024,
       windowsHide: true,
       env: buildSafeChildEnv(),
       encoding: "utf8",
     });
 
-    // CLEANUP RUNS ON EVERY EXIT PATH - success, timeout, cancellation, spawn
-    // error - because a detached descendant survives the root's death and would
-    // otherwise leak. Identity is verified inside the tree driver before any
-    // signal, so a recycled PID cannot cause an unrelated process to be killed.
+    // sweepTree IS INVOKED ON EVERY EXIT PATH - success, timeout, cancellation,
+    // spawn error - but what it does now differs by platform.
+    //
+    // POSIX: S-11 deliberately refuses destructive signalling here, because
+    // ownership cannot be proven once spawnSync has returned - the root is
+    // already reaped and its number may have been reissued. A detached POSIX
+    // descendant may therefore LEAK, and the receipt reports cleanup incomplete
+    // rather than implying a sweep. Recycled-PID safety on POSIX comes from
+    // refusing to signal at all, NOT from post-hoc identity verification.
+    //
+    // Windows: the existing S-10 path still performs platform-specific cleanup,
+    // proving identity through a trusted tasklist before any signal.
     const timedOutEarly = Boolean(outcome.error && (outcome.error as NodeJS.ErrnoException).code === "ETIMEDOUT") || outcome.signal === "SIGKILL";
     this.lastCleanupReceipt = this.sweepTree(outcome.pid, resolved.value.command, timedOutEarly ? "provider-timeout" : outcome.error ? "driver-error" : "completed", spec.timeoutMs);
 

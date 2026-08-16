@@ -244,13 +244,35 @@ test("REAL fixture: a detached descendant survives a single-process kill and the
       return;
     }
 
-    // THE FIX: the real tree driver reaps it.
     const driver = new NodeProcessTreeDriver();
     const h = buildProcessTreeHandle(detachedPid, process.execPath, false, 1);
     assert.notEqual(h, null);
     const receipt: ProcessTreeCleanupReceipt = driver.terminate(h as ProcessTreeHandle, { ...POLICY, gracePeriodMs: 500 }, "provider-timeout", 2000);
 
     assert.equal(receipt.platform, platformKind());
+
+    // S-11 CHANGED THIS EXPECTATION ON POSIX.
+    //
+    // OLD: the real driver reaped the orphan — `alive(detachedPid) === false`.
+    // NEW: on POSIX the driver REFUSES and the orphan survives.
+    // WHY: this handle is built after `spawnSync` returned, so the root was
+    //      already reaped and its PID may have been reissued. Signalling that
+    //      number cannot be distinguished from signalling a stranger, and
+    //      enumerating "its" descendants would return the stranger's children —
+    //      each with a valid identity. Killing an unrelated process tree is a
+    //      worse failure than leaking one of our own, so cleanup fails closed.
+    //      The orphan is still cleaned up by this test's own `finally`.
+    // Windows is unaffected: it proves identity through `tasklist` and keeps
+    // the S-10 behaviour.
+    if (platformKind() === "posix") {
+      assert.equal(receipt.gracefulAttempted, false, "POSIX must not attempt a signal it cannot justify");
+      assert.equal(receipt.forcedAttempted, false, "and must not escalate to SIGKILL either");
+      assert.equal(receipt.safeReasonCode, "process-tree-identity-mismatch", "the refusal must be named");
+      assert.equal(receipt.cleanupComplete, false, "and must never be reported as a clean sweep");
+      assert.equal(alive(detachedPid), true, "the orphan survives, because we refused to signal an unproven PID");
+      return; // the completeness assertions below describe the signalling path
+    }
+
     assert.equal(alive(detachedPid), false, "the orphan must be gone after tree termination");
 
     // Completeness is a CLAIM ABOUT EVIDENCE, and S-10 made that claim honest.
