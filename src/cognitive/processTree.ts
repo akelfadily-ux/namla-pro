@@ -31,6 +31,7 @@
 
 import { spawnSync } from "child_process";
 import { basename } from "path";
+import { resolveWindowsSystemTool, type WindowsSystemToolId, type WindowsSystemToolResult } from "./windowsSystemTools";
 
 export type ProcessTreePlatformKind = "win32" | "posix" | "unsupported";
 
@@ -72,6 +73,30 @@ export interface ProcessTreeCleanupReceipt {
   readonly timeoutMs: number;
   readonly safeReasonCode: ProcessTreeReasonCode;
   readonly safeFingerprint: string;
+}
+
+/**
+ * A descendant listing plus whether it is EVIDENCE.
+ *
+ * `proven: false` means the platform could not be asked — the tool is absent,
+ * refused trust, failed, or timed out. It never means "there are none".
+ */
+export type DescendantEvidence =
+  /** A trusted snapshot was obtained and the transitive closure was fully explored. */
+  | "complete"
+  /** The closure was truncated by the policy cap; reachable nodes remain unrecorded. */
+  | "capped"
+  /** No trusted snapshot: the tool is absent, refused, failed, or returned nothing usable. */
+  | "unavailable";
+
+export interface DescendantEnumeration {
+  readonly evidence: DescendantEvidence;
+  /**
+   * `evidence === "complete"`. The ONLY basis on which completeness may be
+   * claimed — `capped` and `unavailable` both mean the tree was not fully seen.
+   */
+  readonly proven: boolean;
+  readonly pids: readonly number[];
 }
 
 export interface ProcessTreeDriver {
@@ -206,16 +231,209 @@ function pidAlive(pid: number): boolean {
 }
 
 /**
+ * A PID that is safe to put in a command argument or a query string.
+ *
+ * Every Windows tool below receives the root PID, and `wmic`'s query embeds it
+ * in a WQL string. The value is validated at the boundary rather than trusted
+ * because it arrived in a handle: a handle can be constructed directly, and
+ * "it was an integer when we built it" is not a property the spawn site can
+ * check for itself. Rejecting here means no non-integer, negative, zero, or
+ * out-of-range value ever reaches an argument vector.
+ */
+function isSpawnablePid(pid: number): boolean {
+  return Number.isSafeInteger(pid) && pid > 0;
+}
+
+/**
+ * Run a trusted Windows system tool, or refuse.
+ *
+ * Every Windows spawn in this module goes through here, so the trust rules hold
+ * in one place: canonical absolute `.exe` resolved without `PATH`, `shell:
+ * false`, a minimal rebuilt environment, and a working directory inside the
+ * system directory rather than wherever the caller happened to be — the current
+ * directory is part of the Windows DLL search order.
+ *
+ * Returns `null` when the tool cannot be proven, which callers must treat as
+ * "no evidence", never as "nothing found".
+ */
+export interface WindowsToolInvocation {
+  readonly command: string;
+  readonly args: readonly string[];
+  readonly env: Readonly<Record<string, string>>;
+  readonly cwd: string;
+  readonly timeoutMs: number;
+  readonly maxBuffer: number;
+}
+
+export type WindowsToolRunner = (invocation: WindowsToolInvocation) => { readonly status: number | null; readonly stdout: string } | null;
+
+/** The real runner. `shell: false` is not negotiable and is not a parameter. */
+const spawnWindowsTool: WindowsToolRunner = (invocation) => {
+  const out = spawnSync(invocation.command, [...invocation.args], {
+    shell: false,
+    windowsHide: true,
+    timeout: invocation.timeoutMs,
+    maxBuffer: invocation.maxBuffer,
+    encoding: "utf8",
+    env: { ...invocation.env },
+    cwd: invocation.cwd,
+  });
+  if (out.error || typeof out.stdout !== "string") return null;
+  return { status: out.status, stdout: out.stdout };
+};
+
+/** Seams, so the Windows rules are provable without a Windows host. */
+export interface ProcessTreeDriverOptions {
+  readonly toolRunner?: WindowsToolRunner;
+  readonly toolResolver?: (id: WindowsSystemToolId) => WindowsSystemToolResult;
+}
+
+/**
+ * Parse `wmic ... get ProcessId /FORMAT:CSV` output into descendant PIDs.
+ *
+ * Exported because this is where malformed tool output would turn into
+ * termination targets, and that deserves direct tests rather than inference.
+ * Every record must survive all of: matches the expected CSV shape, is a
+ * positive safe integer, is not the root itself, is not a duplicate. Anything
+ * else is DROPPED — never coerced, never defaulted, never partially accepted.
+ * `NaN`, `0`, negatives, floats, overflow and injected text all fall out here,
+ * which is why no PID reaching an argument vector can carry anything but digits.
+ */
+export interface ProcessRow {
+  readonly pid: number;
+  readonly ppid: number;
+}
+
+/**
+ * Parse `wmic process get ProcessId,ParentProcessId /FORMAT:CSV`.
+ *
+ * Rows look like `HOSTNAME,<ppid>,<pid>` — WMIC emits the requested columns in
+ * alphabetical order, so ParentProcessId precedes ProcessId. The header line
+ * does not match the shape and is dropped without special-casing.
+ *
+ * Returns `null` when the output yields NO usable rows at all. A real snapshot
+ * always contains many processes, so an empty parse means the output was
+ * truncated, garbled or not a snapshot — none of which may be reported as "this
+ * machine has no processes". Ambiguity is unavailability, not emptiness.
+ */
+export const WMIC_SNAPSHOT_HEADER = "Node,ParentProcessId,ProcessId";
+
+export function parseWmicProcessSnapshot(stdout: string): readonly ProcessRow[] | null {
+  const lines = stdout
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+
+  if (lines.length === 0) return null; // no output at all
+  // The header is a required integrity signal: without it we are not looking at
+  // the start of a snapshot, so we cannot know what was lost before this point.
+  if (lines[0].toLowerCase() !== WMIC_SNAPSHOT_HEADER.toLowerCase()) return null;
+  if (lines.length === 1) return null; // header alone proves nothing
+
+  const rows: ProcessRow[] = [];
+  for (const line of lines.slice(1)) {
+    const m = /^([^,]*),(\d+),(\d+)$/.exec(line);
+    // ANY non-conforming row invalidates the WHOLE snapshot. Dropping it and
+    // carrying on is the flaw review caught: a truncated final row means output
+    // was lost, and the surviving rows would then be presented as a complete
+    // picture of the machine — hiding a reachable descendant and licensing a
+    // `cleanupComplete` that was never earned.
+    if (!m) return null;
+
+    const ppid = Number(m[2]);
+    const pid = Number(m[3]);
+
+    // SNAPSHOT VALIDITY IS NOT TARGETABILITY. Two different questions, kept
+    // deliberately separate:
+    //
+    //   snapshot-valid PID  : safe integer >= 0
+    //   snapshot-valid PPID : safe integer >= 0
+    //   TARGETABLE PID      : safe integer >  0   (enforced in the closure)
+    //
+    // ProcessId 0 is the System Idle Process and ParentProcessId 0 is its
+    // parent; both appear in every genuine Windows snapshot. Treating either as
+    // malformed would invalidate real snapshots and leave Windows enumeration
+    // permanently unavailable. They are therefore structurally VALID here and
+    // simply never become termination targets, which `isSpawnablePid` enforces
+    // where it matters — at the point a PID could reach an argument vector.
+    //
+    // Out-of-range values still invalidate the snapshot: an overflowing digit
+    // run is not a number we can reason about, so it is lost evidence, not a
+    // droppable row.
+    if (!Number.isSafeInteger(pid) || !Number.isSafeInteger(ppid) || pid < 0 || ppid < 0) return null;
+
+    rows.push({ pid, ppid });
+  }
+
+  return rows.length > 0 ? rows : null;
+}
+
+/**
+ * The TRANSITIVE closure of descendants, from one bounded snapshot.
+ *
+ * Human review caught the previous query asking `wmic` for
+ * `ParentProcessId = <root>`, which returns DIRECT CHILDREN ONLY. For
+ * `100 -> 200 -> 300` it sees 200 and never 300, yet the result was consumed as
+ * a descendant enumeration and fed a `cleanupComplete` claim. One generation of
+ * evidence cannot support a statement about a tree.
+ *
+ * A whole-snapshot query plus an in-memory walk fixes that and removes the PID
+ * interpolation entirely — the query is now a fixed string with nothing
+ * substituted into it.
+ *
+ * Bounded and total: `visited` makes self-cycles and multi-node cycles
+ * terminate, the root is pre-marked so it can never be its own descendant,
+ * duplicate rows collapse, and the policy cap is enforced. Hitting the cap
+ * while reachable nodes remain yields `capped` — an explicitly INCOMPLETE
+ * answer, never a complete one that happens to be short.
+ */
+export function buildTransitiveDescendants(rows: readonly ProcessRow[], rootPid: number, maxDescendants: number): { readonly evidence: "complete" | "capped"; readonly pids: readonly number[] } {
+  const children = new Map<number, number[]>();
+  for (const row of rows) {
+    // Malformed or self-parenting rows never become edges. PPID 0 is a
+    // legitimate parent value in a Windows snapshot, so it is admitted as an
+    // edge source — it simply is not reachable from a positive root PID.
+    if (!isSpawnablePid(row.pid) || !Number.isSafeInteger(row.ppid) || row.ppid < 0 || row.pid === row.ppid) continue;
+    const list = children.get(row.ppid) ?? [];
+    list.push(row.pid);
+    children.set(row.ppid, list);
+  }
+
+  const visited = new Set<number>([rootPid]);
+  const pids: number[] = [];
+  const queue: number[] = [rootPid];
+  let capped = false;
+
+  while (queue.length > 0 && !capped) {
+    const current = queue.shift() as number;
+    for (const child of children.get(current) ?? []) {
+      if (visited.has(child)) continue; // duplicates and cycles
+      if (pids.length >= maxDescendants) {
+        // A reachable node exists that we are not allowed to record. Say so.
+        capped = true;
+        break;
+      }
+      visited.add(child);
+      pids.push(child);
+      queue.push(child);
+    }
+  }
+
+  return { evidence: capped ? "capped" : "complete", pids };
+}
+
+/**
  * Confirm the PID still belongs to the image we spawned. A dead root's PID can
  * be recycled; signalling a recycled PID would kill an unrelated process.
+ *
+ * Unchanged in spirit from S-9: anything short of a confirmed match is `false`,
+ * so an unresolvable `tasklist`, a spawn failure, a non-zero exit, or unparsable
+ * output all refuse termination rather than allowing it.
  */
-function identityMatches(handle: ProcessTreeHandle): boolean {
-  if (platformKind() !== "win32") return true; // POSIX targets the group we created
-  const out = spawnSync("tasklist", ["/FI", `PID eq ${handle.rootPid}`, "/FO", "CSV", "/NH"], { shell: false, windowsHide: true, timeout: 5000, maxBuffer: 8192, encoding: "utf8" });
-  if (out.error || typeof out.stdout !== "string") return false;
-  const image = (out.stdout.split(",")[0] ?? "").replace(/"/g, "").trim().toLowerCase();
+export function imageMatchesTasklistRow(stdout: string, expectedImageBasename: string): boolean {
+  const image = (stdout.split(",")[0] ?? "").replace(/"/g, "").trim().toLowerCase();
   if (image.length === 0 || image.startsWith("info:")) return false;
-  return image === handle.expectedImageBasename.toLowerCase();
+  return image === expectedImageBasename.toLowerCase();
 }
 
 /** Busy-wait a bounded grace period. Sync by necessity: the caller is sync. */
@@ -230,20 +448,104 @@ function waitBounded(ms: number, until: () => boolean): void {
 export class NodeProcessTreeDriver implements ProcessTreeDriver {
   readonly isReal = true;
 
-  listDescendants(handle: ProcessTreeHandle, policy: ProcessTreeTerminationPolicy): readonly number[] {
-    if (platformKind() === "posix") return this.listPosixDescendants(handle, policy);
-    if (platformKind() !== "win32") return [];
-    const out = spawnSync("wmic", ["process", "where", `(ParentProcessId=${handle.rootPid})`, "get", "ProcessId", "/FORMAT:CSV"], { shell: false, windowsHide: true, timeout: 5000, maxBuffer: 65536, encoding: "utf8" });
-    if (out.error || typeof out.stdout !== "string") return [];
-    const pids: number[] = [];
-    for (const line of out.stdout.split(/\r?\n/)) {
-      const m = /,(\d+)\s*$/.exec(line.trim());
-      if (m) {
-        const pid = Number(m[1]);
-        if (Number.isInteger(pid) && pid > 0 && pids.length < policy.maxDescendants) pids.push(pid);
-      }
-    }
-    return pids;
+  constructor(private readonly seams: ProcessTreeDriverOptions = {}) {}
+
+  /**
+   * Run a trusted Windows system tool, or refuse WITHOUT running anything.
+   *
+   * Every Windows spawn in this module funnels through here, so the trust rules
+   * hold in exactly one place: a canonical absolute `.exe` resolved without ever
+   * reading `PATH`, `shell: false`, a minimal rebuilt environment, and a working
+   * directory inside the system directory — the current directory is part of the
+   * Windows DLL search order, so leaving it wherever the caller stood is a way
+   * in.
+   *
+   * The resolution happens BEFORE the runner is called. When a tool cannot be
+   * proven this returns `null` having started zero processes, and the caller
+   * must read that as "no evidence", never as "nothing found".
+   */
+  private runTool(id: WindowsSystemToolId, args: readonly string[], timeoutMs: number, maxBuffer: number): { readonly status: number | null; readonly stdout: string } | null {
+    const tool = (this.seams.toolResolver ?? resolveWindowsSystemTool)(id);
+    if (!tool.ok) return null;
+    const runner = this.seams.toolRunner ?? spawnWindowsTool;
+    return runner({ command: tool.value.command, args, env: tool.value.environment, cwd: tool.value.systemDirectory, timeoutMs, maxBuffer });
+  }
+
+  /**
+   * Confirm the PID still belongs to the image we spawned. A dead root's PID can
+   * be recycled; signalling a recycled PID would kill an unrelated process.
+   *
+   * Anything short of a confirmed match is `false`, so an unresolvable
+   * `tasklist`, a spawn failure, a non-zero exit or unparsable output all refuse
+   * termination rather than permit it.
+   */
+  private identityMatches(handle: ProcessTreeHandle): boolean {
+    if (platformKind() !== "win32") return true; // POSIX targets the group we created
+    if (!isSpawnablePid(handle.rootPid)) return false;
+    const out = this.runTool("tasklist", ["/FI", `PID eq ${handle.rootPid}`, "/FO", "CSV", "/NH"], 5000, 8192);
+    if (!out || out.status !== 0) return false;
+    return imageMatchesTasklistRow(out.stdout, handle.expectedImageBasename);
+  }
+
+  /**
+   * Descendants, WITH whether the answer is evidence or merely an absence of it.
+   *
+   * The distinction is the whole point. The previous code returned `[]` when
+   * `wmic` failed, which is indistinguishable from "this process has no
+   * children" — so a host where the tool is missing reported a clean, complete
+   * cleanup while descendants were never looked at. That is not a hypothetical:
+   * `wmic` is REMOVED from current Windows (11 24H2 onward), so on those hosts
+   * the enumeration failed on every single call and the receipt claimed success
+   * every time.
+   *
+   * `proven: false` therefore means "no evidence was obtained", and the caller
+   * must not convert it into a completeness claim.
+   */
+  enumerateDescendants(handle: ProcessTreeHandle, policy: ProcessTreeTerminationPolicy): DescendantEnumeration {
+    const unavailable: DescendantEnumeration = { evidence: "unavailable", proven: false, pids: [] };
+    const kind = platformKind();
+    if (kind === "unsupported") return unavailable;
+
+    // POSIX IS DELIBERATELY UNCHANGED IN S-10.
+    //
+    // This milestone is about the Windows path — bare `tasklist`/`wmic`/
+    // `taskkill` and the environment they inherit. An earlier revision of this
+    // work also rewrote the POSIX branch onto the new strict parser and
+    // evidence model. Review rejected that as out of scope, and it has been
+    // reverted: `listPosixDescendants` below is byte-identical to baseline, and
+    // POSIX therefore keeps reporting exactly what it reported before —
+    // including its own fail-open on a `ps` failure, which is recorded as a
+    // FUTURE FINDING and deliberately NOT fixed here.
+    //
+    // Mapping baseline behaviour onto the new return type is mechanical:
+    // baseline had no notion of unproven enumeration, so POSIX is always
+    // "complete", which makes `cleanupComplete` resolve exactly as it did at
+    // HEAD.
+    if (kind === "posix") return { evidence: "complete", proven: true, pids: this.listPosixDescendants(handle, policy) };
+
+    if (!isSpawnablePid(handle.rootPid)) return unavailable;
+
+    const rows = this.windowsSnapshot();
+    if (!rows) return unavailable;
+
+    const closure = buildTransitiveDescendants(rows, handle.rootPid, policy.maxDescendants);
+    return { evidence: closure.evidence, proven: closure.evidence === "complete", pids: closure.pids };
+  }
+
+  /**
+   * ONE bounded snapshot of every process, with no PID substituted into it.
+   *
+   * The query is a fixed string. Nothing derived from a handle is interpolated,
+   * so there is no query-construction surface at all — the previous
+   * `where (ParentProcessId=<pid>)` form both limited the answer to one
+   * generation and put a number inside a WQL string.
+   */
+  private windowsSnapshot(): readonly ProcessRow[] | null {
+    const out = this.runTool("wmic", ["process", "get", "ProcessId,ParentProcessId", "/FORMAT:CSV"], 5000, 4 * 1024 * 1024);
+    // Unresolvable tool, spawn failure, timeout, buffer overrun, or non-zero
+    // exit: no evidence. A truncated snapshot must never look like a small one.
+    if (!out || out.status !== 0) return null;
+    return parseWmicProcessSnapshot(out.stdout);
   }
 
   /** Walk `ps -eo pid,ppid` into the transitive descendant set. Fixed template. */
@@ -274,6 +576,10 @@ export class NodeProcessTreeDriver implements ProcessTreeDriver {
     return acc;
   }
 
+  listDescendants(handle: ProcessTreeHandle, policy: ProcessTreeTerminationPolicy): readonly number[] {
+    return this.enumerateDescendants(handle, policy).pids;
+  }
+
   terminate(handle: ProcessTreeHandle, policy: ProcessTreeTerminationPolicy, reason: TerminationReason, timeoutMs: number): ProcessTreeCleanupReceipt {
     const platform = platformKind();
     const base = { rootProcessId: handle.rootPid, platform, terminationReason: reason, timeoutMs };
@@ -282,15 +588,22 @@ export class NodeProcessTreeDriver implements ProcessTreeDriver {
       return buildCleanupReceipt({ ...base, gracefulAttempted: false, gracefulSucceeded: false, forcedAttempted: false, forcedSucceeded: false, descendantsTargeted: 0, descendantsRemaining: 0, cleanupComplete: false, safeReasonCode: "process-tree-platform-unsupported" });
     }
 
-    const descendants = this.listDescendants(handle, policy);
+    const enumeration = this.enumerateDescendants(handle, policy);
+    const descendants = enumeration.pids;
     const rootLive = pidAlive(handle.rootPid);
 
+    // Whether the descendant half of "everything is gone" can be asserted at
+    // all. On Windows without a trusted `wmic` it cannot, so completeness is
+    // withheld below rather than assumed — `taskkill /T` still walks and kills
+    // the tree in the kernel, we simply decline to CLAIM we watched it happen.
+    const descendantsProven = enumeration.proven;
+
     // Nothing left to do — and nothing to signal, so no recycled-PID risk.
-    if (!rootLive && descendants.length === 0) {
+    if (!rootLive && descendants.length === 0 && descendantsProven) {
       return buildCleanupReceipt({ ...base, gracefulAttempted: false, gracefulSucceeded: true, forcedAttempted: false, forcedSucceeded: false, descendantsTargeted: 0, descendantsRemaining: 0, cleanupComplete: true, safeReasonCode: reason === "provider-timeout" ? "provider-timeout" : reason === "provider-cancelled" ? "provider-cancelled" : "ok" });
     }
 
-    if (rootLive && !identityMatches(handle)) {
+    if (rootLive && !this.identityMatches(handle)) {
       return buildCleanupReceipt({ ...base, gracefulAttempted: false, gracefulSucceeded: false, forcedAttempted: false, forcedSucceeded: false, descendantsTargeted: descendants.length, descendantsRemaining: descendants.length, cleanupComplete: false, safeReasonCode: "process-tree-identity-mismatch" });
     }
 
@@ -300,7 +613,11 @@ export class NodeProcessTreeDriver implements ProcessTreeDriver {
     // 1. Graceful.
     let gracefulSucceeded = false;
     if (platform === "win32") {
-      spawnSync("taskkill", ["/PID", String(handle.rootPid), "/T"], { shell: false, windowsHide: true, timeout: 8000, maxBuffer: 16384, encoding: "utf8" });
+      // A refused/unresolvable taskkill returns null and signals NOTHING. The
+      // liveness checks below then report the tree as surviving, which is the
+      // honest outcome — far better than a bare-name fallback that would hand
+      // the kill to whatever binary the search order happened to find.
+      this.runTool("taskkill", ["/PID", String(handle.rootPid), "/T"], 8000, 16384);
     } else if (handle.processGroupCreated) {
       // Signal ONLY the group we created. A group outlives its leader.
       try {
@@ -324,9 +641,12 @@ export class NodeProcessTreeDriver implements ProcessTreeDriver {
     if (!gracefulSucceeded && policy.forceAfterGrace) {
       forcedAttempted = true;
       if (platform === "win32") {
-        spawnSync("taskkill", ["/PID", String(handle.rootPid), "/T", "/F"], { shell: false, windowsHide: true, timeout: 8000, maxBuffer: 16384, encoding: "utf8" });
+        this.runTool("taskkill", ["/PID", String(handle.rootPid), "/T", "/F"], 8000, 16384);
         for (const pid of descendants) {
-          if (pidAlive(pid)) spawnSync("taskkill", ["/PID", String(pid), "/T", "/F"], { shell: false, windowsHide: true, timeout: 5000, maxBuffer: 8192, encoding: "utf8" });
+          // `descendants` only ever holds validated positive integers, and the
+          // argument vector is an array under `shell: false`, so a PID cannot
+          // become an option or a second command.
+          if (isSpawnablePid(pid) && pidAlive(pid)) this.runTool("taskkill", ["/PID", String(pid), "/T", "/F"], 5000, 8192);
         }
       } else if (handle.processGroupCreated) {
         try {
@@ -348,8 +668,24 @@ export class NodeProcessTreeDriver implements ProcessTreeDriver {
     }
 
     const remaining = descendantsStillAlive();
-    const complete = stillAlive() === 0;
-    const reasonCode: ProcessTreeReasonCode = complete ? (reason === "provider-timeout" ? "provider-timeout" : reason === "provider-cancelled" ? "provider-cancelled" : "ok") : forcedAttempted ? "process-tree-force-termination-failed" : "process-tree-graceful-termination-failed";
+    // Completeness needs BOTH halves: everything we know about is gone, AND we
+    // were actually able to look. Without proven enumeration the second half is
+    // missing, so the receipt reports `process-tree-cleanup-incomplete` — the
+    // code this module's contract already reserves for "the platform cannot
+    // prove it" — instead of silently upgrading ignorance into success.
+    const observedClear = stillAlive() === 0;
+    const complete = observedClear && descendantsProven;
+    const reasonCode: ProcessTreeReasonCode = complete
+      ? reason === "provider-timeout"
+        ? "provider-timeout"
+        : reason === "provider-cancelled"
+          ? "provider-cancelled"
+          : "ok"
+      : observedClear
+        ? "process-tree-cleanup-incomplete"
+        : forcedAttempted
+          ? "process-tree-force-termination-failed"
+          : "process-tree-graceful-termination-failed";
 
     return buildCleanupReceipt({ ...base, gracefulAttempted: true, gracefulSucceeded, forcedAttempted, forcedSucceeded, descendantsTargeted: descendants.length, descendantsRemaining: remaining, cleanupComplete: complete, safeReasonCode: reasonCode });
   }

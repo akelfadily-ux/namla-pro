@@ -25,6 +25,7 @@ import {
   type ProcessTreeHandle,
   type ProcessTreeCleanupReceipt,
 } from "../cognitive/processTree";
+import { resolveWindowsSystemTool } from "../cognitive/windowsSystemTools";
 
 const POLICY = DEFAULT_TERMINATION_POLICY;
 
@@ -251,7 +252,19 @@ test("REAL fixture: a detached descendant survives a single-process kill and the
 
     assert.equal(receipt.platform, platformKind());
     assert.equal(alive(detachedPid), false, "the orphan must be gone after tree termination");
-    assert.equal(receipt.cleanupComplete, true, "cleanup must be reported complete only when it is");
+
+    // Completeness is a CLAIM ABOUT EVIDENCE, and S-10 made that claim honest.
+    // Reaping the orphan is one half; being able to enumerate descendants is the
+    // other. On Windows that enumeration needs a trusted `wmic`, which current
+    // Windows no longer ships — and there the correct receipt says so rather
+    // than reporting a clean sweep it never observed.
+    const descendantsProvable = platformKind() === "posix" || resolveWindowsSystemTool("wmic").ok;
+    if (descendantsProvable) {
+      assert.equal(receipt.cleanupComplete, true, "cleanup must be reported complete only when it is");
+    } else {
+      assert.equal(receipt.cleanupComplete, false, "without a trusted descendant enumerator, completeness must NOT be claimed");
+      assert.equal(receipt.safeReasonCode, "process-tree-cleanup-incomplete", "the receipt must name the missing evidence");
+    }
   } finally {
     for (const pid of spawned) {
       try {
