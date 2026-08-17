@@ -76,11 +76,18 @@ class FakeFileProcessDriver implements ProviderProcessDriver {
   }
 }
 
-function permitsFor(cohort: { antId: string; provider: RealProviderId }[]): Map<string, RealProviderExecutionPermit> {
+const WIRING_ROLES = ["architecture", "build", "review"] as const;
+
+/**
+ * S-12: a permit must name the task the caller will actually ask for. The runner
+ * derives that from the ant's positional role, so this default does too; the
+ * direct gate probes below pass their own literal instead.
+ */
+function permitsFor(cohort: { antId: string; provider: RealProviderId }[], taskIdFor: (i: number) => string = (i) => `${OBJECTIVE_ID}-${WIRING_ROLES[i] ?? "build"}`): Map<string, RealProviderExecutionPermit> {
   const map = new Map<string, RealProviderExecutionPermit>();
-  for (const c of cohort) {
-    map.set(c.antId, mintPermitForAutomatedTest({ provider: c.provider, missionId: OBJECTIVE_ID, taskId: `${OBJECTIVE_ID}-${c.antId}`, antId: c.antId, workspaceId: WORKSPACE_ID, maxInputBytes: 8000, maxOutputBytes: 20000, timeoutMs: 60000 }));
-  }
+  cohort.forEach((c, i) => {
+    map.set(c.antId, mintPermitForAutomatedTest({ provider: c.provider, missionId: OBJECTIVE_ID, taskId: taskIdFor(i), antId: c.antId, workspaceId: WORKSPACE_ID, maxInputBytes: 8000, maxOutputBytes: 20000, timeoutMs: 60000 }));
+  });
   return map;
 }
 
@@ -106,6 +113,8 @@ function realDriver(cohort: { antId: string; provider: RealProviderId }[], mode:
   return new RealLiveProviderDriver({
     processDriver: processDriver ?? new FakeFileProcessDriver(mode),
     permitByAnt: permits ?? permitsFor(cohort),
+    missionId: OBJECTIVE_ID,
+    workspaceId: WORKSPACE_ID,
     workspaceAbsolutePath: "/fake/abs/workspace",
     maxStdinBytes: 8000,
     maxStdoutBytes: 20000,
@@ -154,23 +163,26 @@ export function runDemoDigitalLiveObjectiveV4Wiring() {
   // --- GATES: no permit / provider mismatch / single-use / malformed / origin.
   set("gate-no-permit", realDriver(cohort, "files", undefined, new Map()).call({ antId: "nobody", providerId: "claude", taskId: "t", role: "build" }).ok === false);
 
-  const mismatchDriver = realDriver(cohort, "files", undefined, permitsFor(cohort.map((c) => ({ antId: c.antId, provider: c.provider === "codex" ? "claude" : "codex" }))));
+  const mismatchDriver = realDriver(cohort, "files", undefined, permitsFor(cohort.map((c) => ({ antId: c.antId, provider: c.provider === "codex" ? "claude" : "codex" })), () => "t"));
   const mismatchRes = mismatchDriver.call({ antId: antA.antId, providerId: antA.provider, taskId: "t", role: "architecture" });
-  set("gate-provider-mismatch", mismatchRes.ok === false && mismatchRes.failureCategory === "provider-mismatch");
+  // S-12 routed this through the canonical `permitScopeMatches`, so the reason is
+  // now the specific `permit-provider-mismatch` rather than the driver's older
+  // local `provider-mismatch`. Same refusal, one authoritative vocabulary.
+  set("gate-provider-mismatch", mismatchRes.ok === false && mismatchRes.failureCategory === "permit-provider-mismatch");
 
-  const singlePermits = permitsFor([antA]);
+  const singlePermits = permitsFor([antA], () => "t");
   const replayDriver = realDriver(cohort, "files", undefined, singlePermits);
   const first = replayDriver.call({ antId: antA.antId, providerId: antA.provider, taskId: "t", role: "architecture" });
   const second = replayDriver.call({ antId: antA.antId, providerId: antA.provider, taskId: "t", role: "architecture" });
   set("gate-permit-single-use", first.ok === true && second.ok === false);
 
-  const malformedRes = realDriver([antB], "malformed", undefined, permitsFor([antB])).call({ antId: antB.antId, providerId: antB.provider, taskId: "t", role: "build" });
+  const malformedRes = realDriver([antB], "malformed", undefined, permitsFor([antB], () => "t")).call({ antId: antB.antId, providerId: antB.provider, taskId: "t", role: "build" });
   set("gate-malformed-output", malformedRes.ok === false && malformedRes.failureCategory === "malformed-output");
 
   // An automated-test-origin permit can NEVER drive a real (isReal) driver: the
   // guard refuses BEFORE run() is reached, so no real spawn is possible.
   const realStub = new IsRealStubProcessDriver();
-  const realStubDriver = realDriver(cohort, "files", realStub, permitsFor([antA]));
+  const realStubDriver = realDriver(cohort, "files", realStub, permitsFor([antA], () => "t"));
   const nodeRes = realStubDriver.call({ antId: antA.antId, providerId: antA.provider, taskId: "t", role: "architecture" });
   set("gate-automated-permit-blocked-from-real-driver", nodeRes.ok === false && nodeRes.failureCategory === "non-human-permit" && realStub.ranCount === 0 && realStubDriver.realProviderProcessExecutions === 0);
 

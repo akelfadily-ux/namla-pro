@@ -75,14 +75,14 @@ export function runDemoTamaraNamlaFederationV3() {
   const permit = mintCivilizationPermitForAutomatedTest(scope) as CivilizationLivePermit;
 
   // Fresh scoped permit per call (repair permits are freshly minted in real runs).
-  const permitByAnt = { get: (antId: string): RealProviderExecutionPermit | undefined => { const c = accepted.find((x) => x.antId === antId); return c ? mintPermitForAutomatedTest({ provider: c.provider, missionId: OBJECTIVE_ID, taskId: `${OBJECTIVE_ID}-${c.antId}`, antId: c.antId, workspaceId: WORKSPACE_ID, maxInputBytes: 8000, maxOutputBytes: 20000, timeoutMs: 60000 }) : undefined; } } as ReadonlyMap<string, RealProviderExecutionPermit>;
+  const permitByAnt = { get: (antId: string): RealProviderExecutionPermit | undefined => { const c = accepted.find((x) => x.antId === antId); return c ? mintPermitForAutomatedTest({ provider: c.provider, missionId: OBJECTIVE_ID, taskId: `${RUN_ID}-${c.role}`, antId: c.antId, workspaceId: WORKSPACE_ID, maxInputBytes: 8000, maxOutputBytes: 20000, timeoutMs: 60000 }) : undefined; } } as ReadonlyMap<string, RealProviderExecutionPermit>;
   const processDriver = new FederationFakeProcessDriver(reviewAnt?.antId ?? "none");
   // The SEPARATE repair authorization is modeled as an explicit recorded gate
   // (the interactive mechanics are proven by the wiring + capability regressions).
   const repairConfirmationGiven = true;
   // Calls 1..cohortSize are the initial round; any later call is the repair round.
   let promptCalls = 0;
-  const providerDriver = new RealLiveProviderDriver({ processDriver, permitByAnt, workspaceAbsolutePath: "/fake/fed/ws", maxStdinBytes: 8000, maxStdoutBytes: 20000, maxStderrBytes: 4000, timeoutMs: 60000, promptForRole: (role, antId) => { promptCalls += 1; return `role:${role};ant:${antId}${promptCalls > accepted.length ? ";repair:yes" : ""}`; } });
+  const providerDriver = new RealLiveProviderDriver({ processDriver, permitByAnt, missionId: OBJECTIVE_ID, workspaceId: WORKSPACE_ID, workspaceAbsolutePath: "/fake/fed/ws", maxStdinBytes: 8000, maxStdoutBytes: 20000, maxStderrBytes: 4000, timeoutMs: 60000, promptForRole: (role, antId) => { promptCalls += 1; return `role:${role};ant:${antId}${promptCalls > accepted.length ? ";repair:yes" : ""}`; } });
   const mcpExecutor = new FakeMcpExecutionDriver({ failToolId: "code-search", seed: SEED }); // one injected MCP failure (+ residual)
   const workspace = new InMemoryWorkspaceDriver(RUN_ID, undefined, "workspaces/namla-civilization");
   const verificationDriver = new FakeVerificationDriver();

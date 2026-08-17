@@ -73,7 +73,7 @@ async function runScenario(emptyBuildInitial: boolean, defectPresent: boolean) {
   // Fresh permit per call (repair permits are freshly minted by the CLI in real runs).
   const permitByAnt = { get: (antId: string): RealProviderExecutionPermit | undefined => { const c = accepted.find((x) => x.antId === antId); return c ? mintPermitForAutomatedTest({ provider: c.provider, missionId: OBJECTIVE_ID, taskId: `${OBJECTIVE_ID}-${c.antId}`, antId: c.antId, workspaceId: WORKSPACE_ID, maxInputBytes: 8000, maxOutputBytes: 20000, timeoutMs: 60000 }) : undefined; } } as ReadonlyMap<string, RealProviderExecutionPermit>;
   let repairPrompt = false;
-  const providerDriver = new RealLiveProviderDriver({ processDriver, permitByAnt, workspaceAbsolutePath: "/fake/civ/ws", maxStdinBytes: 8000, maxStdoutBytes: 20000, maxStderrBytes: 4000, timeoutMs: 60000, promptForRole: (role, antId) => `role:${role};ant:${antId}${repairPrompt ? ";repair:yes" : ""}` });
+  const providerDriver = new RealLiveProviderDriver({ processDriver, permitByAnt, missionId: OBJECTIVE_ID, workspaceId: WORKSPACE_ID, workspaceAbsolutePath: "/fake/civ/ws", maxStdinBytes: 8000, maxStdoutBytes: 20000, maxStderrBytes: 4000, timeoutMs: 60000, promptForRole: (role, antId) => `role:${role};ant:${antId}${repairPrompt ? ";repair:yes" : ""}` });
   const mcpExecutor = new FakeMcpExecutionDriver({ failToolId: "code-search", seed: SEED });
   const workspace = new InMemoryWorkspaceDriver(RUN_ID, undefined, "workspaces/namla-civilization");
   const verificationDriver = new FakeVerificationDriver();

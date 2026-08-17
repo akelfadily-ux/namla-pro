@@ -59,10 +59,10 @@ function scope(plan: ReturnType<typeof buildTwinEmpireLivePlan>, total: number):
   return { missionId: MISSION_ID, objectiveId: MISSION_ID, claudeWorkspaceId: plan.workspaceRoots.claude, codexWorkspaceId: plan.workspaceRoots.codex, allowedProviders: ["claude", "codex"], maxClaudeConcurrency: 1, maxCodexConcurrency: 1, maxTotalProviderCalls: total, maxDeepCognitionAnts: 30, maxMcpCalls: 50, perFileByteCap: 20000, workspaceFileCap: 32, maxStdinBytes: 8000, maxStdoutBytes: 20000, perCallTimeoutMs: 900000 };
 }
 
-function driverFor(cohort: readonly TwinCohortRoleMember[], provider: RealProviderId, ws: string, proc: ProviderProcessDriver): RealLiveProviderDriver {
+function driverFor(cohort: readonly TwinCohortRoleMember[], provider: RealProviderId, ws: string, proc: ProviderProcessDriver, colonyId = "claude-forge", repair = false): RealLiveProviderDriver {
   const permitByAnt = new Map<string, RealProviderExecutionPermit>();
-  for (const m of cohort) permitByAnt.set(m.antId, mintPermitForAutomatedTest({ provider, missionId: MISSION_ID, taskId: `${MISSION_ID}-${m.antId}`, antId: m.antId, workspaceId: ws, maxInputBytes: 8000, maxOutputBytes: 20000, timeoutMs: 900000 }));
-  return new RealLiveProviderDriver({ processDriver: proc, permitByAnt, workspaceAbsolutePath: `/fake/${ws}`, maxStdinBytes: 8000, maxStdoutBytes: 20000, maxStderrBytes: 4000, timeoutMs: 900000, promptForRole: (role, antId) => `role:${role};ant:${antId}` });
+  for (const m of cohort) permitByAnt.set(m.antId, mintPermitForAutomatedTest({ provider, missionId: MISSION_ID, taskId: repair ? `${MISSION_ID}-${colonyId}-repair-${m.role === "review" ? "review" : "implementation"}` : `${MISSION_ID}-${colonyId}-${m.role}`, antId: m.antId, workspaceId: ws, maxInputBytes: 8000, maxOutputBytes: 20000, timeoutMs: 900000 }));
+  return new RealLiveProviderDriver({ processDriver: proc, permitByAnt, missionId: MISSION_ID, workspaceId: ws, workspaceAbsolutePath: `/fake/${ws}`, maxStdinBytes: 8000, maxStdoutBytes: 20000, maxStderrBytes: 4000, timeoutMs: 900000, promptForRole: (role, antId) => `role:${role};ant:${antId}` });
 }
 
 export function runDemoTwinResumeRegression() {
@@ -81,7 +81,7 @@ export function runDemoTwinResumeRegression() {
   const stagesA: string[] = [];
 
   const claudeFirst = runTwinColonyLive({ colonyId: "claude-forge", culture: "architecture-first", provider: "claude", missionId: MISSION_ID, workspaceId: plan.workspaceRoots.claude, cohort: claudeCohort, empirePermit: permitA, providerDriver: driverFor(claudeCohort, "claude", plan.workspaceRoots.claude, claudeProc), applier: claudeApplier, acceptance: plan.acceptanceCriteria, log: (s) => stagesA.push(s) });
-  const codexFirst = runTwinColonyLive({ colonyId: "codex-crucible", culture: "implementation-first", provider: "codex", missionId: MISSION_ID, workspaceId: plan.workspaceRoots.codex, cohort: codexCohort, empirePermit: permitA, providerDriver: driverFor(codexCohort, "codex", plan.workspaceRoots.codex, codexProc), applier: codexApplier, acceptance: plan.acceptanceCriteria, log: (s) => stagesA.push(s) });
+  const codexFirst = runTwinColonyLive({ colonyId: "codex-crucible", culture: "implementation-first", provider: "codex", missionId: MISSION_ID, workspaceId: plan.workspaceRoots.codex, cohort: codexCohort, empirePermit: permitA, providerDriver: driverFor(codexCohort, "codex", plan.workspaceRoots.codex, codexProc, "codex-crucible"), applier: codexApplier, acceptance: plan.acceptanceCriteria, log: (s) => stagesA.push(s) });
 
   const codexFingerprintBefore = codexFirst.bundle?.fingerprint ?? "";
   const claudeTimeoutDiag = claudeFirst.diagnostics.find((d) => d.role === "implementation");
@@ -113,7 +113,7 @@ export function runDemoTwinResumeRegression() {
     implementationAntId: "cl-impl",
     reviewAntId: "cl-review",
     empirePermit: permitB,
-    providerDriver: driverFor(claudeCohort, "claude", repairWs, repairProc),
+    providerDriver: driverFor(claudeCohort, "claude", repairWs, repairProc, "claude-forge", true),
     repairApplier,
     preservedBundle: codexFirst.bundle,
     acceptance: plan.acceptanceCriteria,

@@ -39,10 +39,10 @@ class TwinFakeProcessDriver implements ProviderProcessDriver {
   }
 }
 
-function colonyDriver(cohort: readonly TwinCohortRoleMember[], provider: RealProviderId, workspaceId: string, emptyBuild = false): RealLiveProviderDriver {
+function colonyDriver(cohort: readonly TwinCohortRoleMember[], provider: RealProviderId, workspaceId: string, colonyId: string, emptyBuild = false): RealLiveProviderDriver {
   const permitByAnt = new Map<string, RealProviderExecutionPermit>();
-  for (const m of cohort) permitByAnt.set(m.antId, mintPermitForAutomatedTest({ provider, missionId: MISSION_ID, taskId: `${MISSION_ID}-${m.antId}`, antId: m.antId, workspaceId, maxInputBytes: 8000, maxOutputBytes: 20000, timeoutMs: 600000 }));
-  return new RealLiveProviderDriver({ processDriver: new TwinFakeProcessDriver(emptyBuild), permitByAnt, workspaceAbsolutePath: `/fake/${workspaceId}`, maxStdinBytes: 8000, maxStdoutBytes: 20000, maxStderrBytes: 4000, timeoutMs: 600000, promptForRole: (role, antId) => `role:${role};ant:${antId}` });
+  for (const m of cohort) permitByAnt.set(m.antId, mintPermitForAutomatedTest({ provider, missionId: MISSION_ID, taskId: `${MISSION_ID}-${colonyId}-${m.role}`, antId: m.antId, workspaceId, maxInputBytes: 8000, maxOutputBytes: 20000, timeoutMs: 600000 }));
+  return new RealLiveProviderDriver({ processDriver: new TwinFakeProcessDriver(emptyBuild), permitByAnt, missionId: MISSION_ID, workspaceId, workspaceAbsolutePath: `/fake/${workspaceId}`, maxStdinBytes: 8000, maxStdoutBytes: 20000, maxStderrBytes: 4000, timeoutMs: 600000, promptForRole: (role, antId) => `role:${role};ant:${antId}` });
 }
 
 export function runDemoTwinEmpireLiveWiring() {
@@ -78,8 +78,8 @@ export function runDemoTwinEmpireLiveWiring() {
   log("claude-workspace-ready");
   log("codex-workspace-ready");
 
-  const claudeInput: TwinColonyLiveInput = { colonyId: "claude-forge", culture: "architecture-first", provider: "claude", missionId: MISSION_ID, workspaceId: plan.workspaceRoots.claude, cohort: claudeCohort, empirePermit, providerDriver: colonyDriver(claudeCohort, "claude", plan.workspaceRoots.claude), applier: claudeApplier, acceptance: plan.acceptanceCriteria, log };
-  const codexInput: TwinColonyLiveInput = { colonyId: "codex-crucible", culture: "implementation-first", provider: "codex", missionId: MISSION_ID, workspaceId: plan.workspaceRoots.codex, cohort: codexCohort, empirePermit, providerDriver: colonyDriver(codexCohort, "codex", plan.workspaceRoots.codex), applier: codexApplier, acceptance: plan.acceptanceCriteria, log };
+  const claudeInput: TwinColonyLiveInput = { colonyId: "claude-forge", culture: "architecture-first", provider: "claude", missionId: MISSION_ID, workspaceId: plan.workspaceRoots.claude, cohort: claudeCohort, empirePermit, providerDriver: colonyDriver(claudeCohort, "claude", plan.workspaceRoots.claude, "claude-forge"), applier: claudeApplier, acceptance: plan.acceptanceCriteria, log };
+  const codexInput: TwinColonyLiveInput = { colonyId: "codex-crucible", culture: "implementation-first", provider: "codex", missionId: MISSION_ID, workspaceId: plan.workspaceRoots.codex, cohort: codexCohort, empirePermit, providerDriver: colonyDriver(codexCohort, "codex", plan.workspaceRoots.codex, "codex-crucible"), applier: codexApplier, acceptance: plan.acceptanceCriteria, log };
 
   // Cross-colony read before freeze must be denied (Codex tries to read Claude).
   authority.write(plan.workspaceRoots.claude, "src/seed.ts", "// claude seed");
@@ -92,13 +92,13 @@ export function runDemoTwinEmpireLiveWiring() {
   const selfPermit = mintTwinEmpirePermitForAutomatedTest({ ...emptyScope(plan) });
   const selfCohort: TwinCohortRoleMember[] = [{ antId: "s-arch", role: "architecture" }, { antId: "s-both", role: "implementation" }, { antId: "s-both", role: "review" }];
   const selfAuthority = new ColonyWorkspaceAuthority();
-  const selfResult = runTwinColonyLive({ colonyId: "claude-forge", culture: "architecture-first", provider: "claude", missionId: MISSION_ID, workspaceId: plan.workspaceRoots.claude, cohort: selfCohort, empirePermit: selfPermit, providerDriver: colonyDriver(selfCohort, "claude", plan.workspaceRoots.claude), applier: new InMemoryTwinWorkspaceApplier(selfAuthority, plan.workspaceRoots.claude), acceptance: plan.acceptanceCriteria, log: () => {} });
+  const selfResult = runTwinColonyLive({ colonyId: "claude-forge", culture: "architecture-first", provider: "claude", missionId: MISSION_ID, workspaceId: plan.workspaceRoots.claude, cohort: selfCohort, empirePermit: selfPermit, providerDriver: colonyDriver(selfCohort, "claude", plan.workspaceRoots.claude, "claude-forge"), applier: new InMemoryTwinWorkspaceApplier(selfAuthority, plan.workspaceRoots.claude), acceptance: plan.acceptanceCriteria, log: () => {} });
 
   // Edge case B: no build artifacts → fails closed, no bundle, empty workspace.
   const emptyPermit = mintTwinEmpirePermitForAutomatedTest({ ...emptyScope(plan) });
   const emptyAuthority = new ColonyWorkspaceAuthority();
   const emptyApplier = new InMemoryTwinWorkspaceApplier(emptyAuthority, plan.workspaceRoots.codex);
-  const emptyResult = runTwinColonyLive({ colonyId: "codex-crucible", culture: "implementation-first", provider: "codex", missionId: MISSION_ID, workspaceId: plan.workspaceRoots.codex, cohort: codexCohort, empirePermit: emptyPermit, providerDriver: colonyDriver(codexCohort, "codex", plan.workspaceRoots.codex, true), applier: emptyApplier, acceptance: plan.acceptanceCriteria, log: () => {} });
+  const emptyResult = runTwinColonyLive({ colonyId: "codex-crucible", culture: "implementation-first", provider: "codex", missionId: MISSION_ID, workspaceId: plan.workspaceRoots.codex, cohort: codexCohort, empirePermit: emptyPermit, providerDriver: colonyDriver(codexCohort, "codex", plan.workspaceRoots.codex, "codex-crucible", true), applier: emptyApplier, acceptance: plan.acceptanceCriteria, log: () => {} });
 
   // Permit single-use (after execution).
   const consumedFirst = consumeTwinEmpirePermit(empirePermit);

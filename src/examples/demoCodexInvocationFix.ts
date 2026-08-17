@@ -40,11 +40,11 @@ function procResult(over: Partial<ProviderProcessResult>): ProviderProcessResult
 }
 
 function permit(provider: RealProviderId, antId: string): Map<string, RealProviderExecutionPermit> {
-  return new Map([[antId, mintPermitForAutomatedTest({ provider, missionId: OBJECTIVE_ID, taskId: `${OBJECTIVE_ID}-t`, antId, workspaceId: WORKSPACE_ID, maxInputBytes: 8000, maxOutputBytes: 20000, timeoutMs: 60000 })]]);
+  return new Map([[antId, mintPermitForAutomatedTest({ provider, missionId: OBJECTIVE_ID, taskId: "t", antId, workspaceId: WORKSPACE_ID, maxInputBytes: 8000, maxOutputBytes: 20000, timeoutMs: 60000 })]]);
 }
 
 function driverFor(provider: RealProviderId, antId: string, spy: SpyProcessDriver): RealLiveProviderDriver {
-  return new RealLiveProviderDriver({ processDriver: spy, permitByAnt: permit(provider, antId), workspaceAbsolutePath: "/fake/ws", maxStdinBytes: 8000, maxStdoutBytes: 20000, maxStderrBytes: 4000, timeoutMs: 60000, promptForRole: () => PROMPT });
+  return new RealLiveProviderDriver({ processDriver: spy, permitByAnt: permit(provider, antId), missionId: OBJECTIVE_ID, workspaceId: WORKSPACE_ID, workspaceAbsolutePath: "/fake/ws", maxStdinBytes: 8000, maxStdoutBytes: 20000, maxStderrBytes: 4000, timeoutMs: 60000, promptForRole: () => PROMPT });
 }
 
 // A realistic Codex JSONL stream ending in an agent_message.

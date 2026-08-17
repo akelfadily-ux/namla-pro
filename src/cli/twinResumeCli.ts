@@ -148,6 +148,8 @@ async function main(): Promise<void> {
       [implAnt.antId, execPermits.claude[0]],
       [reviewAnt.antId, execPermits.codex[0]],
     ]),
+    missionId,
+    workspaceId: repairWs,
     workspaceAbsolutePath: repairDriver.absolutePath,
     maxStdinBytes: plan.limits.maxStdinBytes,
     maxStdoutBytes: plan.limits.maxStdoutBytes,

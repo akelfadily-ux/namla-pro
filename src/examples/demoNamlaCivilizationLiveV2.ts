@@ -54,13 +54,13 @@ class FakeCivProcessDriver implements ProviderProcessDriver {
  * discipline itself is proven by the wiring + cleanup regressions.
  */
 class FreshPermitMap extends Map<string, RealProviderExecutionPermit> {
-  constructor(private readonly cohort: readonly { antId: string; provider: "claude" | "codex" }[]) {
+  constructor(private readonly cohort: readonly { antId: string; provider: "claude" | "codex"; role: string }[]) {
     super();
   }
   override get(antId: string): RealProviderExecutionPermit | undefined {
     const c = this.cohort.find((x) => x.antId === antId);
     if (!c) return undefined;
-    return mintPermitForAutomatedTest({ provider: c.provider, missionId: OBJECTIVE_ID, taskId: `${OBJECTIVE_ID}-${c.antId}`, antId: c.antId, workspaceId: WORKSPACE_ID, maxInputBytes: 8000, maxOutputBytes: 20000, timeoutMs: 60000 });
+    return mintPermitForAutomatedTest({ provider: c.provider, missionId: OBJECTIVE_ID, taskId: `${OBJECTIVE_ID}-${c.role}`, antId: c.antId, workspaceId: WORKSPACE_ID, maxInputBytes: 8000, maxOutputBytes: 20000, timeoutMs: 60000 });
   }
 }
 
@@ -68,7 +68,7 @@ export function runDemoNamlaCivilizationLiveV2() {
   const workers = buildSettlementWorkers(SEED, 299);
   const providerAllocation: ("claude" | "codex")[] = ["codex", "codex", "claude"];
   const admission = admitCivilizationCohort(workers, providerAllocation, 3, SEED);
-  const cohort = admission.accepted.map((a) => ({ antId: a.antId, provider: a.provider as "claude" | "codex" }));
+  const cohort = admission.accepted.map((a) => ({ antId: a.antId, provider: a.provider as "claude" | "codex", role: a.role }));
 
   const scope: CivilizationLiveScope = {
     civilizationRunId: `run-${OBJECTIVE_ID}`,
@@ -98,7 +98,7 @@ export function runDemoNamlaCivilizationLiveV2() {
   // Isolate one provider failure on the REVIEW-family volunteer, so the
   // capability-complete cohort still produces artifacts (arch plan + build files).
   const failAnt = admission.accepted.find((a) => capabilityFamilyOfRole(a.role as LiveRole) === "independent-review")?.antId ?? admission.accepted[2]?.antId ?? "none";
-  const providerDriver = new RealLiveProviderDriver({ processDriver: new FakeCivProcessDriver(failAnt), permitByAnt: new FreshPermitMap(cohort), workspaceAbsolutePath: "/fake/civ/ws", maxStdinBytes: 8000, maxStdoutBytes: 20000, maxStderrBytes: 4000, timeoutMs: 60000, promptForRole: (role, antId) => `role:${role};ant:${antId}` });
+  const providerDriver = new RealLiveProviderDriver({ processDriver: new FakeCivProcessDriver(failAnt), permitByAnt: new FreshPermitMap(cohort), missionId: OBJECTIVE_ID, workspaceId: WORKSPACE_ID, workspaceAbsolutePath: "/fake/civ/ws", maxStdinBytes: 8000, maxStdoutBytes: 20000, maxStderrBytes: 4000, timeoutMs: 60000, promptForRole: (role, antId) => `role:${role};ant:${antId}` });
   const mcpExecutor = new FakeMcpExecutionDriver({ failToolId: "code-search", seed: SEED });
   const workspace = new InMemoryWorkspaceDriver(OBJECTIVE_ID, undefined, "workspaces/namla-civilization");
   const verificationDriver = new FakeVerificationDriver();

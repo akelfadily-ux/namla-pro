@@ -162,8 +162,8 @@ async function main(): Promise<void> {
 
   // One REAL provider driver per colony — separate process drivers and separate
   // permit maps, so the colonies never share a provider session.
-  const claudeDriver = new RealLiveProviderDriver({ processDriver: new NodeProviderProcessDriver(), permitByAnt: new Map(plan.claudeCohort.map((m, i) => [m.antId, execPermits.claude[i]])), workspaceAbsolutePath: claudeWs.absolutePath, maxStdinBytes: plan.limits.maxStdinBytes, maxStdoutBytes: plan.limits.maxStdoutBytes, maxStderrBytes: 4000, timeoutMs: plan.limits.perCallTimeoutMs, promptForRole });
-  const codexDriver = new RealLiveProviderDriver({ processDriver: new NodeProviderProcessDriver(), permitByAnt: new Map(plan.codexCohort.map((m, i) => [m.antId, execPermits.codex[i]])), workspaceAbsolutePath: codexWs.absolutePath, maxStdinBytes: plan.limits.maxStdinBytes, maxStdoutBytes: plan.limits.maxStdoutBytes, maxStderrBytes: 4000, timeoutMs: plan.limits.perCallTimeoutMs, promptForRole });
+  const claudeDriver = new RealLiveProviderDriver({ processDriver: new NodeProviderProcessDriver(), permitByAnt: new Map(plan.claudeCohort.map((m, i) => [m.antId, execPermits.claude[i]])), missionId: plan.missionId, workspaceId: plan.workspaceRoots.claude, workspaceAbsolutePath: claudeWs.absolutePath, maxStdinBytes: plan.limits.maxStdinBytes, maxStdoutBytes: plan.limits.maxStdoutBytes, maxStderrBytes: 4000, timeoutMs: plan.limits.perCallTimeoutMs, promptForRole });
+  const codexDriver = new RealLiveProviderDriver({ processDriver: new NodeProviderProcessDriver(), permitByAnt: new Map(plan.codexCohort.map((m, i) => [m.antId, execPermits.codex[i]])), missionId: plan.missionId, workspaceId: plan.workspaceRoots.codex, workspaceAbsolutePath: codexWs.absolutePath, maxStdinBytes: plan.limits.maxStdinBytes, maxStdoutBytes: plan.limits.maxStdoutBytes, maxStderrBytes: 4000, timeoutMs: plan.limits.perCallTimeoutMs, promptForRole });
 
   // Sequential per colony; Claude fully completes before Codex begins.
   const run = runTwinEmpireLive({

@@ -24,7 +24,18 @@ import { buildSafeProviderRequest, type ProviderRequestReceipt } from "./safePro
 import { evaluateNetworkCapability, projectNetwork, TOOL_NETWORK_DECLARATIONS, UnobservedNetworkProvider, NoProcessNetworkProvider, type NetworkProjection } from "./networkPolicy";
 import { truncateUtf8, utf8Bytes } from "./safeWorkspacePath";
 import type { RealProviderExecutionPermit } from "./realProviderExecutionPermit";
-import { consumePermit, isConsumed, isValidPermit } from "./realProviderExecutionPermit";
+import { consumePermit, isConsumed, isValidPermit, permitScopeMatches } from "./realProviderExecutionPermit";
+
+/**
+ * A permit limit that can be reasoned about: finite, whole, and positive.
+ *
+ * Rejecting NaN and Infinity matters more than it looks. `Math.min(x, NaN)` is
+ * NaN and every subsequent comparison against it is false, so a single bad
+ * field turns a ceiling into an open door.
+ */
+function isPositiveIntegerLimit(value: number): boolean {
+  return Number.isFinite(value) && Number.isInteger(value) && value > 0;
+}
 import type { LiveProviderCallInput, LiveProviderCallResult, LiveProviderDriver } from "../digital/liveObjectiveRunner";
 import type { RawProviderFile, RawProviderPayload } from "../digital/liveProviderNormalization";
 
@@ -196,6 +207,22 @@ export interface RealLiveProviderConfig {
   readonly processDriver: ProviderProcessDriver;
   /** One scoped, single-use permit per ant id. */
   readonly permitByAnt: ReadonlyMap<string, RealProviderExecutionPermit>;
+  /**
+   * TRUSTED EXECUTION CONTEXT (S-12). Supplied by the composition root — the
+   * human CLI that also created the workspace — never by a per-call object.
+   *
+   * A caller announcing "I am mission X in workspace Y" is not evidence of
+   * anything: it is a string, and the process still runs wherever
+   * `workspaceAbsolutePath` points. Binding all three here, in one immutable
+   * object, is what gives `permit.workspaceId` a meaning — the root holds the
+   * logical id and the real path together and hands over both at once, so a
+   * permit for workspace-A cannot authorize a spawn whose cwd is workspace-B.
+   *
+   * `LiveProviderCallInput` therefore contributes only genuinely per-call
+   * fields (provider, task, ant, role) and CANNOT override these.
+   */
+  readonly missionId: string;
+  readonly workspaceId: string;
   readonly workspaceAbsolutePath: string;
   readonly maxStdinBytes: number;
   readonly maxStdoutBytes: number;
@@ -267,14 +294,50 @@ export class RealLiveProviderDriver implements LiveProviderDriver {
   }
 
   call(input: LiveProviderCallInput): LiveProviderCallResult {
+    // The map is LOOKUP ONLY. A key and the object stored under it can disagree,
+    // so finding a permit at `antId` proves nothing about who it authorizes —
+    // `permitScopeMatches` below re-checks `permit.antId` against the call.
     const permit = this.config.permitByAnt.get(input.antId);
-    // Gate: a valid, scope-matching, unconsumed permit is required.
     if (!permit || !isValidPermit(permit) || isConsumed(permit)) return { ok: false, failureCategory: "no-valid-permit" };
-    if (permit.provider !== input.providerId) return { ok: false, failureCategory: "provider-mismatch" };
     // Defense: the REAL process driver may run only a human-cli-origin permit.
     // An automated-test permit can therefore never drive a real provider spawn.
     if (this.config.processDriver.isReal && permit.origin !== "human-cli") return { ok: false, failureCategory: "non-human-permit" };
-    // Consume the permit IMMEDIATELY before spawn — single use, no replay.
+
+    // NUMERIC AUTHORIZATION LIMITS (S-12). A permit can be WeakSet-valid and
+    // still carry nonsense: NaN and Infinity make every `Math.min` comparison
+    // permissive, 0 and negatives make bounded arithmetic meaningless, and a
+    // fraction silently becomes a different byte count downstream. Checked
+    // before anything is consumed or spawned, and the offending value is never
+    // echoed into a receipt.
+    if (!isPositiveIntegerLimit(permit.maxInputBytes) || !isPositiveIntegerLimit(permit.maxOutputBytes) || !isPositiveIntegerLimit(permit.timeoutMs)) {
+      return { ok: false, failureCategory: "permit-limits-invalid" };
+    }
+
+    // THE TRUSTED TARGET. Mission and workspace come from the immutable config
+    // the composition root built alongside the real workspace; only provider,
+    // task and ant come from the call. The caller cannot nominate its own
+    // mission or workspace, so a permit cannot be redirected by claiming to be
+    // somewhere it is not.
+    const scope = permitScopeMatches(permit, {
+      provider: input.providerId,
+      missionId: this.config.missionId,
+      taskId: input.taskId,
+      antId: input.antId,
+      workspaceId: this.config.workspaceId,
+    });
+    // A mismatch must NOT burn the permit: the correctly-scoped call still has
+    // to be possible afterwards.
+    if (!scope.ok) return { ok: false, failureCategory: scope.reasonCode };
+
+    // EFFECTIVE CEILINGS. The permit is an authorization ceiling and the config
+    // is an operational one; the smaller always wins, and neither can widen the
+    // other.
+    const effectiveMaxInput = Math.min(this.config.maxStdinBytes, permit.maxInputBytes);
+    const effectiveMaxOutput = Math.min(this.config.maxStdoutBytes, permit.maxOutputBytes);
+
+    // Consume the permit IMMEDIATELY before spawn — single use, no replay. Every
+    // authorization decision above is already made, so nothing that follows can
+    // widen what was authorized.
     if (!consumePermit(permit)) return { ok: false, failureCategory: "permit-consumed" };
 
     const executableId: ProviderExecutableId = input.providerId;
@@ -283,7 +346,7 @@ export class RealLiveProviderDriver implements LiveProviderDriver {
     // build receives the plan and review receives the artifacts — never AntMind.
     const rawPrompt = this.config.promptForRole(input.role, input.antId, input.contextBrief);
     // Role-aware bounded timeout: the per-call value, clamped to the permit ceiling.
-    const timeoutMs = Math.max(1, Math.min(permit.timeoutMs, Math.floor(input.timeoutMs ?? this.config.timeoutMs)));
+    const timeoutMs = Math.max(1, Math.min(permit.timeoutMs, this.config.timeoutMs, Math.floor(input.timeoutMs ?? this.config.timeoutMs)));
 
     // OUTBOUND BOUNDARY (§26): argv, stdin, and the child environment are built
     // HERE, by the request kernel, never by this caller. It fails closed on
@@ -298,9 +361,13 @@ export class RealLiveProviderDriver implements LiveProviderDriver {
       promptBody: rawPrompt,
       workingDirectoryAbsolute: this.config.workspaceAbsolutePath,
       timeoutMs,
-      maxStdoutBytes: this.config.maxStdoutBytes,
+      // Both ceilings are the PERMIT-BOUNDED values, so the request kernel's
+      // existing UTF-8-safe bounding enforces the authorization rather than the
+      // looser driver configuration. Claude's stdin and Codex's positional argv
+      // prompt both flow through this one boundary.
+      maxStdoutBytes: effectiveMaxOutput,
       maxStderrBytes: this.config.maxStderrBytes,
-      maxPromptBytes: this.config.maxStdinBytes,
+      maxPromptBytes: effectiveMaxInput,
     });
     this.lastRequestReceipt = built.receipt;
     if (!built.ok) {
@@ -320,7 +387,10 @@ export class RealLiveProviderDriver implements LiveProviderDriver {
       else this.codexCalls += 1;
     }
     const warningCount = countStderrWarnings(result.stderr);
-    const responseBytes = result.stdout.length;
+    // REAL UTF-8 BYTES. This field claims bytes, so it must count bytes:
+    // `.length` is a UTF-16 code-unit count and under-reports every multibyte
+    // character, which would make the accounting below quietly wrong.
+    const responseBytes = utf8Bytes(result.stdout);
     const diag = { warningCount, requestBytes, responseBytes, durationMs, exitCode: result.exitCode, timeoutMs };
 
     // Exit semantics (stderr warnings NEVER fail an exit-0 result).
@@ -329,14 +399,23 @@ export class RealLiveProviderDriver implements LiveProviderDriver {
     if (result.failureCategory === "non-zero-exit") return { ok: false, failureCategory: "non-zero-exit", ...diag };
     if (result.stdoutTruncated || result.failureCategory === "output-truncated") return { ok: false, failureCategory: "provider-output-too-large", ...diag, outputTruncated: true };
 
-    // Exit code 0, not truncated: parse per provider format.
+    // DEFENSE IN DEPTH AGAINST A DISOBEDIENT DRIVER. `ProviderProcessSpec` is a
+    // request, not a guarantee — the driver is injected, and a broken or hostile
+    // one can return more than it was allowed to. Measured in real UTF-8 bytes
+    // against the SAME effective ceiling the spec carried, so a driver that
+    // ignores the spec cannot smuggle an oversized payload past the permit. The
+    // output itself is never placed in the receipt.
+    if (responseBytes > effectiveMaxOutput) return { ok: false, failureCategory: "provider-output-too-large", ...diag, outputTruncated: true };
+
+    // Exit code 0, not truncated: parse per provider format — bounded by the
+    // same effective ceiling, never the looser config cap.
     if (isCodex) {
-      const codex = parseCodexJsonl(result.stdout, this.config.maxStdoutBytes, 16);
+      const codex = parseCodexJsonl(result.stdout, effectiveMaxOutput, 16);
       if (codex.status === "malformed") return { ok: false, failureCategory: "malformed-provider-output", ...diag };
       if (codex.status === "missing" || !codex.payload) return { ok: false, failureCategory: "missing-provider-result", ...diag };
       return { ok: true, payload: codex.payload, ...diag, outputTruncated: false };
     }
-    const payload = parseClaudeJson(result.stdout, this.config.maxStdoutBytes, 16);
+    const payload = parseClaudeJson(result.stdout, effectiveMaxOutput, 16);
     if (payload.malformed) return { ok: false, failureCategory: "malformed-output", ...diag };
     return { ok: true, payload, ...diag, outputTruncated: false };
   }

@@ -122,7 +122,7 @@ export async function runDemoCivilizationLiveWiring() {
   const permitByAnt = new Map<string, RealProviderExecutionPermit>((memberPermits ?? []).map((p, i) => [accepted[i].antId, p]));
 
   const processDriver = new CountingFakeProcessDriver(events);
-  const providerDriver = new RealLiveProviderDriver({ processDriver, permitByAnt, workspaceAbsolutePath: "/fake/civ/ws", maxStdinBytes: 8000, maxStdoutBytes: 20000, maxStderrBytes: 4000, timeoutMs: 60000, promptForRole: (role) => `role:${role}` });
+  const providerDriver = new RealLiveProviderDriver({ processDriver, permitByAnt, missionId: OBJECTIVE_ID, workspaceId: WORKSPACE_ID, workspaceAbsolutePath: "/fake/civ/ws", maxStdinBytes: 8000, maxStdoutBytes: 20000, maxStderrBytes: 4000, timeoutMs: 60000, promptForRole: (role) => `role:${role}` });
   const mcpExecutor = new FakeMcpExecutionDriver({ failToolId: "code-search", seed: SEED });
   const workspace = new InMemoryWorkspaceDriver(RUN_ID, undefined, "workspaces/namla-civilization");
   const verificationDriver = new FakeVerificationDriver();

@@ -173,7 +173,7 @@ async function main(): Promise<void> {
   if (!workspace.ready || !workspace.absolutePath) return abort("workspace-create-failed");
   logStage("workspace-ready", { workspaceId: WORKSPACE_ID });
 
-  const providerDriver = new RealLiveProviderDriver({ processDriver: new NodeProviderProcessDriver(), permitByAnt, workspaceAbsolutePath: workspace.absolutePath, maxStdinBytes: LIMITS.maxStdinBytes, maxStdoutBytes: LIMITS.maxStdoutBytes, maxStderrBytes: LIMITS.maxStderrBytes, timeoutMs: LIMITS.timeoutMs, promptForRole });
+  const providerDriver = new RealLiveProviderDriver({ processDriver: new NodeProviderProcessDriver(), permitByAnt, missionId: OBJECTIVE_ID, workspaceId: WORKSPACE_ID, workspaceAbsolutePath: workspace.absolutePath, maxStdinBytes: LIMITS.maxStdinBytes, maxStdoutBytes: LIMITS.maxStdoutBytes, maxStderrBytes: LIMITS.maxStderrBytes, timeoutMs: LIMITS.timeoutMs, promptForRole });
   // §35: the trusted composition root — and only it — decides the sandbox.
   //  means isolation cannot be PROVEN in this
   // configuration, so no executor is produced and verification fails closed.
@@ -228,7 +228,14 @@ async function main(): Promise<void> {
       console.log(`repair declined: ${rconf.reasonCode}`);
       break;
     }
-    const repairPermit = mintHumanConfirmedPermit(memberScope(builder.provider, builder.antId, "build"), rconf.confirmation);
+    // S-12: the permit must authorize the EXACT task that is about to run. This
+    // previously minted a `build`-scoped permit while the call below asks for
+    // `repair-<n>`, which only went unnoticed because taskId was never checked.
+    // The repair has its own human confirmation and its own fresh single-use
+    // permit, so it is scoped to that repair round and nothing else — widening
+    // the call back to `build` would have hidden the mismatch and blurred the
+    // audit trail between the original build and each repair.
+    const repairPermit = mintHumanConfirmedPermit(memberScope(builder.provider, builder.antId, `repair-${repairRounds}`), rconf.confirmation);
     if (!repairPermit) break;
     permitByAnt.set(builder.antId, repairPermit); // fresh single-use permit for the repair call
     repairCalls += 1;

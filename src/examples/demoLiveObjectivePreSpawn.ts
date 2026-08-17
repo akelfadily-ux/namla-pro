@@ -89,7 +89,7 @@ export function runDemoLiveObjectivePreSpawn() {
   const livePermit = mintLiveObjectivePermitForAutomatedTest({ objectiveId: OBJECTIVE_ID, pilotId: `pilot-${OBJECTIVE_ID}`, workspaceId: WORKSPACE_ID, cohort: cohort.map((c) => ({ antId: c.antId, provider: c.provider })), maxProviderCalls: 5, maxRepairCalls: 2, maxAggregateInputBytes: 200000, maxAggregateOutputBytes: 200000, perCallTimeoutMs: 60000, allowedVerificationCommands: ["npx.cmd tsc --noEmit"], workspaceFileCap: 24, perFileByteCap: 20000, totalWorkspaceByteCap: 200000 });
 
   const processDriver = new CountingFakeProcessDriver();
-  const providerDriver = new RealLiveProviderDriver({ processDriver, permitByAnt, workspaceAbsolutePath: "/fake/ws", maxStdinBytes: 8000, maxStdoutBytes: 20000, maxStderrBytes: 4000, timeoutMs: 60000, promptForRole: (role) => `role:${role}` });
+  const providerDriver = new RealLiveProviderDriver({ processDriver, permitByAnt, missionId: OBJECTIVE_ID, workspaceId: WORKSPACE_ID, workspaceAbsolutePath: "/fake/ws", maxStdinBytes: 8000, maxStdoutBytes: 20000, maxStderrBytes: 4000, timeoutMs: 60000, promptForRole: (role) => `role:${role}` });
 
   const stages: string[] = [];
   let inputsAfterConfirmation = 0;
