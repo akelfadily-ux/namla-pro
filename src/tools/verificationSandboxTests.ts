@@ -225,7 +225,8 @@ test("an unavailable or unverified sandbox executes nothing", () => {
     const result = run("test", sandbox);
     assert.equal(result.ran, false, `${label} must not execute`);
     assert.equal(result.status, "failed", `${label} status`);
-    assert.match(result.failureCategory, /^sandbox-/, `${label} must report a sandbox refusal`);
+    assert.notEqual(result.failureCategory, null, `${label} must state a reason, never none`);
+    assert.match(result.failureCategory ?? "", /^sandbox-/, `${label} must report a sandbox refusal`);
   }
 });
 
@@ -403,8 +404,12 @@ test("an unknown command id is refused before anything is authorized", () => {
 // -------------------------------------------------------- RESULT MAPPING ---
 
 test("outcomes map truthfully and invent no data", () => {
-  const cases: Array<[SandboxExitCategory, boolean, string, "passed" | "failed"]> = [
-    ["completed", true, "none", "passed"],
+  // S-13: success is `null` and ONLY `null`. It was previously the string
+  // "none", which meant one member of the reason vocabulary secretly meant "no
+  // failure" — and a FAILED result could carry it too. `null` is not a reason,
+  // so that pairing is now unrepresentable rather than merely unused.
+  const cases: Array<[SandboxExitCategory, boolean, string | null, "passed" | "failed"]> = [
+    ["completed", true, null, "passed"],
     ["timed-out", true, "timed-out", "failed"],
     ["non-zero-exit", true, "non-zero-exit", "failed"],
     ["backend-error", true, "backend-error", "failed"],
@@ -416,6 +421,11 @@ test("outcomes map truthfully and invent no data", () => {
     assert.equal(result.ran, true, `${exitCategory} started`);
     assert.equal(result.failureCategory, expectedCategory, `${exitCategory} category`);
     assert.equal(result.status, expectedStatus, `${exitCategory} status`);
+    // A failure always names a reason, and never a success-like one.
+    if (expectedStatus === "failed") {
+      assert.notEqual(result.failureCategory, null, `${exitCategory} must state a reason`);
+      assert.equal(["ok", "completed", "none"].includes(String(result.failureCategory)), false, `${exitCategory} must not report success`);
+    }
 
     // No fabricated numbers: a sandbox receipt exposes neither an exit code nor
     // stdout, so neither is invented to preserve the old field shape.
@@ -453,7 +463,11 @@ test("RealBackedVerificationDriver never invents human authorization", () => {
   // Constructed WITHOUT the trusted confirmation and without a sandbox — the
   // defaults a caller gets if it forgets to thread them. Both must fail closed
   // rather than the leaf deciding it is authorized.
-  const driver = new RealBackedVerificationDriver(WORKSPACE, ["typecheck"]);
+  // S-13 removed the constructor defaults, so this position must now be STATED
+  // rather than inherited. The behaviour under test is unchanged: authorization
+  // explicitly declined, no sandbox, both failing closed rather than the leaf
+  // deciding it is authorized.
+  const driver = new RealBackedVerificationDriver(WORKSPACE, ["typecheck"], 5000, 1000, false, null);
   const outcome = driver.run("typecheck", WORKSPACE, false);
 
   assert.equal(outcome.realProcessExecutions, 0, "nothing may run");

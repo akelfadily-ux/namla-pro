@@ -88,7 +88,18 @@ export type SandboxReasonCode =
   // policy is itself forbidden. This one means the policy is coherent and
   // legitimate, but THIS backend has no mechanism that enforces exactly it —
   // so it fails closed instead of being silently widened to something broader.
-  | "sandbox-network-policy-unenforceable";
+  | "sandbox-network-policy-unenforceable"
+  // --- risk level (S-13) ------------------------------------------------------
+  // The gate declined to issue a permit because the request does not need one:
+  // low-risk deterministic work runs no container and is not sandboxed work.
+  //
+  // This code exists because the refusal used to report `"ok"`. The intent was
+  // right — a low-risk refusal is NOT a sandbox fault — but the receipt then
+  // said `blocked: true` and "nothing is wrong" at the same time, which is a
+  // contradiction a caller cannot act on, and it made a genuine refusal
+  // indistinguishable from success to anything reading the reason. This says
+  // the same thing truthfully: no permit, no fault.
+  | "sandbox-not-required-for-risk-level";
 
 /** Thrown only where a caller demands a permit it cannot have. */
 export class SandboxUnavailableError extends Error {
@@ -260,6 +271,35 @@ export function isIssuedPermit(permit: SandboxExecutionPermit): boolean {
 // -------------------------------------------------------------- RECEIPTS ---
 
 export type SandboxExitCategory = "not-started" | "completed" | "non-zero-exit" | "timed-out" | "blocked" | "backend-error";
+
+/**
+ * Every safe reason the verification path can truthfully report for a FAILURE
+ * (S-13).
+ *
+ * A CLOSED union rather than `string`, assembled from the vocabularies the
+ * sandbox itself defines plus the one code the command resolver adds. Keeping it
+ * closed is what stops a caller inventing a reason the sandbox never
+ * established — and it removes any need to cast at the boundary.
+ *
+ * The three SUCCESS-LIKE values are excluded deliberately, because this type is
+ * only ever inhabited when something did NOT succeed:
+ *
+ *   "ok"         a SandboxReasonCode meaning "no objection". `authorize` really
+ *                does return it alongside `ok: false` for a low-risk request
+ *                (a refusal that states no fault), so the pairing
+ *                `status: "failed" + reason: "ok"` was genuinely constructible,
+ *                not merely representable.
+ *   "completed"  a SandboxExitCategory. A completed exit is the success case; a
+ *                failure that reports it says the opposite of what happened.
+ *   "none"       previously carried the success case in the lower layer. Success
+ *                is now `null` and ONLY `null`, so there is exactly one
+ *                representation of it and no string that means "fine" can ever
+ *                appear as a reason for failure.
+ *
+ * `Exclude` is used rather than a hand-copied list so the exclusions stay true
+ * as the source unions grow.
+ */
+export type VerificationSafeReason = Exclude<SandboxReasonCode, "ok"> | Exclude<SandboxExitCategory, "completed"> | "unknown-command";
 
 /** Safe execution metadata ONLY. No prompt, command line, output, or host path. */
 export interface SandboxExecutionReceipt {
@@ -516,7 +556,14 @@ export class SandboxPolicy {
 
   authorize(request: SandboxExecutionRequest): SandboxAuthorization {
     const cap = this.backend.detectCapability();
-    const blockedReceipt = (reason: SandboxReasonCode): SandboxAuthorization => ({
+    // S-13: the parameter EXCLUDES "ok". A blocked receipt states why it
+    // blocked; "ok" says nothing was wrong, so the pairing was a receipt
+    // contradicting itself. Excluding it here makes that a compile error at the
+    // only producer, rather than something a downstream reader has to defend
+    // against. `validateSandboxPolicySpec` and `networkPolicyEnforceable` both
+    // return "ok" for "no violation", and the `!== "ok"` guards below narrow
+    // their results to exactly this type — so no assertion is needed.
+    const blockedReceipt = (reason: Exclude<SandboxReasonCode, "ok">): SandboxAuthorization => ({
       ok: false,
       permit: null,
       receipt: buildSandboxReceipt({
@@ -545,8 +592,13 @@ export class SandboxPolicy {
 
     // 2. Low-risk deterministic work never needs a container - and never gets a
     //    permit from here either, so it cannot be mistaken for sandboxed work.
+    //    S-13: the refusal now NAMES that. It previously reported "ok", which
+    //    made the receipt say `blocked: true` and "nothing is wrong" at once —
+    //    the one place in this module that produced a genuinely contradictory
+    //    receipt, and the one real source of a success-like failure reason
+    //    downstream. The meaning is unchanged: no permit, and no sandbox fault.
     if (request.riskLevel === "low-risk-deterministic") {
-      return blockedReceipt("ok");
+      return blockedReceipt("sandbox-not-required-for-risk-level");
     }
 
     // 3. High risk requires a VERIFIED backend. Everything else fails closed.

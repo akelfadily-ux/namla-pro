@@ -254,7 +254,9 @@ export function runReviewerDemo(): ReviewerDemoReport {
     humanAuthorized: true,
     sandbox: null,
   });
-  const verificationWithoutSandboxRefused = verification.ran ? "NOT-REFUSED" : verification.failureCategory;
+  // S-13: `failureCategory` is now `null` for a pass and a stated reason
+  // otherwise, so both "it ran" and "it passed" collapse to NOT-REFUSED.
+  const verificationWithoutSandboxRefused = verification.ran ? "NOT-REFUSED" : (verification.failureCategory ?? "NOT-REFUSED");
 
   // (d) Outbound boundary: a credential in an assembled prompt is not
   //     redacted-and-sent, it blocks the request entirely.

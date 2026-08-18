@@ -32,6 +32,7 @@ import { NodeProcessTreeDriver, buildProcessTreeHandle, DEFAULT_TERMINATION_POLI
 // hard-coded `new SandboxPolicy(new UnavailableSandboxBackend())` — which made
 // real sandbox routing impossible — is gone along with the host spawn.
 import { buildVerificationSandboxPolicy, type VerificationSandboxExecutor } from "./verificationSandbox";
+import type { SandboxExecutionReceipt, VerificationSafeReason } from "./sandboxPolicy";
 import type {
   ProviderExecutableId,
   ProviderProcessDriver,
@@ -210,8 +211,16 @@ export type VerificationCommandId = "typecheck" | "test" | "build" | "lint";
 
 export interface VerificationProcessSpec {
   readonly commandId: VerificationCommandId;
-  /** Human authorization for high-risk execution. Absent => refused. */
-  readonly humanAuthorized?: boolean;
+  /**
+   * Human authorization for high-risk execution.
+   *
+   * S-13: REQUIRED. It was optional, and an omitted property is
+   * indistinguishable from a deliberate `false` — so a trusted caller that
+   * simply forgot the wiring received a refusal it could not explain. Stating it
+   * is now mandatory. The runtime still compares `=== true`, so nothing about
+   * the fail-closed behaviour changes; only the ability to omit it silently.
+   */
+  readonly humanAuthorized: boolean;
   readonly workingDirectoryAbsolute: string;
   readonly timeoutMs: number;
   readonly maxOutputBytes: number;
@@ -236,7 +245,15 @@ export interface VerificationProcessResult {
    */
   readonly exitCode: number | null;
   readonly status: "passed" | "failed";
-  readonly failureCategory: string;
+  /**
+   * S-13: `null` means PASSED, and is the only representation of success. It
+   * previously carried the string `"none"`, which meant a caller had to know
+   * that one member of the reason vocabulary secretly meant "no failure" — and
+   * a failed result could still carry it. Success is now structurally
+   * distinguishable from every reason, and `VerificationSafeReason` no longer
+   * contains any value that means success.
+   */
+  readonly failureCategory: VerificationSafeReason | null;
   /**
    * Line count of captured output. The sandbox receipt deliberately exposes no
    * stdout, so this is 0 whenever `outputObservable` is false — it is NOT a
@@ -317,8 +334,31 @@ export function detectProviderAvailability(provider: ProviderExecutableId, timeo
  * issued-permit WeakSet, so it is never cloned, spread, serialized, or rebuilt
  * between the two calls — a reconstructed permit is a forged permit.
  */
-function verificationFailure(failureCategory: string): VerificationProcessResult {
+function verificationFailure(failureCategory: VerificationSafeReason): VerificationProcessResult {
   return { ran: false, exitCode: null, status: "failed", failureCategory, outputLineCount: 0, outputObservable: false };
+}
+
+/**
+ * Read a NON-SUCCESS reason out of a receipt that reports a non-success outcome.
+ *
+ * The receipt's `safeReasonCode` is a full `SandboxReasonCode`, which includes
+ * `"ok"` — and `authorize` genuinely pairs `ok: false` with `"ok"` for a
+ * low-risk request. Passing that straight through would produce a failure whose
+ * stated reason is that nothing was wrong, which is the same class of untruth
+ * S-13 exists to remove.
+ *
+ * So `"ok"` is not forwarded. Nor is it replaced by a guess about the cause:
+ * the fallback reports only the STRUCTURAL fact the receipt itself asserts —
+ * it was blocked, or it never started. A receipt claiming neither while also
+ * claiming no fault is internally contradictory, and `backend-error` says
+ * exactly that about the backend, not about the code being verified.
+ */
+function safeFailureReason(receipt: SandboxExecutionReceipt): VerificationSafeReason {
+  const code = receipt.safeReasonCode;
+  if (code !== "ok") return code;
+  if (receipt.blocked) return "blocked";
+  if (!receipt.executionStarted) return "not-started";
+  return "backend-error";
 }
 
 export function runVerificationCommand(spec: VerificationProcessSpec): VerificationProcessResult {
@@ -343,7 +383,7 @@ export function runVerificationCommand(spec: VerificationProcessSpec): Verificat
     riskLevel: "high-risk",
     humanAuthorized: spec.humanAuthorized === true,
   });
-  if (!authorization.ok) return verificationFailure(authorization.receipt.safeReasonCode);
+  if (!authorization.ok) return verificationFailure(safeFailureReason(authorization.receipt));
 
   // THE routing this milestone exists for: the permit is consumed by sandbox
   // execution rather than discarded. `authorization.permit` is passed by
@@ -351,21 +391,34 @@ export function runVerificationCommand(spec: VerificationProcessSpec): Verificat
   const receipt = sandbox.execute(authorization.permit);
 
   if (receipt.blocked || !receipt.executionStarted) {
-    return verificationFailure(receipt.safeReasonCode);
+    return verificationFailure(safeFailureReason(receipt));
   }
 
   // Map the receipt truthfully. Output is NOT observable through a sandbox
   // receipt — it exposes categories, limits and a fingerprint, never stdout —
   // so no line count is invented and no raw output is surfaced to preserve the
   // old field's shape.
-  const failureCategory = receipt.exitCategory === "completed" ? (receipt.cleanupComplete ? "none" : receipt.safeReasonCode) : receipt.exitCategory;
+  //
+  // Success is ALL THREE conditions, and it is the only branch that reports no
+  // reason. The previous mapping computed the reason first and derived success
+  // separately, so a receipt claiming `completed` + clean cleanup but
+  // `executionCompleted: false` produced a FAILURE whose reason was "none" — a
+  // failure for no stated reason. Deriving the reason from the failure instead
+  // makes that unrepresentable.
   const passed = receipt.exitCategory === "completed" && receipt.executionCompleted && receipt.cleanupComplete;
+  if (passed) {
+    return { ran: true, exitCode: null, status: "passed", failureCategory: null, outputLineCount: 0, outputObservable: false };
+  }
 
   return {
     ran: true,
     exitCode: null,
-    status: passed ? "passed" : "failed",
-    failureCategory,
+    status: "failed",
+    // A non-completed exit IS the reason (timed-out, non-zero-exit, ...). A
+    // completed exit that still failed means the fault is in what the receipt
+    // reported about it — cleanup, or a contradictory completion claim — so the
+    // receipt's own non-success reason is used.
+    failureCategory: receipt.exitCategory !== "completed" ? receipt.exitCategory : safeFailureReason(receipt),
     outputLineCount: 0,
     outputObservable: false,
   };

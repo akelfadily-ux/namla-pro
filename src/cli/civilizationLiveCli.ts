@@ -30,7 +30,7 @@ import { MIN_VOLUNTARY_LIVE_CLAIMS, selectRepairMember } from "../civilization/c
 import { buildCivLiveReport } from "../civilization/civilizationLiveReport";
 import { RealMcpExecutionDriver } from "../civilization/civLiveMcp";
 import { DISTRICTS } from "../civilization/settlementTypes";
-import { acquireHumanConfirmation, mintHumanConfirmedPermit, mintHumanConfirmedPermitBatch } from "../cognitive/realProviderExecutionPermit";
+import { acquireHumanConfirmation, isValidHumanConfirmation, mintHumanConfirmedPermit, mintHumanConfirmedPermitBatch } from "../cognitive/realProviderExecutionPermit";
 import type { PermitScope, RealProviderExecutionPermit, RealProviderId } from "../cognitive/realProviderExecutionPermit";
 import { mintHumanCivilizationPermit, CIV_MAX_COHORT, CIV_MAX_PROVIDER_CALLS, CIV_MAX_REPAIR_CALLS } from "../cognitive/civilizationLivePermit";
 import { RealLiveProviderDriver } from "../cognitive/liveProviderExecution";
@@ -175,6 +175,13 @@ async function main(): Promise<void> {
   }
   logStage("confirmation-accepted");
 
+  // S-13: derived from the real confirmation token, never a literal `true`.
+  // WeakSet identity, so a forged or absent confirmation yields `false` and
+  // verification fails closed. Read here because the permit mints below consume
+  // the token by design (single-use). See digitalLiveObjectiveCli for the full
+  // rationale — both live CLIs authorize verification the same way.
+  const humanAuthorizedVerification = isValidHumanConfirmation(confirmation.confirmation);
+
   // Watchdog over the pre-spawn preparation window: if the run has not reached
   // provider execution in time (e.g. an unresolved promise stalls prep), fail
   // loudly instead of hanging forever.
@@ -219,8 +226,8 @@ async function main(): Promise<void> {
   // Nothing here fakes availability to make live verification work.
   const verificationSandbox = composeVerificationSandbox({ workspaceHostPath: workspace.absolutePath, authorizedMountRoots: [resolvePath(process.cwd(), "workspaces")], probeWorkspaceHostPath: null });
   const providerDriver = new RealLiveProviderDriver({ processDriver: new NodeProviderProcessDriver(), permitByAnt, missionId: OBJECTIVE_ID, workspaceId, workspaceAbsolutePath: workspace.absolutePath, maxStdinBytes: LIMITS.maxStdinBytes, maxStdoutBytes: LIMITS.maxStdoutBytes, maxStderrBytes: LIMITS.maxStderrBytes, timeoutMs: LIMITS.timeoutMs, promptForRole });
-  const mcpExecutor = new RealMcpExecutionDriver({ handle: { workspaceId: workspace.workspaceRoot, absolutePath: workspace.absolutePath }, perFileByteCap: LIMITS.perFileByteCap, timeoutMs: LIMITS.timeoutMs, maxOutputBytes: LIMITS.maxStdoutBytes, contentForTask: () => null, humanAuthorized: true, sandbox: verificationSandbox });
-  const verificationDriver = new RealBackedVerificationDriver(workspace.absolutePath, VERIFICATION_COMMAND_IDS, LIMITS.timeoutMs, LIMITS.maxStdoutBytes, true, verificationSandbox);
+  const mcpExecutor = new RealMcpExecutionDriver({ handle: { workspaceId: workspace.workspaceRoot, absolutePath: workspace.absolutePath }, perFileByteCap: LIMITS.perFileByteCap, timeoutMs: LIMITS.timeoutMs, maxOutputBytes: LIMITS.maxStdoutBytes, contentForTask: () => null, humanAuthorized: humanAuthorizedVerification, sandbox: verificationSandbox });
+  const verificationDriver = new RealBackedVerificationDriver(workspace.absolutePath, VERIFICATION_COMMAND_IDS, LIMITS.timeoutMs, LIMITS.maxStdoutBytes, humanAuthorizedVerification, verificationSandbox);
   const reviewerAntIds = workers.filter((w) => !accepted.some((a) => a.antId === w.workerId) && (w.maturation === "senior" || w.maturation === "qualified")).slice(0, 6).map((w) => w.workerId);
 
   // The repair ant the finalize phase will use — the SHARED implementation/

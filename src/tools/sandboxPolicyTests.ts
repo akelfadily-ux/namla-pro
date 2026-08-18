@@ -25,10 +25,12 @@ import {
   DEFAULT_SANDBOX_POLICY,
   NO_ISOLATION_CLAIMS,
   ALL_ISOLATION_CLAIMS,
+  type SandboxAuthorization,
   type SandboxExecutionRequest,
   type SandboxPolicySpec,
   type SandboxExecutionPermit,
 } from "../cognitive/sandboxPolicy";
+import { readFileSync } from "fs";
 import { runVerificationCommand } from "../cognitive/nodeProviderProcessDriver";
 import { TWIN_COMMAND_CENTER_SANDBOX } from "../twin/twinCommandCenter";
 
@@ -292,8 +294,60 @@ test("low-risk deterministic work is not broken but never receives a sandbox per
   const backend = new FakeSandboxBackend("unavailable");
   const auth = new SandboxPolicy(backend).authorize(request({ riskLevel: "low-risk-deterministic" }));
   assert.equal(auth.ok, false, "low-risk work gets no permit - it needs none");
-  assert.equal(auth.receipt.safeReasonCode, "ok", "and it is not reported as a sandbox failure");
+  // S-13: this asserted "ok", which made the receipt claim `blocked: true` and
+  // "nothing is wrong" simultaneously. The intent — that this is NOT a sandbox
+  // failure — is preserved by a reason that says so explicitly, instead of by a
+  // success-like code that a reader cannot distinguish from a pass.
+  assert.equal(auth.receipt.safeReasonCode, "sandbox-not-required-for-risk-level");
+  assert.equal(auth.receipt.blocked, true, "it is still a refusal");
+  assert.equal(/^sandbox-(runtime|capability|image|network|user|host|docker|privileged|credential|cleanup|limits|human|fake|unknown|root|secret|cpu|memory|pid|workspace|probe|mount)/.test(auth.receipt.safeReasonCode), false, "and it is not reported as a sandbox failure");
   assert.equal(backend.executeCallCount, 0);
+});
+
+test("S-13: no authorize refusal ever reports a success-like reason", () => {
+  // Sweeps every refusal branch in the gate. A receipt that says `blocked: true`
+  // must say WHY, and "ok"/"completed" are not reasons a refusal can have.
+  const refusals: Array<[string, SandboxAuthorization]> = [
+    ["low-risk", new SandboxPolicy(new FakeSandboxBackend("available-and-verified")).authorize(request({ riskLevel: "low-risk-deterministic" }))],
+    ["unavailable", new SandboxPolicy(new FakeSandboxBackend("unavailable")).authorize(request({}))],
+    ["fake-backend", new SandboxPolicy(new FakeSandboxBackend("fake-test-backend")).authorize(request({}))],
+    ["unverified", new SandboxPolicy(new FakeSandboxBackend("available-unverified")).authorize(request({}))],
+    ["no-human", new SandboxPolicy(new FakeSandboxBackend("available-and-verified")).authorize(request({ humanAuthorized: false }))],
+    ["bad-policy", new SandboxPolicy(new FakeSandboxBackend("available-and-verified")).authorize(request({ policy: { ...DEFAULT_SANDBOX_POLICY, namespaces: { privileged: true, hostPidNamespace: false, hostNetworkNamespace: false } } }))],
+  ];
+  for (const [label, auth] of refusals) {
+    assert.equal(auth.ok, false, `${label} must be refused`);
+    assert.equal(auth.receipt.blocked, true, `${label} must be blocked`);
+    assert.equal(["ok", "completed", "none"].includes(auth.receipt.safeReasonCode), false, `${label} reported ${auth.receipt.safeReasonCode}`);
+  }
+});
+
+test("S-13: sandbox-not-required-for-risk-level is reachable ONLY from the low-risk path", () => {
+  // F/G. The code names one specific decision — "this request needs no sandbox".
+  // A HIGH-RISK request must never receive it, whatever else goes wrong, or the
+  // reason would be telling a caller that dangerous work was safe to skip.
+  const LOW_RISK_ONLY = "sandbox-not-required-for-risk-level";
+
+  const states = ["available-and-verified", "available-unverified", "unavailable", "fake-test-backend"] as const;
+  for (const state of states) {
+    const gate = new SandboxPolicy(new FakeSandboxBackend(state));
+    for (const humanAuthorized of [true, false]) {
+      const auth = gate.authorize(request({ riskLevel: "high-risk", humanAuthorized }));
+      assert.notEqual(auth.receipt.safeReasonCode, LOW_RISK_ONLY, `high-risk/${state}/human=${humanAuthorized} must never claim no sandbox was needed`);
+    }
+    // ...and the low-risk path DOES produce it, whatever the backend state is:
+    // the decision is about the request, not about what is installed.
+    const low = gate.authorize(request({ riskLevel: "low-risk-deterministic" }));
+    assert.equal(low.receipt.safeReasonCode, LOW_RISK_ONLY, `low-risk/${state}`);
+  }
+
+  // Only one producer exists in the whole source tree, and it is that branch.
+  const src = readFileSync("src/cognitive/sandboxPolicy.ts", "utf8");
+  const producers = src.split("\n").filter((l) => l.includes(`blockedReceipt("${LOW_RISK_ONLY}")`));
+  assert.equal(producers.length, 1, "exactly one producer");
+  const idx = src.indexOf(`blockedReceipt("${LOW_RISK_ONLY}")`);
+  const preceding = src.slice(0, idx);
+  assert.match(preceding.slice(-400), /request\.riskLevel === "low-risk-deterministic"/, "it must sit under the low-risk guard");
 });
 
 // ------------------------------------------------------------- RECEIPTS ---

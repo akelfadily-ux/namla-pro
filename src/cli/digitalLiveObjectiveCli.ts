@@ -24,7 +24,7 @@ import { askOnce, logStage, PRE_SPAWN_PREPARATION_TIMEOUT_MS } from "./liveObjec
 import { createDigitalWorker } from "../digital/digitalWorkers";
 import { buildVoluntaryClaimPool, admitLiveCohort, MIN_VOLUNTARY_LIVE_CLAIMS } from "../digital/liveCohort";
 import { normalizeProviderResult } from "../digital/liveProviderNormalization";
-import { acquireHumanConfirmation, mintHumanConfirmedPermitBatch, mintHumanConfirmedPermit } from "../cognitive/realProviderExecutionPermit";
+import { acquireHumanConfirmation, isValidHumanConfirmation, mintHumanConfirmedPermitBatch, mintHumanConfirmedPermit } from "../cognitive/realProviderExecutionPermit";
 import type { PermitScope, RealProviderExecutionPermit, RealProviderId } from "../cognitive/realProviderExecutionPermit";
 import { mintHumanLiveObjectivePermit, LIVE_COHORT_SIZE, LIVE_MAX_PROVIDER_CALLS, LIVE_MAX_REPAIR_CALLS } from "../cognitive/liveObjectivePermit";
 import { RealLiveProviderDriver } from "../cognitive/liveProviderExecution";
@@ -141,6 +141,21 @@ async function main(): Promise<void> {
   }
   logStage("confirmation-accepted");
 
+  // S-13: the verification driver's authorization is DERIVED from the real
+  // confirmation token rather than written as a literal `true`.
+  //
+  // `isValidHumanConfirmation` is WeakSet identity over tokens that
+  // `acquireHumanConfirmation` actually minted, so a forged
+  // `{ __brand: "human-confirmation" }` object or an absent confirmation yields
+  // `false` and verification fails closed. A literal would keep asserting
+  // authorization even if this gate were later moved or removed.
+  //
+  // It is read HERE, not at the construction site, because the permit mints
+  // below consume the token by design (single-use, deleted from the WeakSet).
+  // Asking again after consumption would report `false` for a flow the human
+  // genuinely did authorize.
+  const humanAuthorizedVerification = isValidHumanConfirmation(confirmation.confirmation);
+
   // Watchdog over the pre-spawn preparation window: if provider-spawn-starting is
   // not reached in time (e.g. an unresolved promise / open readline stalls prep),
   // fail loudly instead of hanging forever.
@@ -179,7 +194,7 @@ async function main(): Promise<void> {
   // configuration, so no executor is produced and verification fails closed.
   // Nothing here fakes availability to make live verification work.
   const verificationSandbox = composeVerificationSandbox({ workspaceHostPath: workspace.absolutePath, authorizedMountRoots: [resolvePath(process.cwd(), "workspaces")], probeWorkspaceHostPath: null });
-  const verification = new RealBackedVerificationDriver(workspace.absolutePath, VERIFICATION_COMMAND_IDS, undefined, undefined, true, verificationSandbox);
+  const verification = new RealBackedVerificationDriver(workspace.absolutePath, VERIFICATION_COMMAND_IDS, LIMITS.timeoutMs, LIMITS.maxStdoutBytes, humanAuthorizedVerification, verificationSandbox);
   logStage("provider-request-ready", { cohortSize: cohort.length, providerCallCap: LIVE_MAX_PROVIDER_CALLS });
 
   // Pre-spawn preparation complete — release the watchdog before spawning.

@@ -12,6 +12,7 @@
  */
 
 import { ensureLiveObjectiveWorkspace, writeLiveObjectiveFile } from "./smokeWorkspace";
+import type { VerificationSafeReason } from "./sandboxPolicy";
 import type { SmokeWorkspaceResult } from "./smokeWorkspace";
 import { runVerificationCommand } from "./nodeProviderProcessDriver";
 import type { VerificationSandboxExecutor } from "./verificationSandbox";
@@ -128,10 +129,18 @@ export class RealBackedVerificationDriver implements VerificationDriver {
   constructor(
     private readonly workspaceAbsolutePath: string,
     private readonly allowedCommands: readonly VerificationCommandId[],
-    private readonly timeoutMs = 120000,
-    private readonly maxOutputBytes = 65536,
-    private readonly humanAuthorized = false,
-    private readonly sandbox: VerificationSandboxExecutor | null = null,
+    private readonly timeoutMs: number,
+    private readonly maxOutputBytes: number,
+    /**
+     * S-13: REQUIRED, with no default. It previously defaulted to `false`, which
+     * is fail-closed and therefore looked safe — but it let a trusted CLI omit
+     * the authorization wiring entirely and only discover it much later as a
+     * verification failure with no obvious cause. Silence is now a compile
+     * error, so every caller states its position. Omission cannot be mistaken
+     * for a decision, and it is still never read as `true`.
+     */
+    private readonly humanAuthorized: boolean,
+    private readonly sandbox: VerificationSandboxExecutor | null,
   ) {}
 
   get realVerificationExecutions(): number {
@@ -143,14 +152,42 @@ export class RealBackedVerificationDriver implements VerificationDriver {
     void _defectPresent;
     const id = commandId as VerificationCommandId;
     if (!this.allowedCommands.includes(id)) {
-      return { commandId, status: "failed", failureCategory: "invalid-path", outputLineCount: 0, realProcessExecutions: 0, realNetworkCalls: 0 };
+      // Refused by THIS driver's allowlist, before any sandbox is consulted.
+      // `unknown-command` is the lower layer's own word for the same fact and
+      // is stated explicitly rather than left absent — nothing was asked of a
+      // sandbox, so there is no sandbox verdict to hide behind.
+      return { commandId, status: "failed", failureCategory: "invalid-path", safeReasonCode: "unknown-command", outputLineCount: 0, realProcessExecutions: 0, realNetworkCalls: 0 };
     }
     const result = runVerificationCommand({ commandId: id, workingDirectoryAbsolute: this.workspaceAbsolutePath, timeoutMs: this.timeoutMs, maxOutputBytes: this.maxOutputBytes, humanAuthorized: this.humanAuthorized, sandbox: this.sandbox });
     if (result.ran) this.execs += 1;
+
+    // S-13: REPORT WHAT WAS ESTABLISHED, NOT WHAT WOULD BE CONVENIENT.
+    //
+    // This used to be `result.status === "passed" ? null : "type-error"`. Every
+    // failure — an absent sandbox, a refused authorization, a blocked start, a
+    // timeout, incomplete cleanup — was reported as a TypeScript type error.
+    // That is not a lossy summary, it is a false statement about code that was
+    // never compiled, and it pointed every reader at the wrong problem.
+    //
+    // `ran` is the honest discriminator the lower layer already provides: it is
+    // false for every pre-execution refusal and true only once the sandbox
+    // actually executed. So nothing-ran becomes `verification-unavailable`, and
+    // ran-but-did-not-pass becomes `verification-command-failed`. Neither claims
+    // to know WHY the code is wrong, because a sandbox receipt reports an exit
+    // category, never a compiler diagnostic.
+    //
+    // The precise reason is carried through unchanged in `safeReasonCode` — it
+    // is the sandbox's own closed vocabulary, so no detail is invented and none
+    // is discarded. The lower layer already uses `null` for exactly the passed
+    // case and a non-success reason for every other, so it is forwarded as-is:
+    // re-deriving it from `status` here would be a second, divergeable source
+    // of the same fact.
+    const safeReasonCode: VerificationSafeReason | null = result.failureCategory;
     return {
       commandId,
       status: result.status,
-      failureCategory: result.status === "passed" ? null : "type-error",
+      failureCategory: result.status === "passed" ? null : result.ran ? "verification-command-failed" : "verification-unavailable",
+      safeReasonCode,
       outputLineCount: result.outputLineCount,
       realProcessExecutions: result.ran ? 1 : 0,
       realNetworkCalls: 0,
