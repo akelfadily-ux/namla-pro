@@ -99,7 +99,19 @@ export type SandboxReasonCode =
   // contradiction a caller cannot act on, and it made a genuine refusal
   // indistinguishable from success to anything reading the reason. This says
   // the same thing truthfully: no permit, no fault.
-  | "sandbox-not-required-for-risk-level";
+  | "sandbox-not-required-for-risk-level"
+  // --- limits that are present but unusable (S-14) -----------------------------
+  // DISTINCT from `sandbox-limits-missing`, and the distinction is the one this
+  // module already draws between `sandbox-mount-source-missing` and
+  // `sandbox-mount-source-invalid`: absent is not the same fault as present and
+  // wrong, and conflating them sends a reader to the wrong place.
+  //
+  // "Missing" keeps its established meaning here — absent, or ZERO, since a
+  // zero limit has always meant "no limit was set" in this codebase. This code
+  // covers a value that IS set and still cannot serve as a bound: negative,
+  // NaN, Infinity, or fractional where an integer is required. Calling NaN a
+  // "missing" limit would be false; the field is right there.
+  | "sandbox-limits-invalid";
 
 /** Thrown only where a caller demands a permit it cannot have. */
 export class SandboxUnavailableError extends Error {
@@ -477,7 +489,21 @@ export function validateSandboxPolicySpec(policy: SandboxPolicySpec): SandboxRea
   if (network.policy === "allowed") return "sandbox-network-policy-refused";
   if (network.policy === "denied" && network.allowlist.length > 0) return "sandbox-network-policy-refused";
   if (!cleanup.disposableFilesystem || !cleanup.cleanupAfterExit) return "sandbox-cleanup-policy-refused";
-  if (limits.cpuLimit <= 0 || limits.memoryLimitMb <= 0 || limits.pidLimit <= 0 || limits.processLimit <= 0 || limits.timeoutMs <= 0) return "sandbox-limits-missing";
+  // S-14: `<= 0` alone lets NaN through — every comparison with NaN is false —
+  // and `limits.timeoutMs` is handed straight to `spawnSync`, which throws
+  // ERR_OUT_OF_RANGE for anything that is not an unsigned integer. A permit
+  // carrying NaN therefore passed this gate and then crashed `execute()`
+  // instead of producing a refusal receipt.
+  const limitValues = [limits.cpuLimit, limits.memoryLimitMb, limits.pidLimit, limits.processLimit, limits.timeoutMs];
+  // Absent, or zero — the long-standing meaning of "missing" here is that no
+  // limit was set, and a zero limit is an unset limit rather than a limit of 0.
+  if (limitValues.some((v) => typeof v !== "number" || v === 0)) return "sandbox-limits-missing";
+  // Set, but not usable as a bound.
+  if (limitValues.some((v) => !Number.isFinite(v) || v < 0)) return "sandbox-limits-invalid";
+  // `timeoutMs` specifically becomes `spawnSync`'s `timeout`, which requires an
+  // unsigned INTEGER — 1.5 throws just as NaN does. `cpuLimit` is deliberately
+  // not integer-constrained: a fractional CPU share is a legitimate limit.
+  if (!Number.isInteger(limits.timeoutMs)) return "sandbox-limits-invalid";
   return "ok";
 }
 

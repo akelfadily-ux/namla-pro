@@ -384,6 +384,98 @@ export interface ContainerBackendOptions {
   readonly trustedBuildRoot?: string;
 }
 
+/** The probe timeout used when the trusted construction site states none. */
+export const DEFAULT_PROBE_TIMEOUT_MS = 120000;
+
+/** Bound on EACH host-side helper spawn (image inspect, remove, re-inspect). */
+export const PROBE_HELPER_TIMEOUT_MS = 30000;
+
+/**
+ * The signal every host-side spawn in this backend is killed with on timeout.
+ *
+ * S-14: this is `SIGKILL`, not the `SIGTERM` default, and the difference is
+ * what makes the timeout mean anything. `spawnSync` sends `killSignal` when the
+ * timeout expires and then KEEPS WAITING for the child to exit; Node escalates
+ * to SIGKILL only if the first kill call itself errors, not if the signal is
+ * delivered and ignored. A `docker` CLI that traps SIGTERM could therefore hold
+ * the caller past its own timeout indefinitely, which is exactly the silence
+ * S-14 removes.
+ *
+ * SIGKILL cannot be caught, blocked, or ignored on POSIX. On Windows libuv
+ * routes every signal to `TerminateProcess`, which is equally unconditional
+ * (measured: a child with SIGTERM/SIGINT/SIGHUP handlers still died at the
+ * bound). So termination of the DIRECT child no longer depends on that child
+ * cooperating.
+ *
+ * What this does NOT establish: an absolute elapsed-time ceiling. Delivery and
+ * reaping are the kernel's, not this module's — an uninterruptible-sleep child,
+ * a stalled filesystem, or a descheduled process can still add real time that
+ * nothing here owns or measures. The claim is about the TERMINATION REQUEST
+ * being unrefusable, not about the clock.
+ */
+export const PROBE_KILL_SIGNAL = "SIGKILL" as const;
+
+/**
+ * The cumulative CONFIGURED subprocess timeout budget for one
+ * `verifyIsolation()`: probe + image inspect + remove + re-inspect.
+ *
+ * Deliberately named as a configured budget rather than a wall-clock ceiling.
+ * It is the sum of the timeouts this module sets, and it is meaningful because
+ * every one of those spawns is bounded and killed uncatchably — no step waits
+ * forever on a child's cooperation. It is NOT a proof of maximum elapsed real
+ * time: this code owns the timers it configures, not the OS scheduling and
+ * process-reaping boundary underneath them.
+ */
+export function configuredTimeoutBudgetMs(probeTimeoutMs: number): number {
+  return probeTimeoutMs + PROBE_HELPER_TIMEOUT_MS * 3;
+}
+
+/**
+ * The outcome of proving the probe's bound — `ok` with a usable timeout, or a
+ * refusal that names WHICH kind of fault the configured value is. Mirrors the
+ * `IdentityResolution` / `NetworkModeResolution` shape already used here.
+ */
+export type ProbeTimeoutResolution =
+  | { readonly ok: true; readonly timeoutMs: number; readonly reasonCode: "ok" }
+  | { readonly ok: false; readonly timeoutMs: null; readonly reasonCode: Extract<SandboxReasonCode, "sandbox-limits-missing" | "sandbox-limits-invalid"> };
+
+/**
+ * Resolve the isolation probe's timeout, or `null` when it cannot be bounded
+ * (S-14).
+ *
+ * `spawnSync`'s `timeout` is not merely advisory, and two of its edge cases are
+ * silent in opposite directions — both verified against this Node runtime
+ * rather than assumed:
+ *
+ *   timeout: 0        NO timer is armed. The probe waits for the container
+ *                     FOREVER. Measured: a 1500 ms child ran to completion with
+ *                     no error and no signal. `?? DEFAULT` never caught this,
+ *                     because 0 is not nullish — so a single misconfigured
+ *                     field turned the one bounded step that proves isolation
+ *                     into an unbounded one.
+ *   -1 / NaN /        `spawnSync` THROWS ERR_OUT_OF_RANGE. `verifyIsolation()`
+ *   Infinity / 1.5    is contractually total — it returns a capability report —
+ *                     and its caller `composeVerificationSandbox` has no catch,
+ *                     so the throw would escape the composition root as a crash
+ *                     instead of the honest "isolation could not be proven".
+ *
+ * Both are the same failure: a probe whose bound cannot be established. So the
+ * bound is proven HERE, before any container exists, and an unprovable one
+ * fails closed. `sandbox-limits-missing` is the existing canonical code for
+ * exactly this — the limits that would make execution bounded are absent — so
+ * no new vocabulary is introduced.
+ */
+export function resolveProbeTimeoutMs(configured: number | undefined): ProbeTimeoutResolution {
+  if (configured === undefined) return { ok: true, timeoutMs: DEFAULT_PROBE_TIMEOUT_MS, reasonCode: "ok" };
+  // Absent-or-zero is "no bound was set" — the same meaning `sandbox-limits-missing`
+  // already carries for a zero limit elsewhere in the gate.
+  if (typeof configured !== "number" || configured === 0) return { ok: false, timeoutMs: null, reasonCode: "sandbox-limits-missing" };
+  // Set, but unusable: negative, NaN, Infinity, or fractional. Calling any of
+  // these "missing" would misdescribe a field that is plainly present.
+  if (!Number.isFinite(configured) || configured < 0 || !Number.isInteger(configured)) return { ok: false, timeoutMs: null, reasonCode: "sandbox-limits-invalid" };
+  return { ok: true, timeoutMs: configured, reasonCode: "ok" };
+}
+
 /**
  * Roots authorized for real EXECUTION (§31).
  *
@@ -469,7 +561,7 @@ export class DockerContainerSandboxBackend implements ContainerSandboxBackend {
 
   /** Is the approved image present locally? Never pulls. */
   private imageAvailable(runtimeCommand: string): boolean {
-    const out = spawnSync(runtimeCommand, ["image", "inspect", approvedImageReference()], { shell: false, encoding: "utf8", timeout: 30000, maxBuffer: 1024 * 1024, windowsHide: true });
+    const out = spawnSync(runtimeCommand, ["image", "inspect", approvedImageReference()], { shell: false, encoding: "utf8", timeout: PROBE_HELPER_TIMEOUT_MS, killSignal: PROBE_KILL_SIGNAL, maxBuffer: 1024 * 1024, windowsHide: true });
     return out.status === 0;
   }
 
@@ -488,6 +580,15 @@ export class DockerContainerSandboxBackend implements ContainerSandboxBackend {
       claims: NO_ISOLATION_CLAIMS,
       safeReasonCode: reason,
     });
+
+    // S-14: prove the probe's bound FIRST — before the runtime is resolved and
+    // long before a container exists. A probe that cannot be bounded must not
+    // be started at all: starting it and discovering the problem later is the
+    // very hang this check removes, and there would then be a live container to
+    // clean up as well.
+    const probeTimeout = resolveProbeTimeoutMs(this.options.verifyTimeoutMs);
+    if (!probeTimeout.ok) return unverified(probeTimeout.reasonCode, "probe timeout is not a usable bound");
+    const probeTimeoutMs = probeTimeout.timeoutMs;
 
     // §38: the runtime executable is resolved against the TRUSTED HOST CONTEXT
     // this backend was constructed with, never with an empty one. Before S-9
@@ -565,7 +666,10 @@ export class DockerContainerSandboxBackend implements ContainerSandboxBackend {
     // immediately before the container starts.
     if (revalidateResolvedExecutable(resolved.value) !== "ok") return unverified("sandbox-runtime-unavailable", "runtime identity changed before use");
 
-    const out = spawnSync(runtime, args, { shell: false, encoding: "utf8", timeout: this.options.verifyTimeoutMs ?? 120000, maxBuffer: 4 * 1024 * 1024, windowsHide: true });
+    // S-14: `probeTimeoutMs` is the proven bound from the top of this method —
+    // a finite positive integer, never the raw option. This is the ONE place
+    // the probe's timeout is decided.
+    const out = spawnSync(runtime, args, { shell: false, encoding: "utf8", timeout: probeTimeoutMs, killSignal: PROBE_KILL_SIGNAL, maxBuffer: 4 * 1024 * 1024, windowsHide: true });
 
     // Force cleanup regardless of outcome. `--rm` handles the normal path; this
     // covers a timeout that left the container alive.
@@ -594,6 +698,16 @@ export class DockerContainerSandboxBackend implements ContainerSandboxBackend {
         stderr: typeof out.stderr === "string" ? out.stderr : "",
         jsonParseFailed,
       });
+      // S-14: a probe that produced no findings is exactly where a TIMEOUT
+      // lands — and a timed-out container is the case most likely to survive
+      // `--rm`. `removed` was computed above but consulted only on the success
+      // path below, so "timed out, cleaned up" and "timed out, container still
+      // running" reported identically. A surviving container is the more
+      // urgent and more actionable fact, so it is reported; the timeout itself
+      // is not lost, because `lastStartupDiagnostics` still carries the
+      // `container-timeout-killed` category and is appended here as safe
+      // scalars (category, exit, signal, fingerprint — never raw output).
+      if (!removed) return unverified("sandbox-cleanup-incomplete", `container not removed after failed probe: ${describeStartupFailure(this.lastStartupDiagnostics)}`);
       return unverified(this.lastStartupDiagnostics.safeReasonCode, describeStartupFailure(this.lastStartupDiagnostics));
     }
     this.lastStartupDiagnostics = null;
@@ -639,8 +753,8 @@ export class DockerContainerSandboxBackend implements ContainerSandboxBackend {
 
   /** Remove the container if it somehow survived. Returns true when gone. */
   private forceRemove(runtime: string, name: string): boolean {
-    spawnSync(runtime, ["rm", "-f", name], { shell: false, encoding: "utf8", timeout: 30000, maxBuffer: 65536, windowsHide: true });
-    const check = spawnSync(runtime, ["inspect", name], { shell: false, encoding: "utf8", timeout: 30000, maxBuffer: 65536, windowsHide: true });
+    spawnSync(runtime, ["rm", "-f", name], { shell: false, encoding: "utf8", timeout: PROBE_HELPER_TIMEOUT_MS, killSignal: PROBE_KILL_SIGNAL, maxBuffer: 65536, windowsHide: true });
+    const check = spawnSync(runtime, ["inspect", name], { shell: false, encoding: "utf8", timeout: PROBE_HELPER_TIMEOUT_MS, killSignal: PROBE_KILL_SIGNAL, maxBuffer: 65536, windowsHide: true });
     return check.status !== 0; // non-zero inspect == not present == removed
   }
 
@@ -729,7 +843,7 @@ export class DockerContainerSandboxBackend implements ContainerSandboxBackend {
     // rechecked here; the binary about to be spawned was not.
     if (revalidateResolvedExecutable(resolved.value) !== "ok") return blocked("sandbox-runtime-unavailable");
 
-    const out = spawnSync(resolved.value.command, args, { shell: false, encoding: "utf8", timeout: permit.policy.limits.timeoutMs, maxBuffer: permit.policy.limits.maxOutputBytes + 4096, windowsHide: true });
+    const out = spawnSync(resolved.value.command, args, { shell: false, encoding: "utf8", timeout: permit.policy.limits.timeoutMs, killSignal: PROBE_KILL_SIGNAL, maxBuffer: permit.policy.limits.maxOutputBytes + 4096, windowsHide: true });
     const cleanupComplete = this.forceRemove(resolved.value.command, containerName);
     const timedOut = Boolean(out.error && (out.error as NodeJS.ErrnoException).code === "ETIMEDOUT");
 
