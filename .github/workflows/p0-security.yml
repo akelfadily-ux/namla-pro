@@ -229,6 +229,25 @@ jobs:
         run: |
           node -e "const r=require('./container-sandbox-capability.json');if(r.capabilityState!=='available-and-verified'||r.verified!==true){console.error('FAIL: sandbox not verified:',r.safeReasonCode);process.exit(1)}if(r.detectionMethod!=='isolation-probe'){console.error('FAIL: detection must never be recorded as verification');process.exit(1)}console.log('verified via',r.detectionMethod,'| image',r.imageReference,'| pinned',r.imagePinned)"
 
+      # S-15: prove the EXECUTION IDENTITY against the real locally built image.
+      #
+      # The backend runs the container by `inspect[].Id`, so this asserts the
+      # receipt's recorded identity is byte-identical to the ID the daemon
+      # reports for the image this job just built. Without it, the execution
+      # reference would be proven only by unit tests while the one real
+      # container path went unchecked.
+      #
+      # It also asserts the model is not conflated: a repo digest, if one ever
+      # appears, must keep its `repository@sha256:` form and must never be the
+      # value used for execution. A locally built image has none, which is why
+      # the local image ID is the identity this system relies on.
+      - name: Assert the verified identity is the real built image
+        shell: bash
+        run: |
+          REAL_ID="$(docker image inspect namla-sandbox:v1 --format '{{.Id}}')"
+          echo "daemon image Id: $REAL_ID"
+          REAL_ID="$REAL_ID" node -e "const r=require('./container-sandbox-capability.json');const real=process.env.REAL_ID;if(r.verifiedLocalImageId!==real){console.error('FAIL: verified identity',r.verifiedLocalImageId,'is not the built image',real);process.exit(1)}if(!/^sha256:[0-9a-f]{64}$/.test(r.verifiedLocalImageId)){console.error('FAIL: execution identity is not a local image ID');process.exit(1)}if(r.verifiedRepoDigest!==null&&!/@sha256:[0-9a-f]{64}$/.test(r.verifiedRepoDigest)){console.error('FAIL: repo digest lost its repository context');process.exit(1)}if(r.verifiedRepoDigest===r.verifiedLocalImageId){console.error('FAIL: repo digest and image Id must never be the same field');process.exit(1)}console.log('execution identity confirmed against the built image | repoDigest',r.verifiedRepoDigest)"
+
       - name: Confirm no container survived
         if: always()
         run: |

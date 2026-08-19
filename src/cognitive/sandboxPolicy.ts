@@ -111,7 +111,14 @@ export type SandboxReasonCode =
   // covers a value that IS set and still cannot serve as a bound: negative,
   // NaN, Infinity, or fractional where an integer is required. Calling NaN a
   // "missing" limit would be false; the field is right there.
-  | "sandbox-limits-invalid";
+  | "sandbox-limits-invalid"
+  // --- image identity freshness (S-15) -----------------------------------------
+  // The approved reference is a mutable TAG. Isolation was proven against one
+  // immutable image identity; by the time execution runs, that tag may point at
+  // different content. This says exactly that: verification is STALE, not that
+  // the runtime is missing, the capability unverified, or the image absent —
+  // all of which would send a reader somewhere else entirely.
+  | "sandbox-image-identity-changed";
 
 /** Thrown only where a caller demands a permit it cannot have. */
 export class SandboxUnavailableError extends Error {

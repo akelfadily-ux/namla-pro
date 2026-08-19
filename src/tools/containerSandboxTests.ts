@@ -61,11 +61,16 @@ process.on("exit", () => {
   }
 });
 
+/** A syntactically valid immutable identity for argv-shape tests. */
+const TEST_IMAGE_ID = `sha256:${"a".repeat(64)}`;
+
 function spec(overrides: Partial<ContainerRunSpec> = {}): ContainerRunSpec {
   return {
     workspaceHostPath: WORKSPACE_SOURCE,
     sourceHostPath: null,
     probeHostPath: null,
+    // S-15: runs are addressed by immutable identity, never by the tag.
+    imageRef: TEST_IMAGE_ID,
     cpuLimit: 1,
     memoryLimitMb: 512,
     pidLimit: 64,
@@ -149,7 +154,15 @@ test("exactly one writable mount; source and probe mounts are read-only", () => 
 test("the image reference is fixed and never mission-provided", () => {
   const ref = approvedImageReference();
   assert.equal(ref.startsWith(IMAGE_REPOSITORY), true, "the image must be the approved repository");
-  assert.equal(buildContainerRunArgs(spec()).includes(ref), true, "the built argv uses the approved reference");
+  // S-15: the argv carries the IMMUTABLE identity, not the mutable tag. The
+  // approved reference still names which image is wanted, but a tag in the argv
+  // would let the daemon re-resolve the name at run time — the exact window
+  // that let verified image A be replaced by image B.
+  const built = buildContainerRunArgs(spec());
+  assert.equal(built.includes(TEST_IMAGE_ID), true, "the built argv uses the resolved immutable identity");
+  assert.equal(built.includes(ref), false, "the mutable tag must never reach the argv");
+  assert.equal(built.includes("--pull"), true, "and a pull is explicitly refused");
+  assert.equal(built[built.indexOf("--pull") + 1], "never");
   // Pinning is reported honestly rather than assumed.
   assert.equal(typeof imageIsPinned(), "boolean");
   assert.equal(imageIsPinned() ? ref.includes("@") : ref.includes(":"), true, "pinned refs use a digest, unpinned use a tag");
@@ -157,7 +170,7 @@ test("the image reference is fixed and never mission-provided", () => {
 
 test("the in-container command is a fixed argv array, never a shell string", () => {
   const args = buildContainerRunArgs(spec({ command: ["npm", "test"] }));
-  const imageIndex = args.indexOf(approvedImageReference());
+  const imageIndex = args.indexOf(TEST_IMAGE_ID);
   assert.equal(imageIndex > 0, true);
   const command = args.slice(imageIndex + 1);
   assert.deepEqual(command, ["npm", "test"], "the command follows the image as discrete argv entries");

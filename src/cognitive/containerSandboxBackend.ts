@@ -60,6 +60,198 @@ export function imageIsPinned(): boolean {
   return IMAGE_DIGEST.length > 0;
 }
 
+/**
+ * An IMMUTABLE image identity (S-15).
+ *
+ * `approvedImageReference()` is `namla-sandbox:v1` — a name and a TAG. A tag is
+ * a mutable pointer: `docker build -t namla-sandbox:v1` retargets it to
+ * completely different content at any moment, and the CI job builds the image
+ * exactly that way. So the reference names WHICH image is wanted; it is not
+ * evidence of WHAT was verified.
+ *
+ * `docker image inspect` reports TWO different digests, and they are not
+ * interchangeable. Conflating them is a real defect, not a stylistic one:
+ *
+ *   Id              The LOCAL IMAGE ID — the digest of the image CONFIG blob.
+ *                   Every image present locally has one, including one produced
+ *                   by `docker build`, which is how the CI image is made. A
+ *                   bare `sha256:<hex>` argument is parsed by the reference
+ *                   grammar as an image ID (the grammar requires a NAME before
+ *                   `@digest`), so this is the value that can be RUN directly.
+ *
+ *   RepoDigests[n]  `repository@sha256:<hex>` — the digest of the MANIFEST, as
+ *                   content-addressed by a registry. It is populated only after
+ *                   a push or a pull; a purely local build has none. The
+ *                   manifest is a document that CONTAINS the config digest as a
+ *                   field, so hashing it cannot yield that same value: the
+ *                   manifest digest and the config digest are necessarily
+ *                   different strings for the very same image.
+ *
+ * Two consequences drive the model below.
+ *
+ *   1. `sha256:<manifest-digest>` is NOT a valid local run reference. Docker
+ *      would look for an image whose ID is that digest and find none, because
+ *      the image's ID is its CONFIG digest. Stripping `repository@` and running
+ *      the remainder therefore produces a reference to nothing.
+ *   2. `RepoDigests` can become populated later — a push of the identical local
+ *      image adds one — with the content completely unchanged. Preferring it
+ *      would make the identity string change while the image did not, which a
+ *      freshness check would then have to report as a content change. That is a
+ *      false alarm manufactured by the model itself.
+ *
+ * So there is exactly ONE canonical content identity: `localImageId`. It is
+ * required, it is what execution addresses, and it is what equality compares.
+ * `repoDigest` is optional PROVENANCE, retained with its repository context
+ * intact and never used as an execution reference. Nothing is ever invented.
+ */
+export interface ResolvedImageIdentity {
+  /**
+   * `inspect[].Id`. Always `sha256:<64 hex>`. Never a tag, never a name.
+   *
+   * THE canonical content identity and the execution reference. Required for
+   * every accepted image, and it is the only field equality consults.
+   */
+  readonly localImageId: string;
+  /**
+   * `inspect[].RepoDigests[n]`, VERBATIM — `repository@sha256:<64 hex>`, with
+   * the repository kept. `null` for a locally built image, which is the real CI
+   * case. Provenance only: it is recorded and reported, never run, and never
+   * reduced to a bare digest.
+   */
+  readonly repoDigest: string | null;
+}
+
+export type ImageIdentityResolution =
+  | { readonly ok: true; readonly identity: ResolvedImageIdentity; readonly reasonCode: "ok" }
+  | { readonly ok: false; readonly identity: null; readonly reasonCode: SandboxReasonCode };
+
+/** `sha256:` followed by exactly 64 lowercase hex characters. Nothing else. */
+const IMAGE_DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/;
+
+/**
+ * The reference an image is EXECUTED by — the local image ID, always.
+ *
+ * A named function rather than an inline field read, so there is exactly one
+ * answer to "what does this run?" and a test can assert that answer directly
+ * instead of inferring it from an argv position.
+ */
+export function imageExecutionReference(identity: ResolvedImageIdentity): string {
+  return identity.localImageId;
+}
+
+/**
+ * Parse `docker image inspect` output into an immutable identity.
+ *
+ * Fails closed on anything it cannot prove: non-JSON, an empty array, a missing
+ * `Id`, or a digest that does not match the exact expected shape. A malformed
+ * inspect is not "probably fine" — it is an unknown image, and running an
+ * unknown image is the thing this exists to prevent.
+ *
+ * Pure and exported so the parsing rules are testable without a runtime.
+ */
+export function parseImageIdentity(inspectStdout: string): ImageIdentityResolution {
+  const unresolved = (reasonCode: SandboxReasonCode): ImageIdentityResolution => ({ ok: false, identity: null, reasonCode });
+  if (typeof inspectStdout !== "string" || inspectStdout.trim().length === 0) return unresolved("sandbox-image-unavailable");
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(inspectStdout.trim());
+  } catch {
+    return unresolved("sandbox-image-unavailable");
+  }
+  if (!Array.isArray(parsed) || parsed.length === 0) return unresolved("sandbox-image-unavailable");
+  const entry = parsed[0] as { readonly Id?: unknown; readonly RepoDigests?: unknown };
+  if (typeof entry !== "object" || entry === null) return unresolved("sandbox-image-unavailable");
+
+  // The local image ID is MANDATORY. No image is accepted without one, because
+  // it is the only value this backend can both compare and run.
+  if (typeof entry.Id !== "string" || !IMAGE_DIGEST_PATTERN.test(entry.Id)) return unresolved("sandbox-image-unavailable");
+
+  // Optional registry provenance, kept WHOLE. Only a digest naming this
+  // repository is retained — one belonging to some other repo says nothing
+  // about this image — and it is stored exactly as the runtime reported it,
+  // repository included, so it can never be mistaken for a runnable reference.
+  let repoDigest: string | null = null;
+  if (Array.isArray(entry.RepoDigests)) {
+    for (const candidate of entry.RepoDigests) {
+      if (typeof candidate !== "string") continue;
+      const at = candidate.indexOf("@");
+      if (at <= 0) continue;
+      if (candidate.slice(0, at) !== IMAGE_REPOSITORY) continue;
+      if (!IMAGE_DIGEST_PATTERN.test(candidate.slice(at + 1))) continue;
+      repoDigest = candidate;
+      break;
+    }
+  }
+
+  return { ok: true, identity: { localImageId: entry.Id, repoDigest }, reasonCode: "ok" };
+}
+
+/**
+ * Do two resolved identities name the same immutable CONTENT?
+ *
+ * `localImageId` ALONE decides, and that is the security-correct rule in both
+ * directions:
+ *
+ *   Different content can never compare equal. The image ID is the digest of
+ *   the config, which names every layer; different content yields a different
+ *   ID. There is no way to change what the image contains and keep the ID.
+ *
+ *   Provenance alone must never masquerade as a content change. A push of the
+ *   identical image populates `RepoDigests` without altering a single byte of
+ *   it. Comparing that field too would report a content change where none
+ *   happened, and a freshness check that cries wolf is one that gets relaxed.
+ */
+export function sameImageIdentity(a: ResolvedImageIdentity | null, b: ResolvedImageIdentity | null): boolean {
+  if (a === null || b === null) return false;
+  return a.localImageId === b.localImageId;
+}
+
+/**
+ * Whether a cached VERIFIED capability report may still be reported (S-15).
+ *
+ * The freshness gate for every PUBLIC capability query, and deliberately pure:
+ * it decides using only the cached report, the identity that report was about,
+ * and the identity resolved right now.
+ *
+ * The one property that matters is structural, not behavioural: the only report
+ * this function can ever hand back is the `cached` object it was given. There
+ * is no branch that builds a report, so a freshness check can INVALIDATE stale
+ * verification but can never CREATE verification for an image whose isolation
+ * was never proven. Detection remains incapable of verifying, which is the rule
+ * this whole module exists to hold.
+ *
+ * `resolveCurrent` is a thunk because resolving costs a subprocess. It is
+ * called only when there is a verified claim that could actually be stale, so
+ * an unverified backend performs no inspect at all.
+ */
+export interface VerificationFreshness {
+  /** `cached` when it may still stand, `null` when the caller must re-detect. */
+  readonly report: SandboxCapabilityReport | null;
+  /** True when the stale claim must be dropped from backend state. */
+  readonly invalidate: boolean;
+}
+
+export function freshVerificationReport(cached: SandboxCapabilityReport | null, verifiedIdentity: ResolvedImageIdentity | null, resolveCurrent: () => ImageIdentityResolution): VerificationFreshness {
+  // Nothing verified is cached: there is nothing to return and nothing to drop,
+  // and no reason to spend a subprocess finding that out.
+  if (cached === null || cached.capabilityState !== "available-and-verified") return { report: null, invalidate: false };
+
+  // A verified claim that does not name the image it was about is unprovable by
+  // construction. S-15 requires the two to move together, so an unpaired claim
+  // is treated as corrupt state and dropped rather than trusted.
+  if (verifiedIdentity === null) return { report: null, invalidate: true };
+
+  const current = resolveCurrent();
+  // The approved reference no longer resolves at all — the image was removed,
+  // the runtime is gone, or the inspect was malformed. Absence is not proof of
+  // sameness, so the claim cannot stand.
+  if (!current.ok) return { report: null, invalidate: true };
+  if (!sameImageIdentity(current.identity, verifiedIdentity)) return { report: null, invalidate: true };
+
+  return { report: cached, invalidate: false };
+}
+
 /** Mount points inside the container. Fixed, never mission-derived. */
 export const CONTAINER_WORKSPACE_MOUNT = "/workspace" as const;
 export const CONTAINER_SOURCE_MOUNT = "/src-readonly" as const;
@@ -174,6 +366,16 @@ export interface ContainerRunSpec {
   readonly workspaceHostPath: CanonicalMountSource;
   readonly sourceHostPath: CanonicalMountSource | null;
   readonly probeHostPath: CanonicalMountSource | null;
+  /**
+   * S-15: the resolved LOCAL IMAGE ID (`sha256:<64 hex>`) this run must use —
+   * always via `imageExecutionReference()`, never a hand-picked field.
+   *
+   * Required, and deliberately not defaulted to `approvedImageReference()`: a
+   * default would let a caller that never resolved an identity silently run the
+   * mutable tag again, which is the whole defect. Every caller states which
+   * exact image content it proved.
+   */
+  readonly imageRef: string;
   readonly cpuLimit: number;
   readonly memoryLimitMb: number;
   readonly pidLimit: number;
@@ -260,7 +462,22 @@ export function buildContainerRunArgs(spec: ContainerRunSpec): string[] {
   if (spec.probeHostPath) args.push("--mount", `type=bind,source=${spec.probeHostPath},target=${CONTAINER_PROBE_MOUNT},readonly=true`);
 
   args.push("--workdir", CONTAINER_WORKSPACE_MOUNT);
-  args.push(approvedImageReference());
+
+  // S-15: never pull. The approved image is built locally and inspected; a
+  // silent pull could substitute entirely different content for the same name.
+  // Stated explicitly even though running by immutable id already makes a pull
+  // impossible — a reader should not have to infer the absence of a fetch.
+  args.push("--pull", "never");
+
+  // S-15: the IMMUTABLE local image ID, never `approvedImageReference()`.
+  //
+  // This line used to push the tag, which meant the daemon re-resolved the name
+  // at run time — so isolation could be proven against one image and the work
+  // then run against whatever the tag pointed at moments later. Passing the
+  // image ID closes that window structurally rather than merely detecting it
+  // afterwards: a `sha256:…` ID cannot be repointed, and it is precisely the
+  // identity form the locally built CI image actually has.
+  args.push(spec.imageRef);
   // The command is a fixed argv array — never a shell string.
   for (const c of spec.command) args.push(c);
   return args;
@@ -538,6 +755,31 @@ export class DockerContainerSandboxBackend implements ContainerSandboxBackend {
   readonly isReal = true;
   readonly runtimeExecutableId: Extract<TrustedExecutableId, "docker" | "podman">;
   private lastVerification: SandboxCapabilityReport | null = null;
+  /** S-15: the exact immutable image isolation was proven against. */
+  private verifiedImageIdentity: ResolvedImageIdentity | null = null;
+
+  /**
+   * S-15: safe, immutable provenance for whatever is currently verified.
+   *
+   * `null` until an isolation proof succeeds, and `null` again the moment that
+   * proof is invalidated. A content address is not a secret — it names public
+   * content and carries no path, credential, or command.
+   */
+  get verifiedImage(): ResolvedImageIdentity | null {
+    return this.verifiedImageIdentity;
+  }
+
+  /**
+   * Drop verification evidence that can no longer be true.
+   *
+   * Both fields move together on purpose: leaving `lastVerification` set while
+   * the identity it was about is gone would recreate the exact defect S-15
+   * closes, one layer down.
+   */
+  private invalidateVerification(): void {
+    this.lastVerification = null;
+    this.verifiedImageIdentity = null;
+  }
   private lastStartupDiagnostics: SafeStartupDiagnostics | null = null;
 
   /** SAFE startup diagnostics for the most recent failed verification. */
@@ -551,18 +793,59 @@ export class DockerContainerSandboxBackend implements ContainerSandboxBackend {
   }
 
   /**
-   * DETECTION ONLY. Returns at most `available-unverified`, and once
-   * `verifyIsolation()` has succeeded, returns the verified report it produced.
+   * DETECTION ONLY. Returns at most `available-unverified`, and returns a
+   * previously verified report ONLY while that report is still FRESH (S-15).
+   *
+   * The freshness check is why this is not a plain cache read. `verifyIsolation`
+   * proves a property of one image; the approved reference is a mutable tag, so
+   * the tag can be retargeted immediately afterwards. Until this check existed,
+   * any caller asking `detectCapability()` — without ever calling `execute()` —
+   * was handed `available-and-verified` for content that was no longer there.
+   * Re-checking only inside `execute()` closed the execution path and left the
+   * QUERY path answering with evidence about a different image.
+   *
+   * The distinction that must not blur: this may INVALIDATE verification, and
+   * can never CREATE it. `freshVerificationReport` can only ever return the
+   * cached object, and the fallback is `detectContainerRuntime()`, whose two
+   * possible states are `available-unverified` and `unavailable`. There is no
+   * path here that produces `available-and-verified`.
    */
   detectCapability(): SandboxCapabilityReport {
-    if (this.lastVerification && this.lastVerification.capabilityState === "available-and-verified") return this.lastVerification;
+    const freshness = freshVerificationReport(this.lastVerification, this.verifiedImageIdentity, () => this.currentImageIdentity());
+    if (freshness.invalidate) this.invalidateVerification();
+    if (freshness.report !== null) return freshness.report;
     return detectContainerRuntime();
   }
 
-  /** Is the approved image present locally? Never pulls. */
-  private imageAvailable(runtimeCommand: string): boolean {
+  /**
+   * Resolve the approved reference's identity RIGHT NOW, resolving the trusted
+   * runtime first.
+   *
+   * Used by the freshness gate, which runs outside `verifyIsolation()` and so
+   * has no already-resolved runtime to borrow. An unresolvable or unauthorized
+   * runtime is reported as an unresolved identity rather than throwing: the
+   * caller's question is "is the verified image still there?", and "the runtime
+   * is gone" is a truthful no.
+   */
+  private currentImageIdentity(): ImageIdentityResolution {
+    const resolved = resolveTrustedExecutable(this.runtimeExecutableId, { workspaceRoots: untrustedExecutableRoots(this.options) });
+    if (!resolved.ok || !resolved.value.executionAuthorized) return { ok: false, identity: null, reasonCode: "sandbox-runtime-unavailable" };
+    return this.resolveImageIdentity(resolved.value.command);
+  }
+
+  /**
+   * Resolve the approved reference to its IMMUTABLE identity, right now (S-15).
+   *
+   * This replaces a check that asked only "did inspect exit 0?" and threw the
+   * output away — so the one command that could have said WHICH image was
+   * present reported merely that something was. Nothing pulls: `image inspect`
+   * is a purely local query, and a missing image is a refusal rather than a
+   * fetch.
+   */
+  private resolveImageIdentity(runtimeCommand: string): ImageIdentityResolution {
     const out = spawnSync(runtimeCommand, ["image", "inspect", approvedImageReference()], { shell: false, encoding: "utf8", timeout: PROBE_HELPER_TIMEOUT_MS, killSignal: PROBE_KILL_SIGNAL, maxBuffer: 1024 * 1024, windowsHide: true });
-    return out.status === 0;
+    if (out.status !== 0) return { ok: false, identity: null, reasonCode: "sandbox-image-unavailable" };
+    return parseImageIdentity(typeof out.stdout === "string" ? out.stdout : "");
   }
 
   /**
@@ -611,7 +894,11 @@ export class DockerContainerSandboxBackend implements ContainerSandboxBackend {
 
     // A tag that is not digest-pinned is refused when pinning is required.
     if (REQUIRE_PINNED_IMAGE && !imageIsPinned()) return unverified("sandbox-image-unpinned", "image reference is not digest-pinned");
-    if (!this.imageAvailable(runtime)) return unverified("sandbox-image-unavailable", "approved image not present locally");
+    // S-15: resolve the approved TAG to the exact immutable content it names
+    // right now. Everything below is proven about THIS identity, and the
+    // container is started by it rather than by the tag.
+    const imageIdentity = this.resolveImageIdentity(runtime);
+    if (!imageIdentity.ok) return unverified(imageIdentity.reasonCode, "approved image identity could not be resolved locally");
 
     const probeDir = this.options.probeScriptHostDir ?? resolve(process.cwd(), "dist", "tools");
     const probeWorkspace = this.options.probeWorkspaceHostPath ?? "";
@@ -647,6 +934,9 @@ export class DockerContainerSandboxBackend implements ContainerSandboxBackend {
       memoryLimitMb: 512,
       pidLimit: 64,
       timeoutSeconds: 60,
+      // S-15: start the container by the LOCAL IMAGE ID just resolved, not the
+      // tag — and not a repository digest, which is not a local run reference.
+      imageRef: imageExecutionReference(imageIdentity.identity),
       // Verification always runs fully network-denied: the probe's outbound
       // connection attempt must fail for the run to verify at all.
       networkMode: "none",
@@ -715,6 +1005,11 @@ export class DockerContainerSandboxBackend implements ContainerSandboxBackend {
     const verdict = classifyProbe(findings);
     if (verdict !== "ok") return unverified(verdict, "isolation property unmet");
     if (!removed) return unverified("sandbox-cleanup-incomplete", "container not removed after exit");
+
+    // S-15: verification is EVIDENCE ABOUT ONE IMAGE. Record which one, so a
+    // later execution can prove it is still that image and not merely that a
+    // verification once happened.
+    this.verifiedImageIdentity = imageIdentity.identity;
 
     const verified: SandboxCapabilityReport = {
       backendId: this.backendId,
@@ -821,11 +1116,35 @@ export class DockerContainerSandboxBackend implements ContainerSandboxBackend {
     if (!runIdentity.ok) return blocked(runIdentity.reasonCode);
 
     const containerName = `namla-run-${process.pid}-${this.verifySequence++}`;
+    // S-15: RE-RESOLVE the approved reference and require it to be the exact
+    // image isolation was proven against.
+    //
+    // Verification proves a property of ONE image. The reference naming it is a
+    // mutable tag, so between `verifyIsolation()` and here it can be rebuilt or
+    // retargeted — and the old `available-and-verified` claim would still have
+    // been accepted, because nothing looked. Stale evidence is not evidence:
+    // this fails closed rather than running content nothing has verified.
+    const currentImage = this.resolveImageIdentity(resolved.value.command);
+    if (!currentImage.ok) {
+      this.invalidateVerification();
+      return blocked(currentImage.reasonCode);
+    }
+    if (!sameImageIdentity(currentImage.identity, this.verifiedImageIdentity)) {
+      // The claim is not merely unusable for THIS call — it is false from now
+      // on. Dropping it stops `detectCapability()` continuing to report a
+      // verified state for an image that no longer exists here.
+      this.invalidateVerification();
+      return blocked("sandbox-image-identity-changed");
+    }
+
     const args = buildContainerRunArgs({
       userIdentity: runIdentity.identity,
       workspaceHostPath: mounts.sources.workspace,
       sourceHostPath: mounts.sources.readOnlySource,
       probeHostPath: null,
+      // The verified content address, never the tag. Same single answer to
+      // "what does this run?" that verification used.
+      imageRef: imageExecutionReference(currentImage.identity),
       cpuLimit: permit.policy.limits.cpuLimit,
       memoryLimitMb: permit.policy.limits.memoryLimitMb,
       pidLimit: permit.policy.limits.pidLimit,

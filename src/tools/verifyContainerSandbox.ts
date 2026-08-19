@@ -16,7 +16,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { resolve } from "path";
-import { DockerContainerSandboxBackend, approvedImageReference, imageIsPinned } from "../cognitive/containerSandboxBackend";
+import { DockerContainerSandboxBackend, approvedImageReference, imageIsPinned, type ResolvedImageIdentity } from "../cognitive/containerSandboxBackend";
 import { describeStartupFailure, type SafeStartupDiagnostics } from "../cognitive/containerStartupDiagnostics";
 
 function main(): void {
@@ -27,6 +27,10 @@ function main(): void {
   const probeWorkspace = mkdtempSync(resolve(tmpdir(), "namla-sandbox-verify-"));
   let report;
   let startup: SafeStartupDiagnostics | null = null;
+  // S-15: the immutable identity isolation was actually proven against. A
+  // content address, not a tag — so the CI receipt records WHAT was verified,
+  // not merely that something under that name was.
+  let verifiedImage: ResolvedImageIdentity | null = null;
   try {
     // The authorized mount roots are nominated HERE, by the trusted entry point
     // that created the scratch workspace — never by a permit or policy (§31).
@@ -37,6 +41,7 @@ function main(): void {
       trustedBuildRoot: process.cwd(),
     });
     report = backend.verifyIsolation();
+    verifiedImage = backend.verifiedImage;
     startup = backend.startupDiagnostics;
   } finally {
     rmSync(probeWorkspace, { recursive: true, force: true });
@@ -53,6 +58,18 @@ function main(): void {
     detectionDetail: report.detectionDetail,
     imageReference: approvedImageReference(),
     imagePinned: imageIsPinned(),
+    // S-15: safe immutable provenance — null when isolation was not proven.
+    // A digest names public content: no path, no credential, no command.
+    //
+    // The two fields are DIFFERENT identities and are reported separately
+    // rather than collapsed into one ambiguous value. `verifiedLocalImageId` is
+    // the local image ID (`inspect[].Id`) that isolation was proven against and
+    // that the container was actually run by; CI asserts it equals the real
+    // built image. `verifiedRepoDigest` is registry provenance kept whole
+    // (`repository@sha256:…`) and is null for the locally built CI image, which
+    // has never been pushed — it is recorded, never run.
+    verifiedLocalImageId: verifiedImage ? verifiedImage.localImageId : null,
+    verifiedRepoDigest: verifiedImage ? verifiedImage.repoDigest : null,
     claims: report.claims,
     safeReasonCode: report.safeReasonCode,
     // Startup diagnostics: the SIX safe fields only. Never raw stdout/stderr,
