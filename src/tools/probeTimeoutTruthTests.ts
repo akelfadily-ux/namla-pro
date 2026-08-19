@@ -46,6 +46,7 @@ import {
   PROBE_KILL_SIGNAL,
   classifyProbe,
   claimsFromProbe,
+  containerRemovalProven,
   type ProbeFindings,
 } from "../cognitive/containerSandboxBackend";
 import { classifyContainerStartup, describeStartupFailure } from "../cognitive/containerStartupDiagnostics";
@@ -361,7 +362,17 @@ test("S14-8: cleanup is proven by inspection, not assumed from the remove call",
   const fn = BACKEND_SRC.slice(idx, idx + 700);
   assert.match(fn, /\["rm", "-f", name\]/, "removal is attempted");
   assert.match(fn, /\["inspect", name\]/, "and independently re-checked");
-  assert.match(fn, /return check\.status !== 0;/, "presence decides the answer");
+  // S-16: the verdict comes from the shared fail-closed predicate, never from a
+  // bare `check.status !== 0`. This assertion previously PINNED that bare form,
+  // which is why it survived S-14 — `status` is null whenever the inspect could
+  // not run, and `null !== 0` reported a container as removed on the strength of
+  // never having looked at it. Only a completed, error-free, non-zero exit is
+  // evidence now; the behavioural cases live in containerCleanupProofTests.
+  assert.equal(/check\.status\s*!==\s*0/.test(fn), false, "cleanup must not be decided by a bare status check");
+  assert.match(fn, /return containerRemovalProven\(check\);/, "a completed inspect decides the answer");
+  assert.equal(containerRemovalProven({ status: 1, error: undefined, signal: null }), true, "a completed exit 1 proves absence");
+  assert.equal(containerRemovalProven({ status: 0, error: undefined, signal: null }), false, "exit 0 means the container is still present");
+  assert.equal(containerRemovalProven({ status: null, error: undefined, signal: "SIGKILL" }), false, "a killed inspect proves nothing");
   // Every cleanup spawn is itself bounded.
   const bounded = fn.match(/timeout: PROBE_HELPER_TIMEOUT_MS/g) ?? [];
   assert.equal(bounded.length, 2, "both cleanup spawns carry the named bound");

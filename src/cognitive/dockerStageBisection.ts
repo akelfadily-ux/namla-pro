@@ -20,7 +20,7 @@
  */
 
 import { spawnSync } from "child_process";
-import { approvedImageReference, resolveTrustedWorkspaceIdentity, IMAGE_DEFAULT_IDENTITY, CONTAINER_WORKSPACE_MOUNT, CONTAINER_SOURCE_MOUNT, CONTAINER_PROBE_MOUNT } from "./containerSandboxBackend";
+import { approvedImageReference, containerRemovalProven, resolveTrustedWorkspaceIdentity, IMAGE_DEFAULT_IDENTITY, CONTAINER_WORKSPACE_MOUNT, CONTAINER_SOURCE_MOUNT, CONTAINER_PROBE_MOUNT } from "./containerSandboxBackend";
 import { classifyContainerStartup, type ContainerStderrCategory } from "./containerStartupDiagnostics";
 import type { CanonicalMountSource } from "./safeMountSource";
 
@@ -120,7 +120,7 @@ export class DockerStageRunner implements StageRunner {
   remove(containerName: string): boolean {
     spawnSync(this.dockerCommand, ["rm", "-f", containerName], { shell: false, encoding: "utf8", timeout: 30000, maxBuffer: 65536, windowsHide: true });
     const check = spawnSync(this.dockerCommand, ["inspect", containerName], { shell: false, encoding: "utf8", timeout: 30000, maxBuffer: 65536, windowsHide: true });
-    return check.status !== 0;
+    return containerRemovalProven(check);
   }
 }
 

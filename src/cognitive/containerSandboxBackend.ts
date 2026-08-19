@@ -633,6 +633,58 @@ export const PROBE_HELPER_TIMEOUT_MS = 30000;
 export const PROBE_KILL_SIGNAL = "SIGKILL" as const;
 
 /**
+ * The evidence a container-removal check produced. Structurally a `spawnSync`
+ * result, so the real return value is passed straight in with no adapter.
+ */
+export interface ContainerInspectOutcome {
+  readonly status: number | null;
+  readonly error?: Error | undefined;
+  readonly signal?: NodeJS.Signals | null;
+}
+
+/**
+ * Was the container PROVEN absent by a check that ACTUALLY RAN (S-16)?
+ *
+ * Both cleanup paths used to decide this with `check.status !== 0`, and that
+ * single expression inverted the meaning of the only evidence they had.
+ * `spawnSync`'s `status` is TRI-STATE, not boolean:
+ *
+ *   0          the inspect ran and DESCRIBED the container — it is still there.
+ *   non-zero   the inspect ran and reported no such object — proven absent.
+ *   null       there is NO exit code, because the process never produced one:
+ *              the runtime binary was missing (ENOENT), the call timed out
+ *              (ETIMEDOUT), the output overran `maxBuffer` (ENOBUFS), or a
+ *              signal killed it. Nothing whatsoever was observed.
+ *
+ * `null !== 0` is `true`, so every "we could not look" outcome was read as "we
+ * looked and it was gone" — and the caller then reported cleanup complete, or
+ * raised the sandbox to `available-and-verified`, while a container could still
+ * be running with the workspace bind-mounted read-write.
+ *
+ * It failed open exactly where it mattered most. S-14 added the `!removed`
+ * guard because a TIMED-OUT container is the one most likely to survive
+ * `--rm` — but a wedged daemon is precisely what makes the follow-up inspect
+ * time out as well, so the guard was defeated by the same fault it was watching
+ * for.
+ *
+ * The rule below is the one `processTree.ts` already applies to its process
+ * snapshot ("unresolvable tool, spawn failure, timeout, buffer overrun, or
+ * non-zero exit: no evidence"): absence is proven ONLY by a completed,
+ * error-free check that said so. Everything else is UNKNOWN, and unknown is
+ * never removed.
+ */
+export function containerRemovalProven(check: ContainerInspectOutcome): boolean {
+  // The call itself failed, so nothing it "reported" is evidence of anything.
+  if (check.error) return false;
+  // No exit code means the process never completed — a signal, a timeout, or a
+  // spawn that never happened. Absence of an answer is not an answer.
+  if (typeof check.status !== "number") return false;
+  // It ran and it answered: zero means the container was described and is still
+  // present; anything else is the runtime saying there is no such object.
+  return check.status !== 0;
+}
+
+/**
  * The cumulative CONFIGURED subprocess timeout budget for one
  * `verifyIsolation()`: probe + image inspect + remove + re-inspect.
  *
@@ -1050,7 +1102,7 @@ export class DockerContainerSandboxBackend implements ContainerSandboxBackend {
   private forceRemove(runtime: string, name: string): boolean {
     spawnSync(runtime, ["rm", "-f", name], { shell: false, encoding: "utf8", timeout: PROBE_HELPER_TIMEOUT_MS, killSignal: PROBE_KILL_SIGNAL, maxBuffer: 65536, windowsHide: true });
     const check = spawnSync(runtime, ["inspect", name], { shell: false, encoding: "utf8", timeout: PROBE_HELPER_TIMEOUT_MS, killSignal: PROBE_KILL_SIGNAL, maxBuffer: 65536, windowsHide: true });
-    return check.status !== 0; // non-zero inspect == not present == removed
+    return containerRemovalProven(check);
   }
 
   /**

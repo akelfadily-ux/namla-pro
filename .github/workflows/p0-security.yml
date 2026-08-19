@@ -266,6 +266,19 @@ jobs:
           echo "daemon image Id: $REAL_ID"
           REAL_ID="$REAL_ID" node -e "const r=require('./container-sandbox-capability.json');const real=process.env.REAL_ID;if(r.verifiedLocalImageId!==real){console.error('FAIL: verified identity',r.verifiedLocalImageId,'is not the built image',real);process.exit(1)}if(!/^sha256:[0-9a-f]{64}$/.test(r.verifiedLocalImageId)){console.error('FAIL: execution identity is not a local image ID');process.exit(1)}if(r.verifiedRepoDigest!==null&&!/@sha256:[0-9a-f]{64}$/.test(r.verifiedRepoDigest)){console.error('FAIL: repo digest lost its repository context');process.exit(1)}if(r.verifiedRepoDigest===r.verifiedLocalImageId){console.error('FAIL: repo digest and image Id must never be the same field');process.exit(1)}console.log('execution identity confirmed against the built image | repoDigest',r.verifiedRepoDigest)"
 
+      # S-16: prove the CLEANUP predicate against the REAL daemon.
+      #
+      # The unit suite drives `containerRemovalProven` with synthetic and
+      # node-generated spawn results. That cannot establish what a real
+      # `docker inspect` returns, and the defect S-16 repairs was exactly a
+      # wrong belief about that. This starts a real container, proves it reads
+      # as PRESENT, removes it, proves it reads as ABSENT, and then proves that
+      # an unrunnable runtime and a genuinely timed-out docker call are NOT
+      # reported as removal — the two cases that previously returned "removed"
+      # on the strength of never having looked.
+      - name: Prove container cleanup is never claimed from an unknown result
+        run: node dist/tools/verifyContainerCleanupProof.js
+
       - name: Confirm no container survived
         if: always()
         run: |
