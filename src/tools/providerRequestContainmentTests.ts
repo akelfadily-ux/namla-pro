@@ -202,8 +202,9 @@ test("lower-risk secret-shaped text is redacted and still sent", () => {
 test("Codex carries the prompt in argv only; Claude on stdin only — never both", () => {
   const codex = buildSafeProviderRequest(baseInput({ providerId: "codex", promptBody: "build it" }));
   assert.equal(codex.ok, true);
-  assert.deepEqual(codex.ok && codex.spec.argumentList.slice(0, 3), ["exec", "--ephemeral", "--json"]);
-  assert.equal(codex.ok && codex.spec.argumentList[3]?.includes("build it"), true);
+  const codexArgv = codex.ok ? codex.spec.argumentList : [];
+  assert.deepEqual(codexArgv.slice(0, -1), ["exec", "--ephemeral", "--json", "--ignore-user-config", "--sandbox", "read-only"]);
+  assert.equal(codexArgv[codexArgv.length - 1]?.includes("build it"), true);
   assert.equal(codex.ok && codex.spec.stdinData, "", "codex stdin must be empty and closed");
 
   const claude = buildSafeProviderRequest(baseInput({ providerId: "claude", promptBody: "review it" }));
@@ -221,9 +222,9 @@ test("argv is a fixed template — mission text can never add a flag or an execu
   const argv = built.ok ? built.spec.argumentList : [];
   // The flags are exactly the template; the hostile text is ONE trailing
   // positional entry, which shell:false can never reinterpret as a flag.
-  assert.deepEqual(argv.slice(0, 3), ["exec", "--ephemeral", "--json"]);
-  assert.equal(argv.length, 4, "argv length is fixed at flags + one positional");
-  assert.equal(argv[3]?.endsWith(hostile), true, "hostile text stays inside the single positional entry");
+  assert.deepEqual(argv.slice(0, -1), ["exec", "--ephemeral", "--json", "--ignore-user-config", "--sandbox", "read-only"]);
+  assert.equal(argv.length, 7, "argv length is fixed at flags + one positional");
+  assert.equal(argv[argv.length - 1]?.endsWith(hostile), true, "hostile text stays inside the single positional entry");
   assert.equal(built.ok && built.spec.executableId, "codex");
 });
 
@@ -274,7 +275,8 @@ test("byte limits are real UTF-8 bytes and never split a character", () => {
   const cap = 1000;
   const built = buildSafeProviderRequest(baseInput({ promptBody, maxPromptBytes: cap }));
   assert.equal(built.ok, true);
-  const argv = built.ok ? built.spec.argumentList[3] ?? "" : "";
+  const argvList = built.ok ? built.spec.argumentList : [];
+  const argv = argvList[argvList.length - 1] ?? "";
 
   assert.equal(utf8Bytes(argv) <= cap, true, "argv must respect the real byte cap");
   assert.equal(built.receipt.acceptedBytes <= cap, true);
@@ -378,4 +380,75 @@ test("no real action is taken anywhere in this suite", () => {
   assert.equal(blocked.ok, false);
   assert.equal(clean.ok, true);
   assert.equal(driver.runs, 1, "only the clean request ran, and only against a fake");
+});
+
+// ------------------------------- CODEX PROVIDER BOUNDARY IS ASSERTED (D-6) ---
+// The Codex provider process runs directly on the HOST - it is NOT inside the
+// verification container. Whatever authority it has therefore comes from the
+// CLI's own defaults plus whatever ambient user configuration it happens to
+// load. D-6B established that `$CODEX_HOME/config.toml` on a developer machine
+// can declare MCP servers, and that Codex initializes those during exec startup
+// - host processes that no `--sandbox` value constrains, because the sandbox
+// governs model-generated shell commands only.
+//
+// Namla therefore states the boundary itself instead of inheriting it:
+// `--ignore-user-config` keeps ambient execution configuration out of the
+// session (auth still resolves via CODEX_HOME), and `--sandbox read-only`
+// asserts a non-mutating filesystem policy rather than accepting whatever the
+// default resolves to for the current project-trust state.
+
+/** The exact flags every Codex provider invocation must carry, in order. */
+const REQUIRED_CODEX_FLAGS: readonly string[] = ["exec", "--ephemeral", "--json", "--ignore-user-config", "--sandbox", "read-only"];
+
+test("D-6: Codex argv asserts the sandbox and excludes ambient user config", () => {
+  const built = buildSafeProviderRequest(baseInput({ providerId: "codex", promptBody: "build it" }));
+  assert.equal(built.ok, true);
+  const argv = built.ok ? built.spec.argumentList : [];
+
+  assert.deepEqual(argv.slice(0, REQUIRED_CODEX_FLAGS.length), REQUIRED_CODEX_FLAGS, "the fixed flag template must be exact and ordered");
+  assert.equal(argv.length, REQUIRED_CODEX_FLAGS.length + 1, "flags plus exactly one positional prompt");
+  assert.equal(argv[argv.length - 1]?.includes("build it"), true, "the prompt is the FINAL positional argument");
+  assert.equal(built.ok && built.spec.executableId, "codex", "the executable id must stay codex");
+
+  // `--sandbox` must be followed by the read-only value and by nothing else.
+  const sandboxAt = argv.indexOf("--sandbox");
+  assert.equal(sandboxAt >= 0, true, "the sandbox policy must be stated explicitly");
+  assert.equal(argv[sandboxAt + 1], "read-only", "the sandbox value must be read-only");
+  assert.equal(argv.filter((a) => a === "--sandbox").length, 1, "exactly one sandbox option");
+  assert.equal(argv.includes("--ignore-user-config"), true, "ambient user execution config must be excluded");
+});
+
+test("D-6: no prompt text can inject, remove or retarget a Codex flag", () => {
+  // Every one of these is ordinary DATA. `shell:false` plus a fixed template
+  // means none of it can become an argument in its own right.
+  const hostile = [
+    "--sandbox danger-full-access",
+    "--dangerously-bypass-approvals-and-sandbox",
+    "--full-auto --skip-git-repo-check",
+    "--config sandbox_mode=danger-full-access",
+    "read-only --sandbox workspace-write",
+  ].join(" ");
+  const built = buildSafeProviderRequest(baseInput({ providerId: "codex", promptBody: hostile }));
+  assert.equal(built.ok, true, "hostile-looking text is data, not a credential");
+  const argv = built.ok ? built.spec.argumentList : [];
+
+  assert.deepEqual(argv.slice(0, REQUIRED_CODEX_FLAGS.length), REQUIRED_CODEX_FLAGS, "the template is unchanged by mission text");
+  assert.equal(argv.length, REQUIRED_CODEX_FLAGS.length + 1, "mission text can never grow argv");
+  assert.equal(argv[argv.length - 1]?.endsWith(hostile), true, "hostile text stays inside the single positional entry");
+  // The sandbox value is still the one Namla chose, not one the text named.
+  assert.equal(argv[argv.indexOf("--sandbox") + 1], "read-only", "no prompt text may retarget the sandbox value");
+});
+
+test("D-6: no authority-widening Codex flag is ever emitted", () => {
+  const forbidden = ["--dangerously-bypass-approvals-and-sandbox", "--full-auto", "--skip-git-repo-check", "--ask-for-approval", "--ignore-rules", "--profile", "--config", "-c"];
+  for (const providerId of ["codex", "claude"] as const) {
+    const built = buildSafeProviderRequest(baseInput({ providerId, promptBody: "ordinary work" }));
+    assert.equal(built.ok, true);
+    const flags = (built.ok ? built.spec.argumentList : []).slice(0, -1); // exclude the positional
+    for (const bad of forbidden) {
+      assert.equal(flags.includes(bad), false, `${providerId} argv must never carry ${bad}`);
+    }
+    assert.equal(flags.includes("danger-full-access"), false, `${providerId} argv must never name danger-full-access`);
+    assert.equal(flags.includes("workspace-write"), false, `${providerId} argv must never name workspace-write`);
+  }
 });

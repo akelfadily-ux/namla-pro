@@ -74,7 +74,11 @@ export function runDemoCodexInvocationFix() {
   const codexRes = codexDriver.call({ antId: "ant-codex", providerId: "codex", taskId: "t", role: "build" });
   const spec = codexSpy.lastSpec;
   set("codex-invocation-has-exec-ephemeral-json", !!spec && spec.executableId === "codex" && spec.argumentList[0] === "exec" && spec.argumentList[1] === "--ephemeral" && spec.argumentList[2] === "--json");
-  set("codex-prompt-is-final-positional", !!spec && spec.argumentList.length === 4 && spec.argumentList[3] === PROMPT);
+  // The contract is POSITIONAL, not arithmetic: the prompt is the last entry and
+  // appears nowhere else, so shell:false can never reinterpret it as a flag. Stated
+  // without a hard-coded flag count so the security flags can be asserted without
+  // silently relaxing this guard.
+  set("codex-prompt-is-final-positional", !!spec && spec.argumentList[spec.argumentList.length - 1] === PROMPT && spec.argumentList.filter((a) => a === PROMPT).length === 1 && spec.argumentList.slice(0, -1).every((a) => !a.includes(PROMPT)));
   set("codex-stdin-empty", !!spec && spec.stdinData === "");
   set("codex-agent-message-extracted", codexRes.ok === true && (codexRes.payload?.summary ?? "").includes("CODEX_OK"));
 

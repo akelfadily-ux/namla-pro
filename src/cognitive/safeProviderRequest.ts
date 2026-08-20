@@ -98,7 +98,15 @@ const REQUEST_EXECUTABLE_MAP: Readonly<Record<ProviderExecutableId, string>> = {
  * `shell: false` a positional argv entry can never be reinterpreted as a flag.
  */
 const CLAUDE_FLAGS: readonly string[] = ["--print", "--output-format", "json"];
-const CODEX_FLAGS: readonly string[] = ["exec", "--ephemeral", "--json"];
+// `--ignore-user-config` and `--sandbox read-only` are SECURITY flags, not
+// ergonomics. The Codex provider process runs directly on the host, outside the
+// verification container, so its authority would otherwise be whatever the CLI
+// default resolves to plus whatever `$CODEX_HOME/config.toml` happens to
+// declare — including MCP servers, which Codex starts during exec startup as
+// host processes that no sandbox mode constrains (`--sandbox` governs
+// model-generated shell commands only). Namla states the boundary instead of
+// inheriting it. Auth still resolves through CODEX_HOME.
+const CODEX_FLAGS: readonly string[] = ["exec", "--ephemeral", "--json", "--ignore-user-config", "--sandbox", "read-only"];
 
 /** Environment variable NAMES never forwarded to a child, whatever the allowlist says. */
 export const FORBIDDEN_ENV_NAME_PATTERN = /(TOKEN|SECRET|PASSWORD|COOKIE|SESSION|PRIVATE_?KEY|API_?KEY|CREDENTIAL|AUTH|\bKEY\b|PRIVATE)/i;
