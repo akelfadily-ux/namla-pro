@@ -318,15 +318,51 @@ export function ensureTwinColonyWorkspace(workspaceId: string): SmokeWorkspaceRe
 }
 
 /**
+ * Provider/tool CONTROL-PLANE paths — the namespace a provider CLI reads as its
+ * OWN configuration rather than as project source.
+ *
+ * A provider chooses both the path and the content of every artifact it
+ * proposes. Claude Code resolves `<cwd>/.claude/settings.json` and
+ * `<cwd>/CLAUDE.md` from the directory it is launched in, which for a live run
+ * IS the workspace those artifacts land in — so an artifact named this way stops
+ * being data and becomes configuration for the NEXT provider process. A
+ * `SessionStart` command hook declared there executes a host command that is
+ * represented in no parsed provider payload, no verification allowlist and no
+ * container sandbox. Build Law: "a provider never writes files, runs commands
+ * … or bypasses review."
+ *
+ * Matching is by whole path COMPONENT, case-insensitively (the live workspaces
+ * run on a case-insensitive filesystem), so `docs/CLAUDE-format.md` — which no
+ * provider CLI loads — stays a perfectly ordinary artifact.
+ */
+const PROVIDER_CONTROL_DIRS: ReadonlySet<string> = new Set([".claude"]);
+const PROVIDER_CONTROL_FILES: ReadonlySet<string> = new Set(["claude.md", "claude.local.md", ".mcp.json", "agents.md", "agents.override.md"]);
+
+/** True when `relPath` names provider configuration rather than project source. */
+function isProviderControlPlanePath(relPath: string): boolean {
+  const segments = relPath.split(/[/\\]/).filter((segment) => segment.length > 0);
+  if (segments.length === 0) return false;
+  // The whole `.claude/` namespace is configuration: settings, hooks, skills,
+  // agents, commands and rules all live inside it at varying depths.
+  for (const segment of segments) {
+    if (PROVIDER_CONTROL_DIRS.has(segment.toLowerCase())) return true;
+  }
+  return PROVIDER_CONTROL_FILES.has((segments[segments.length - 1] as string).toLowerCase());
+}
+
+/**
  * Write one bounded live-objective project file at a validated relative path
  * inside the objective workspace. Refuses traversal, absolute, protected names,
- * disallowed extensions, oversize, or any resolved path escaping the workspace.
+ * provider control-plane names, disallowed extensions, oversize, or any resolved
+ * path escaping the workspace.
  */
 export function writeLiveObjectiveFile(handle: SmokeWorkspaceHandle, relPath: string, content: string, maxBytes: number, options: { readonly allowOverwrite?: boolean } = {}): { readonly ok: boolean; readonly reasonCode: string; readonly acceptedBytes?: number; readonly rejectedBytes?: number } {
-  // Policy checks that are SPECIFIC to this boundary (protected names, allowed
-  // extensions) stay here; ALL path-security and byte accounting is delegated to
-  // the single SafeWorkspacePathResolver — no duplicated path logic.
+  // Policy checks that are SPECIFIC to this boundary (protected names, provider
+  // control-plane names, allowed extensions) stay here; ALL path-security and
+  // byte accounting is delegated to the single SafeWorkspacePathResolver — no
+  // duplicated path logic.
   if (LIVE_PROTECTED.test(relPath)) return { ok: false, reasonCode: "protected-path" };
+  if (isProviderControlPlanePath(relPath)) return { ok: false, reasonCode: "provider-control-path" };
   if (!LIVE_FILE_EXT.test(relPath)) return { ok: false, reasonCode: "disallowed-extension" };
   const opened = SafeWorkspacePathResolver.forRoot(handle.absolutePath);
   if (!opened.ok) return { ok: false, reasonCode: opened.reasonCode };

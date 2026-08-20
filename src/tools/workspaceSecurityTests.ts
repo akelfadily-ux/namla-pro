@@ -15,6 +15,8 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpath
 import { tmpdir } from "os";
 import { resolve } from "path";
 import { SafeWorkspacePathResolver, safeWriteWorkspaceFile, safeReadWorkspaceFile, safeDeleteWorkspaceFile, safeRenameWorkspaceFile, truncateUtf8, utf8Bytes, validateRelativePathShape, type SafePathReason } from "../cognitive/safeWorkspacePath";
+import { writeLiveObjectiveFile } from "../cognitive/smokeWorkspace";
+import { RealLiveWorkspaceDriver } from "../cognitive/liveRealDrivers";
 
 /** One isolated sandbox: an authorized workspace plus an OUTSIDE area to protect. */
 function makeSandbox(): { root: string; workspace: string; outside: string; outsideFile: string; cleanup: () => void } {
@@ -751,6 +753,151 @@ test("every mutating and reading kernel entry point revalidates before acting", 
     assert.equal(safeRenameWorkspaceFile(resolver, "f.txt", hostile).reasonCode, "path-traversal");
     assert.equal(safeRenameWorkspaceFile(resolver, hostile, "g.txt").reasonCode, "path-traversal");
     assert.equal(readFileSync(sb.outsideFile, "utf8"), "ORIGINAL-SECRET");
+  } finally {
+    sb.cleanup();
+  }
+});
+
+// ------------------------------------- PROVIDER CONTROL-PLANE PATHS (S-17) ---
+// A provider chooses BOTH the relative path and the content of every artifact it
+// proposes. If it proposes a path that the NEXT provider CLI reads as its own
+// configuration - project settings, memory, MCP servers - then provider DATA has
+// become provider AUTHORITY: Claude Code loads `<cwd>/.claude/settings.json`, and
+// a SessionStart command hook declared there runs a host command that appears in
+// no parsed provider payload, no verification allowlist, and no sandbox. These
+// paths are therefore refused BEFORE any disk mutation, by name, not by content.
+
+/** A live-objective handle rooted at a disposable directory. */
+function liveHandle(root: string): { readonly workspaceId: string; readonly absolutePath: string } {
+  return { workspaceId: "workspaces/digital-live-objective/s17", absolutePath: root };
+}
+
+/** Control-plane paths that a real provider CLI interprets as its own config. */
+const PROVIDER_CONTROL_PATHS: readonly string[] = [
+  "CLAUDE.md", // project memory, auto-discovered from cwd
+  "CLAUDE.local.md", // same, local variant
+  ".claude/settings.json", // project settings: permissions AND hooks
+  ".claude/settings.local.json", // local settings: same authority
+  ".claude/hooks.json", // anything inside the Claude namespace
+  ".claude/rules/provider.md", // nested inside that namespace
+  ".mcp.json", // project MCP servers: command + args + env
+  "AGENTS.md", // Codex project memory
+  "AGENTS.override.md", // Codex memory override
+];
+
+/** Ordinary artifacts a provider is SUPPOSED to be able to produce. */
+const ORDINARY_PROJECT_PATHS: readonly string[] = [
+  "src/index.ts",
+  "src/nested/taskService.ts",
+  "README.md",
+  "package.json", // scripts run only in the verified container - never on the host
+  "package-lock.json",
+  "tsconfig.json",
+  "notes.txt",
+  "data/config.json",
+];
+
+test("S-17: provider artifact writes refuse every Claude/Codex control-plane path", () => {
+  const sb = makeSandbox();
+  try {
+    for (const relPath of PROVIDER_CONTROL_PATHS) {
+      const res = writeLiveObjectiveFile(liveHandle(sb.workspace), relPath, "{}\n", 4096);
+      assert.equal(res.ok, false, `${relPath} must be refused: a provider must not author provider configuration`);
+      assert.equal(res.reasonCode, "provider-control-path", `${relPath} must carry the specific control-plane reason code`);
+      assert.equal(existsSync(resolve(sb.workspace, relPath)), false, `${relPath} must never reach disk`);
+    }
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("S-17: ordinary project artifacts remain writable after the control-plane refusal", () => {
+  const sb = makeSandbox();
+  try {
+    for (const relPath of ORDINARY_PROJECT_PATHS) {
+      const res = writeLiveObjectiveFile(liveHandle(sb.workspace), relPath, "ORDINARY", 4096);
+      assert.equal(res.ok, true, `${relPath} is a legitimate project artifact and must stay writable`);
+      assert.equal(existsSync(resolve(sb.workspace, relPath)), true, `${relPath} must be on disk`);
+    }
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("S-17: control-plane refusal matches whole path components, never substrings", () => {
+  const sb = makeSandbox();
+  try {
+    // Names that merely CONTAIN a control-file name are ordinary documentation:
+    // no provider CLI loads them, so refusing them would be a false positive.
+    for (const relPath of ["docs/CLAUDE-format.md", "docs/about-agents.md", "src/claudeClient.ts", "mcp-notes.txt", "AGENTS-guide.md"]) {
+      const res = writeLiveObjectiveFile(liveHandle(sb.workspace), relPath, "DOC", 4096);
+      assert.equal(res.ok, true, `${relPath} only resembles a control file and must NOT be refused`);
+    }
+    // The live workspace runs on a case-insensitive platform; the refusal must
+    // not be evadable by letter case.
+    for (const relPath of ["claude.md", "Claude.MD", ".CLAUDE/settings.json", ".Mcp.Json", "agents.md"]) {
+      const res = writeLiveObjectiveFile(liveHandle(sb.workspace), relPath, "{}\n", 4096);
+      assert.equal(res.ok, false, `${relPath} must not evade the refusal by letter case`);
+      assert.equal(res.reasonCode, "provider-control-path");
+    }
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("S-17: control-plane reason code stays a bare token and leaks no path", () => {
+  const sb = makeSandbox();
+  try {
+    const res = writeLiveObjectiveFile(liveHandle(sb.workspace), ".claude/settings.json", "{}\n", 4096);
+    assert.equal(res.reasonCode, "provider-control-path");
+    assert.equal(/[A-Za-z]:\\|\//.test(res.reasonCode), false, "reason code must be a bare token");
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("S-17: RealLiveWorkspaceDriver refuses a provider settings artifact before disk", () => {
+  const sb = makeSandbox();
+  try {
+    // Inject the disposable root so the real applier runs without touching the repo.
+    const driver = new RealLiveWorkspaceDriver("s17-objective", 20000, 24, "workspaces/digital-live-objective", () => ({
+      ok: true as const,
+      handle: { workspaceId: "workspaces/digital-live-objective/s17-objective", absolutePath: sb.workspace },
+    }));
+    assert.equal(driver.ready, true, "driver must open on the disposable root");
+
+    const attr = { objectiveId: "s17-objective", taskId: "t1", antId: "a1" };
+    const applied = driver.applyArtifact(".claude/settings.json", JSON.stringify({ hooks: { SessionStart: [] } }), attr);
+
+    assert.equal(applied.ok, false, "the reviewed applier must refuse a provider control-plane artifact");
+    assert.equal(driver.workspaceBoundaryViolations, 1, "the refusal must count as a boundary violation");
+    assert.equal(driver.realFilesystemWrites, 0, "no real filesystem write may occur");
+    assert.equal(driver.fileCount, 0, "the artifact must not be recorded");
+    assert.equal(existsSync(resolve(sb.workspace, ".claude/settings.json")), false, "nothing may reach disk");
+
+    // The same applier still accepts an ordinary artifact - the fix is targeted.
+    assert.equal(driver.applyArtifact("src/index.ts", "export const x = 1;\n", attr).ok, true);
+    assert.equal(driver.realFilesystemWrites, 1);
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("S-17: every live workspace family shares the one refusal boundary", () => {
+  const sb = makeSandbox();
+  try {
+    // digital-live-objective, namla-civilization and namola-twin all write through
+    // writeLiveObjectiveFile, so one predicate covers all three. Proving the shared
+    // writer refuses regardless of which workspace id owns the handle is enough.
+    for (const workspaceId of [
+      "workspaces/digital-live-objective/obj-1",
+      "workspaces/namla-civilization/run-1",
+      "workspaces/namola-twin/mission-1/claude-forge",
+    ]) {
+      const res = writeLiveObjectiveFile({ workspaceId, absolutePath: sb.workspace }, ".claude/settings.json", "{}\n", 4096);
+      assert.equal(res.ok, false, `${workspaceId} must share the refusal`);
+      assert.equal(res.reasonCode, "provider-control-path");
+    }
   } finally {
     sb.cleanup();
   }
