@@ -46,7 +46,7 @@ import {
   PROBE_KILL_SIGNAL,
   classifyProbe,
   claimsFromProbe,
-  containerRemovalProven,
+  containerAbsenceProven,
   type ProbeFindings,
 } from "../cognitive/containerSandboxBackend";
 import { classifyContainerStartup, describeStartupFailure } from "../cognitive/containerStartupDiagnostics";
@@ -354,25 +354,30 @@ test("S14-7: cleanup failure after a timeout is still a failure, and keeps the t
   assert.notEqual(describeStartupFailure(d), describeStartupFailure(rejected), "a timeout and a rejected run must not describe identically");
 });
 
-test("S14-8: cleanup is proven by inspection, not assumed from the remove call", () => {
-  // `forceRemove` returns the result of a follow-up `inspect`, so "removed"
-  // means the container is actually gone rather than that a command was issued.
+test("S14-8: cleanup is proven by a successful enumeration, not assumed from the remove call", () => {
+  // `forceRemove` returns the result of a follow-up ENUMERATION, so "removed"
+  // means the container was actually absent from a successful listing rather
+  // than that a removal command was issued.
   const idx = BACKEND_SRC.indexOf("private forceRemove(");
   assert.notEqual(idx, -1);
   const fn = BACKEND_SRC.slice(idx, idx + 700);
   assert.match(fn, /\["rm", "-f", name\]/, "removal is attempted");
-  assert.match(fn, /\["inspect", name\]/, "and independently re-checked");
-  // S-16: the verdict comes from the shared fail-closed predicate, never from a
-  // bare `check.status !== 0`. This assertion previously PINNED that bare form,
-  // which is why it survived S-14 — `status` is null whenever the inspect could
-  // not run, and `null !== 0` reported a container as removed on the strength of
-  // never having looked at it. Only a completed, error-free, non-zero exit is
-  // evidence now; the behavioural cases live in containerCleanupProofTests.
-  assert.equal(/check\.status\s*!==\s*0/.test(fn), false, "cleanup must not be decided by a bare status check");
-  assert.match(fn, /return containerRemovalProven\(check\);/, "a completed inspect decides the answer");
-  assert.equal(containerRemovalProven({ status: 1, error: undefined, signal: null }), true, "a completed exit 1 proves absence");
-  assert.equal(containerRemovalProven({ status: 0, error: undefined, signal: null }), false, "exit 0 means the container is still present");
-  assert.equal(containerRemovalProven({ status: null, error: undefined, signal: "SIGKILL" }), false, "a killed inspect proves nothing");
+  assert.match(fn, /containerEnumerationArgs\(\)/, "and independently re-checked by enumeration");
+  // S-16: the verdict comes from the shared fail-closed predicate. This
+  // assertion previously PINNED the bare `status !== 0` form, which is why the
+  // defect survived S-14. Two successive corrections followed: `status` is null
+  // whenever the query could not run, AND a completed non-zero status means only
+  // that the query failed. The behavioural cases live in containerCleanupProofTests.
+  assert.equal(/status\s*!==\s*0/.test(fn), false, "cleanup must not be decided by a bare status check");
+  assert.match(fn, /return containerAbsenceProven\(name, query\);/, "an affirmative enumeration decides the answer");
+  // A completed non-zero exit establishes nothing: Docker returns 1 both for
+  // an object that is not there and for a daemon it could not reach. Only a
+  // SUCCESSFUL enumeration omitting the target settles it.
+  const N = "namla-verify-1-0";
+  assert.equal(containerAbsenceProven(N, { status: 1, error: undefined, signal: null, stdout: "" }), false, "a completed exit 1 proves nothing");
+  assert.equal(containerAbsenceProven(N, { status: 0, error: undefined, signal: null, stdout: JSON.stringify(N) }), false, "an enumerated target is still present");
+  assert.equal(containerAbsenceProven(N, { status: 0, error: undefined, signal: null, stdout: "" }), true, "a successful empty enumeration proves absence");
+  assert.equal(containerAbsenceProven(N, { status: null, error: undefined, signal: "SIGKILL", stdout: "" }), false, "a killed query proves nothing");
   // Every cleanup spawn is itself bounded.
   const bounded = fn.match(/timeout: PROBE_HELPER_TIMEOUT_MS/g) ?? [];
   assert.equal(bounded.length, 2, "both cleanup spawns carry the named bound");

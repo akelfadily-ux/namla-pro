@@ -20,7 +20,7 @@
  */
 
 import { spawnSync } from "child_process";
-import { approvedImageReference, containerRemovalProven, resolveTrustedWorkspaceIdentity, IMAGE_DEFAULT_IDENTITY, CONTAINER_WORKSPACE_MOUNT, CONTAINER_SOURCE_MOUNT, CONTAINER_PROBE_MOUNT } from "./containerSandboxBackend";
+import { approvedImageReference, containerAbsenceProven, containerEnumerationArgs, resolveTrustedWorkspaceIdentity, IMAGE_DEFAULT_IDENTITY, CONTAINER_WORKSPACE_MOUNT, CONTAINER_SOURCE_MOUNT, CONTAINER_PROBE_MOUNT } from "./containerSandboxBackend";
 import { classifyContainerStartup, type ContainerStderrCategory } from "./containerStartupDiagnostics";
 import type { CanonicalMountSource } from "./safeMountSource";
 
@@ -119,8 +119,8 @@ export class DockerStageRunner implements StageRunner {
 
   remove(containerName: string): boolean {
     spawnSync(this.dockerCommand, ["rm", "-f", containerName], { shell: false, encoding: "utf8", timeout: 30000, maxBuffer: 65536, windowsHide: true });
-    const check = spawnSync(this.dockerCommand, ["inspect", containerName], { shell: false, encoding: "utf8", timeout: 30000, maxBuffer: 65536, windowsHide: true });
-    return containerRemovalProven(check);
+    const query = spawnSync(this.dockerCommand, [...containerEnumerationArgs()], { shell: false, encoding: "utf8", timeout: 30000, killSignal: "SIGKILL", maxBuffer: 262144, windowsHide: true });
+    return containerAbsenceProven(containerName, query);
   }
 }
 

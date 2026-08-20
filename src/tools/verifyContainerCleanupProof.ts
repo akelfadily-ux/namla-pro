@@ -3,7 +3,7 @@
  * REAL container runtime, because mocks cannot establish that the shapes a real
  * daemon produces are the shapes the predicate was written for.
  *
- * The unit suite proves `containerRemovalProven` over synthetic and
+ * The unit suite proves `containerAbsenceProven` over synthetic and
  * node-generated `spawnSync` results. That is necessary and not sufficient: the
  * defect this milestone repairs was precisely a wrong belief about what a real
  * `docker inspect` returns. So this tool drives the SAME predicate with results
@@ -29,7 +29,7 @@
  */
 
 import { spawnSync } from "child_process";
-import { containerRemovalProven, approvedImageReference, PROBE_HELPER_TIMEOUT_MS, PROBE_KILL_SIGNAL } from "../cognitive/containerSandboxBackend";
+import { containerAbsenceProven, containerEnumerationArgs, approvedImageReference, PROBE_HELPER_TIMEOUT_MS, PROBE_KILL_SIGNAL } from "../cognitive/containerSandboxBackend";
 import { resolveTrustedExecutable } from "../cognitive/trustedExecutableRegistry";
 
 /** One bounded runtime call, killed uncatchably, exactly as the backend does. */
@@ -53,42 +53,55 @@ function main(): void {
   const name = `namla-s16-cleanup-${process.pid}`;
 
   try {
-    // ---- 1. a container that REALLY EXISTS must not read as removed --------
-    // Detached and long-lived, so `inspect` has something real to describe.
+    // ---- A. a container that REALLY EXISTS must not read as removed --------
     const started = run(docker, ["run", "-d", "--name", name, "--network", "none", "--entrypoint", "sleep", approvedImageReference(), "120"]);
     record("container started for the proof", started.status === 0);
 
-    const present = run(docker, ["inspect", name]);
-    record("a real existing container: inspect exits 0", present.status === 0);
-    record("a real existing container is NOT reported removed", containerRemovalProven(present) === false);
+    const present = run(docker, containerEnumerationArgs());
+    record("A: a successful enumeration exits 0", present.status === 0);
+    record("A: it lists the real container", (present.stdout ?? "").includes(name));
+    record("A: a real existing container is NOT reported removed", containerAbsenceProven(name, present) === false);
 
-    // ---- 2. after a real removal, absence is provable ----------------------
+    // ---- B. after a real removal, absence is provable ----------------------
     const removedOk = run(docker, ["rm", "-f", name]);
     record("container removal command succeeded", removedOk.status === 0);
 
-    const absent = run(docker, ["inspect", name]);
-    record("a really-removed container: inspect exits non-zero", typeof absent.status === "number" && absent.status !== 0);
-    record("a really-removed container IS reported removed", containerRemovalProven(absent) === true);
+    const absent = run(docker, containerEnumerationArgs());
+    record("B: the enumeration still exits 0", absent.status === 0);
+    record("B: the target no longer appears", !(absent.stdout ?? "").includes(name));
+    record("B: a really-removed container IS reported removed", containerAbsenceProven(name, absent) === true);
 
-    // ---- 3. the runtime itself cannot run: nothing was observed ------------
-    const unrunnable = run("namla-s16-no-such-runtime", ["inspect", name]);
-    record("an unrunnable runtime yields no exit code", unrunnable.status === null);
-    record("an unrunnable runtime is NOT reported removed", containerRemovalProven(unrunnable) === false);
+    // ---- C. OPERATIONAL FAILURE against an unusable daemon endpoint --------
+    // MANDATORY, and the evidence the first S-16 repair lacked. The real Docker
+    // CLI runs normally and returns a numeric non-zero status it also returns
+    // for "no such object" — so the two must not collapse. Only this ONE
+    // invocation is pointed at a dead endpoint; the runner's daemon is never
+    // touched, stopped, or reconfigured.
+    const deadEndpoint = { ...process.env, DOCKER_HOST: "tcp://127.0.0.1:1" };
+    const broken = spawnSync(docker, [...containerEnumerationArgs()], { shell: false, encoding: "utf8", timeout: PROBE_HELPER_TIMEOUT_MS, killSignal: PROBE_KILL_SIGNAL, maxBuffer: 65536, windowsHide: true, env: deadEndpoint });
+    record("C: the CLI ran against a dead endpoint", broken.error === undefined || (broken.error as NodeJS.ErrnoException).code !== "ENOENT");
+    record("C: it did NOT exit 0", broken.status !== 0);
+    record("C: a daemon failure is NOT reported as removal", containerAbsenceProven(name, broken) === false);
 
-    // ---- 4. a REAL docker call that times out ------------------------------
-    // `docker events` blocks waiting for events, so this is a genuine timeout
-    // of the real binary. It creates nothing and leaves nothing behind.
+    // The decisive comparison: B and C are different realities. Before the
+    // correction both produced "removed"; now only B does.
+    record("B and C no longer collapse into one verdict", containerAbsenceProven(name, absent) === true && containerAbsenceProven(name, broken) === false);
+
+    // ---- D. unrunnable runtime and a real timeout still prove nothing ------
+    const unrunnable = run("namla-s16-no-such-runtime", containerEnumerationArgs());
+    record("an unrunnable runtime is NOT reported removed", containerAbsenceProven(name, unrunnable) === false);
     const timedOut = run(docker, ["events"], 1500);
-    record("a real docker call really timed out", timedOut.status === null);
-    record("a timed-out real inspect is NOT reported removed", containerRemovalProven(timedOut) === false);
+    record("a timed-out real call is NOT reported removed", containerAbsenceProven(name, timedOut) === false);
   } finally {
     // Always clean up, whatever happened above.
     run(docker, ["rm", "-f", name]);
   }
 
   // ---- 5. nothing survived ------------------------------------------------
-  const survivors = run(docker, ["ps", "-aq", "--filter", `name=${name}`]);
-  record("no proof container survived", survivors.status === 0 && (survivors.stdout ?? "").trim().length === 0);
+  // Same unfiltered enumeration and same exact-identity predicate — the
+  // survivor check must not reintroduce the filter semantics either.
+  const survivors = run(docker, containerEnumerationArgs());
+  record("no proof container survived", containerAbsenceProven(name, survivors));
 
   const failed = checks.filter((c) => !c.passed);
   console.log(JSON.stringify({ tool: "verifyContainerCleanupProof", platform: process.platform, total: checks.length, passed: checks.length - failed.length, failed: failed.length, checks }, null, 2));
