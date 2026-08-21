@@ -209,7 +209,7 @@ test("Codex carries the prompt in argv only; Claude on stdin only — never both
 
   const claude = buildSafeProviderRequest(baseInput({ providerId: "claude", promptBody: "review it" }));
   assert.equal(claude.ok, true);
-  assert.deepEqual(claude.ok && claude.spec.argumentList, ["--print", "--output-format", "json", "--disallowedTools", "Read,Glob,Grep"]);
+  assert.deepEqual(claude.ok && claude.spec.argumentList, ["--print", "--output-format", "json", "--disallowedTools", "Read,Glob,Grep,Bash,PowerShell"]);
   assert.equal(claude.ok && claude.spec.stdinData.includes("review it"), true);
   // A fixed template means argv length cannot grow with mission text.
   assert.equal(claude.ok && claude.spec.argumentList.length, 5);
@@ -471,11 +471,15 @@ test("D-6: no authority-widening Codex flag is ever emitted", () => {
 // Scope note kept deliberately narrow: this denies the READ tool NAMES proven in
 // D-7B. It is not a claim that no file can be reached by any other mechanism.
 
-/** Tool names Claude must never be able to use for provider generation. */
-const DENIED_CLAUDE_TOOLS: readonly string[] = ["Read", "Glob", "Grep"];
+/**
+ * Tool names Claude must never be able to use for provider generation. D-7 added
+ * the filesystem-read names; D-9B added the shell names. The list is the COMPLETE
+ * deny set because the assertions below compare it by exact equality.
+ */
+const DENIED_CLAUDE_TOOLS: readonly string[] = ["Read", "Glob", "Grep", "Bash", "PowerShell"];
 
 /** Installed 2.1.237: `--disallowedTools <tools...>`, comma or space separated. */
-const CLAUDE_DENY_VALUE = "Read,Glob,Grep";
+const CLAUDE_DENY_VALUE = "Read,Glob,Grep,Bash,PowerShell";
 
 test("D-7: Claude argv denies the native filesystem-read tools", () => {
   const built = buildSafeProviderRequest(baseInput({ providerId: "claude", promptBody: "do the work" }));
@@ -531,6 +535,102 @@ test("D-7: Claude argv introduces no authority-widening option", () => {
 });
 
 test("D-7: the D-6 Codex boundary is unchanged by the Claude hardening", () => {
+  const built = buildSafeProviderRequest(baseInput({ providerId: "codex", promptBody: "build it" }));
+  assert.equal(built.ok, true);
+  const argv = built.ok ? built.spec.argumentList : [];
+  assert.deepEqual(argv.slice(0, -1), ["exec", "--ephemeral", "--json", "--ignore-user-config", "--sandbox", "read-only"], "Codex flags must be byte-for-byte unchanged");
+  assert.equal(argv[argv.length - 1]?.includes("build it"), true, "the Codex prompt is still the final positional");
+  assert.equal(argv.includes("--disallowedTools"), false, "the Claude deny flag must not leak into Codex argv");
+});
+
+// ------------------------- CLAUDE SHELL TOOLS ARE DENIED BY NAMLA (D-9B) ---
+// D-8 measured the exact production Claude invocation attempting BOTH shell
+// tools: `permission_denials` came back as ["PowerShell","Bash"], no command
+// ran, and no marker appeared. That denial came from Claude's own mode:"default"
+// layer with an empty user-scope rule set - NOT from anything Namla asserts.
+//
+// D-9 then showed why that is fragile: Namla forwards HOME/USERPROFILE/APPDATA
+// (the CLI needs them to find its own credentials), so the real user settings
+// file is read on every production call. An ordinary `permissions.allow: ["Bash"]`
+// added there would change the outcome with no Namla code change, no argv change,
+// and no signal in any receipt. Namla strips CLAUDE_CONFIG_DIR and XDG_CONFIG_HOME,
+// so selector-based redirection is already blocked - but the settings file itself
+// is not something Namla controls.
+//
+// Build Law is unqualified: "a provider never writes files, runs commands ..."
+// and "No provider receives a generic run-tool capability". Namla therefore names
+// the shell tools in its own fixed argv, where mission text cannot reach them, so
+// Namla states this boundary independently of ambient settings.
+//
+// Scope: this removes these tool NAMES from the provider-generation session. It is
+// not a claim that no command can execute by any other mechanism, and not OS-level
+// process isolation.
+
+/** Every native tool name Namla denies for provider generation. */
+const D9B_DENIED_TOOLS: readonly string[] = ["Read", "Glob", "Grep", "Bash", "PowerShell"];
+
+/** Installed 2.1.237 canonical identifiers, comma-separated single argument. */
+const D9B_DENY_VALUE = "Read,Glob,Grep,Bash,PowerShell";
+
+test("D-9B: Claude argv denies the native shell tools as well as the read tools", () => {
+  const built = buildSafeProviderRequest(baseInput({ providerId: "claude", promptBody: "do the work" }));
+  assert.equal(built.ok, true);
+  const argv = built.ok ? built.spec.argumentList : [];
+
+  assert.deepEqual(argv, ["--print", "--output-format", "json", "--disallowedTools", D9B_DENY_VALUE], "the Claude flag template must be exact and ordered");
+  assert.equal(built.ok && built.spec.executableId, "claude", "the executable id must stay claude");
+
+  const at = argv.indexOf("--disallowedTools");
+  const denied = (argv[at + 1] ?? "").split(/[,\s]+/).filter(Boolean);
+  for (const tool of D9B_DENIED_TOOLS) {
+    assert.equal(denied.includes(tool), true, `${tool} must be denied by name`);
+    assert.equal(denied.filter((d) => d === tool).length, 1, `${tool} must appear exactly once`);
+  }
+  assert.equal(denied.length, D9B_DENIED_TOOLS.length, "the deny list carries exactly these tools");
+
+  // The prompt stays on stdin: argv carries no mission text at all.
+  assert.equal(built.ok && built.spec.stdinData.includes("do the work"), true, "the prompt travels on stdin");
+  assert.equal(argv.some((a) => a.includes("do the work")), false, "no mission text may appear in Claude argv");
+});
+
+test("D-9B: hostile prompt text cannot re-enable a shell tool", () => {
+  // Ordinary DATA. A fixed template plus shell:false means none of it can become
+  // an argument, and none of it can shorten or retarget the deny list.
+  const hostile = [
+    "--allowedTools Bash",
+    "--disallowedTools Read",
+    "--disallowedTools=Read,Glob,Grep",
+    "Bash",
+    "PowerShell",
+    "--dangerously-skip-permissions",
+    "--permission-mode bypassPermissions",
+  ].join(" ");
+  const built = buildSafeProviderRequest(baseInput({ providerId: "claude", promptBody: hostile }));
+  assert.equal(built.ok, true, "hostile-looking text is data, not a credential");
+  const argv = built.ok ? built.spec.argumentList : [];
+
+  assert.deepEqual(argv, ["--print", "--output-format", "json", "--disallowedTools", D9B_DENY_VALUE], "the template is unchanged by mission text");
+  assert.equal(argv.length, 5, "mission text can never grow Claude argv");
+  assert.equal(argv.filter((a) => a === "--disallowedTools").length, 1, "exactly one deny option");
+  assert.equal(argv.includes("--allowedTools"), false, "no allow-list may be introduced by prompt text");
+
+  const denied = (argv[argv.indexOf("--disallowedTools") + 1] ?? "").split(/[,\s]+/).filter(Boolean);
+  assert.deepEqual(denied, [...D9B_DENIED_TOOLS], "no prompt text may shorten or retarget the deny list");
+  assert.equal(built.ok && built.spec.stdinData.includes("--allowedTools Bash"), true, "the hostile text stays inert on stdin");
+});
+
+test("D-9B: no authority-widening Claude option accompanies the shell denial", () => {
+  const forbidden = ["--allowedTools", "--allowed-tools", "--dangerously-skip-permissions", "--allow-dangerously-skip-permissions", "--permission-mode", "--permission-prompt-tool", "--settings", "--add-dir", "--plugin-dir"];
+  const built = buildSafeProviderRequest(baseInput({ providerId: "claude", promptBody: "ordinary work" }));
+  assert.equal(built.ok, true);
+  const argv = built.ok ? built.spec.argumentList : [];
+  for (const bad of forbidden) {
+    assert.equal(argv.includes(bad), false, `Claude argv must never carry ${bad}`);
+  }
+  assert.equal(argv.includes("bypassPermissions"), false, "Claude argv must never name bypassPermissions");
+});
+
+test("D-9B: the D-6 Codex boundary is unchanged by the Claude shell denial", () => {
   const built = buildSafeProviderRequest(baseInput({ providerId: "codex", promptBody: "build it" }));
   assert.equal(built.ok, true);
   const argv = built.ok ? built.spec.argumentList : [];

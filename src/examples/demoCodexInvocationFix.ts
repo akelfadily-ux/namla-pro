@@ -88,11 +88,12 @@ export function runDemoCodexInvocationFix() {
   const claudeRes = claudeDriver.call({ antId: "ant-claude", providerId: "claude", taskId: "t", role: "build" });
   const cspec = claudeSpy.lastSpec;
   // Originally "claude-invocation-unchanged": a non-regression guard proving the
-  // Codex stdin fix did not disturb Claude. D-7 then changed the Claude template
-  // deliberately (it now denies the filesystem-read tools), so the guard states
-  // the contract that is actually load-bearing and still true: a FIXED flag
+  // Codex stdin fix did not disturb Claude. D-7 changed the Claude template to
+  // deny the native filesystem-read tools; D-9B subsequently extended the same
+  // fixed template to deny Bash and PowerShell. The guard therefore states the
+  // contract that is actually load-bearing and still true: a FIXED flag
   // template, the prompt on stdin, and no mission text anywhere in argv.
-  set("claude-invocation-fixed-template", !!cspec && cspec.executableId === "claude" && JSON.stringify(cspec.argumentList) === JSON.stringify(["--print", "--output-format", "json", "--disallowedTools", "Read,Glob,Grep"]) && !cspec.argumentList.some((a) => a.includes(PROMPT)));
+  set("claude-invocation-fixed-template", !!cspec && cspec.executableId === "claude" && JSON.stringify(cspec.argumentList) === JSON.stringify(["--print", "--output-format", "json", "--disallowedTools", "Read,Glob,Grep,Bash,PowerShell"]) && !cspec.argumentList.some((a) => a.includes(PROMPT)));
   set("claude-prompt-on-stdin", !!cspec && cspec.stdinData === PROMPT && claudeRes.ok === true);
 
   // 5: Multi-line JSONL parsed correctly (direct parser).

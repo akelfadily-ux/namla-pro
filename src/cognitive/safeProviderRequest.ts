@@ -102,12 +102,20 @@ const REQUEST_EXECUTABLE_MAP: Readonly<Record<ProviderExecutableId, string>> = {
 // closed, and file information is passed as summaries rather than contents. A
 // provider that reads its own context off disk bypasses that curation entirely —
 // the bytes never pass through this module, and nothing in the parsed provider
-// payload records the access. The deny list is stated at the fixed argv layer,
-// where mission text can never reach it, rather than trusting ambient settings.
-// Scope: this denies these tool NAMES for provider generation; it is not a claim
-// that no file is reachable by any other mechanism.
-// Installed 2.1.237: `--disallowedTools <tools...>`, comma or space separated.
-const CLAUDE_FLAGS: readonly string[] = ["--print", "--output-format", "json", "--disallowedTools", "Read,Glob,Grep"];
+// payload records the access. The shell names are denied for the stronger
+// reason: Build Law says a provider "never writes files, runs commands" and
+// "receives no generic run-tool capability", yet the child inherits the real
+// user settings (HOME is necessarily forwarded so the CLI can find its own
+// credentials), so an ordinary permission rule added there could otherwise
+// influence the permission decision. The deny list is stated at the fixed argv
+// layer, where mission text cannot reach it, so Namla states this boundary
+// independently of ambient settings.
+// Scope: this removes these tool NAMES from the provider-generation session; it
+// is not a claim that no file is reachable and no command can run by any other
+// mechanism, and it is not OS-level process isolation.
+// Installed 2.1.237: `--disallowedTools <tools...>`, comma or space separated;
+// canonical identifiers verified against the shipped tool catalog.
+const CLAUDE_FLAGS: readonly string[] = ["--print", "--output-format", "json", "--disallowedTools", "Read,Glob,Grep,Bash,PowerShell"];
 // `--ignore-user-config` and `--sandbox read-only` are SECURITY flags, not
 // ergonomics. The Codex provider process runs directly on the host, outside the
 // verification container, so its authority would otherwise be whatever the CLI
