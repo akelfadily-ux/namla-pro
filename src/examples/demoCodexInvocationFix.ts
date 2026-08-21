@@ -87,7 +87,12 @@ export function runDemoCodexInvocationFix() {
   const claudeDriver = driverFor("claude", "ant-claude", claudeSpy);
   const claudeRes = claudeDriver.call({ antId: "ant-claude", providerId: "claude", taskId: "t", role: "build" });
   const cspec = claudeSpy.lastSpec;
-  set("claude-invocation-unchanged", !!cspec && cspec.executableId === "claude" && cspec.argumentList.length === 3 && cspec.argumentList[0] === "--print" && cspec.argumentList[1] === "--output-format" && cspec.argumentList[2] === "json");
+  // Originally "claude-invocation-unchanged": a non-regression guard proving the
+  // Codex stdin fix did not disturb Claude. D-7 then changed the Claude template
+  // deliberately (it now denies the filesystem-read tools), so the guard states
+  // the contract that is actually load-bearing and still true: a FIXED flag
+  // template, the prompt on stdin, and no mission text anywhere in argv.
+  set("claude-invocation-fixed-template", !!cspec && cspec.executableId === "claude" && JSON.stringify(cspec.argumentList) === JSON.stringify(["--print", "--output-format", "json", "--disallowedTools", "Read,Glob,Grep"]) && !cspec.argumentList.some((a) => a.includes(PROMPT)));
   set("claude-prompt-on-stdin", !!cspec && cspec.stdinData === PROMPT && claudeRes.ok === true);
 
   // 5: Multi-line JSONL parsed correctly (direct parser).

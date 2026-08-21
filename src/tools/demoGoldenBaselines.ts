@@ -1146,11 +1146,12 @@ export const DEMO_GOLDEN_BASELINES: Record<string, DemoGoldenExpectation> = {
   demoCodexInvocationFix: {
     demoName: "demoCodexInvocationFix",
     // Windows Codex stdin-timeout fix (targeted). Proves Codex is invoked as
-    // `exec --ephemeral --json <PROMPT>` (bounded prompt as the single final
-    // positional argument) with EMPTY stdin, Claude is unchanged (prompt on
-    // stdin), multi-line Codex JSONL is parsed and the agent_message extracted,
-    // stderr warnings do not fail an exit-0 result, and missing/malformed output
-    // fails safely — all through a spy driver making zero real calls.
+    // `exec --ephemeral --json --ignore-user-config --sandbox read-only <PROMPT>`
+    // (bounded prompt as the single final positional argument) with EMPTY stdin,
+    // Claude uses a fixed flag template with the prompt on stdin, multi-line Codex
+    // JSONL is parsed and the agent_message extracted, stderr warnings do not fail
+    // an exit-0 result, and missing/malformed output fails safely — all through a
+    // spy driver making zero real calls.
     requiredFlags: ["allExpectationsMet"],
     exactStableCounts: {
       codexGuardsChecked: 14,

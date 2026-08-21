@@ -97,7 +97,17 @@ const REQUEST_EXECUTABLE_MAP: Readonly<Record<ProviderExecutableId, string>> = {
  * takes the bounded prompt as its single final POSITIONAL argument; with
  * `shell: false` a positional argv entry can never be reinterpreted as a flag.
  */
-const CLAUDE_FLAGS: readonly string[] = ["--print", "--output-format", "json"];
+// `--disallowedTools` is a SECURITY flag. Namla curates exactly what a provider
+// may see: prompt sections are assembled here, high-confidence credentials fail
+// closed, and file information is passed as summaries rather than contents. A
+// provider that reads its own context off disk bypasses that curation entirely —
+// the bytes never pass through this module, and nothing in the parsed provider
+// payload records the access. The deny list is stated at the fixed argv layer,
+// where mission text can never reach it, rather than trusting ambient settings.
+// Scope: this denies these tool NAMES for provider generation; it is not a claim
+// that no file is reachable by any other mechanism.
+// Installed 2.1.237: `--disallowedTools <tools...>`, comma or space separated.
+const CLAUDE_FLAGS: readonly string[] = ["--print", "--output-format", "json", "--disallowedTools", "Read,Glob,Grep"];
 // `--ignore-user-config` and `--sandbox read-only` are SECURITY flags, not
 // ergonomics. The Codex provider process runs directly on the host, outside the
 // verification container, so its authority would otherwise be whatever the CLI
