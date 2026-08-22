@@ -1547,3 +1547,51 @@ tests/reviews + exam + evaluator + freshness; passports block self-certification
 **Federation flow:** every state change flows through the 19-state receipted
 machine (no silent transition). Automated proof: `demoTamaraNamlaFederationV3`
 (57 checks, golden-registered) with every real-action counter 0.
+
+## 30. NAMLA PRO V2 architecture documentation publication (human-authorized, 2026-08-22)
+
+By explicit human authorization naming `NAMLA_BUILD_LAW.md`, the approved NAMLA
+PRO V2 architecture baseline (FINAL R2) may be published through a dedicated
+documentation branch. This is a DOCUMENTATION operation only: it adopts a TARGET
+architecture and changes no runtime behaviour.
+
+Authorized by this amendment:
+
+- this Build Law amendment
+- `README.md` architecture update
+- the approved V2 architecture documents under `docs/` (00–29)
+- documentation-only Git inspection
+- a dedicated documentation branch (`docs/namla-v2-architecture-baseline`)
+- documentation commits on that branch
+- push of that dedicated branch
+- an architecture pull request to `main`
+
+NOT authorized by this amendment:
+
+- `src/**` modification
+- production-code deletion
+- runtime or security authority changes
+- dependency or package changes (`package.json`, `package-lock.json`)
+- CI/workflow changes (`.github/**`)
+- secrets access
+- deployment or release
+- force push or history rewrite
+- direct modification of `main`
+- any unrelated future push authority
+
+**The V2 architecture is a TARGET, not an implementation claim.** Nothing in the
+published documents asserts that V2 runtime exists. The current runtime families
+(`src/simulation/`, `src/colony/`, `src/colonyMission/`, `src/digital/`,
+`src/civilization/`, `src/twin/`, `src/academy/`, and related paths) remain the
+CURRENT implementation and are untouched by this operation. They are subjects of
+a future census, not of deletion.
+
+Migration is rescue-first: no production tree may be removed on the strength of
+this baseline. The first implementation-preparation milestone after this baseline
+is accepted is the **Repository Rescue Census**, which classifies components
+(KEEP / EXTRACT / REWRITE / ARCHIVE / REMOVE) using dependency, entry-point,
+security-boundary, test-ownership, unique-capability and replacement-proof
+analysis. No production deletion occurs during that census either.
+
+This exception applies only to this architecture-adoption operation and expires
+with it.
