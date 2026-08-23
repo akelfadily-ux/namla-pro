@@ -1,204 +1,200 @@
-# Namla Pro
+# NAMLA PRO V2
 
-An experimental multi-agent system for software engineering, in which many specialized AI workers coordinate on a mission while every action they can take remains bounded, reviewable and fail-closed.
+> **STATUS — ARCHITECTURE READY · NEXT GATE: REPOSITORY RESCUE CENSUS**
+>
+> This package defines the target architecture that NAMLA PRO will migrate toward.  
+> It does **not** claim that V2 already exists in the repository.  
+> Production-code deletion is not authorized. The first implementation milestone is the **Repository Rescue Census**.
 
-Namla Pro studies one engineering question: **how do you let a colony of autonomous agents write and verify software without giving any of them unbounded authority over the host machine?** The coordination model is borrowed from ant colonies — decentralized agents, local information, indirect signalling — because that class of system solves task allocation without a central controller that must be trusted with everything. The safety model is the opposite of decentralized: every real action funnels through a small number of enforcement boundaries that refuse by default and record what they refused.
+**NAMLA PRO V2 is a governed multi-agent software-engineering runtime.** A mission is converted into a frozen contract, dispatched to two isolated colonies, compared, integrated, verified against the contract, and packaged for delivery. Every important transition passes through the same bounded verification protocol: **NAMLA LOOP**. Real effects are never granted by agents or prompts; they are admitted only through one **Trusted Kernel**.
 
-The repository contains both halves: a deterministic multi-agent runtime that can be run and reproduced offline, and a set of security boundaries that have been tested individually and on a three-OS CI matrix.
-
-**Status: experimental research prototype (alpha).** Not production software. See [Limitations](#limitations-and-current-research-status).
-
-📖 [Project overview](./docs/PROJECT_OVERVIEW.md) · 🔬 [Reviewer demo (5 min)](./docs/DEMO.md) · 🏗 [Architecture](./docs/architecture.md) · 🔒 [Safety invariants](./SAFETY_INVARIANTS.md) · 🗺 [Roadmap](./docs/roadmap.md)
-
----
-
-## Quick start
-
-Requires Node 20+. No credentials, no network, no container runtime.
-
-```bash
-npm install
-npm run typecheck     # strict TypeScript, 0 errors
-npm run build
-npm run demo          # the reviewer demonstration
-npm run test:p0       # the security suite
-```
-
-`npm run demo` runs a mission through the colony runtime and then shows five independent security boundaries each refusing an unsafe request. It starts no process, opens no socket, and needs no credential. A walkthrough of what to look for is in [docs/DEMO.md](./docs/DEMO.md).
-
----
-
-## What Namla Pro demonstrates
-
-Each item below is implemented and exercised by a runnable demo or test; the [status table](#implementation-status) names the evidence.
-
-- **Deterministic multi-agent coordination** — a mission is decomposed into tasks and worked by specialized agents over discrete ticks, reproducibly.
-- **Stigmergic signalling** — agents coordinate through a shared, decaying, reinforceable signal space rather than direct messaging.
-- **Persistent specialized workers** — agents carry identity, role, trust level and accumulated skill across missions.
-- **Proposal → review → verification pipeline** — generated code is data that must be reviewed and verified before anything is applied; nothing self-applies.
-- **Evidence logging** — every attempt, including every refusal, produces a receipt carrying reason codes and fingerprints rather than raw output.
-- **Differential verification (Twin Empire)** — two isolated colonies solve the same objective independently, their evidence bundles are frozen and cross-examined, and a court decides on evidence; a witness detects cross-colony leakage and fabricated test evidence.
-- **Enforced trust boundaries** — workspace containment, an outbound provider boundary, a sandbox permit gate, and container isolation verification, each of which fails closed.
-
----
-
-## Architecture
+## How NAMLA PRO works — 30-second architecture map
 
 ```mermaid
-flowchart TD
-    H["Human mission + typed confirmation"] --> ENG
+flowchart TB
+    classDef control fill:#eef2ff,stroke:#3949ab,color:#1a237e
+    classDef work fill:#fff8e1,stroke:#f9a825,color:#6d4c00
+    classDef gate fill:#fce4ec,stroke:#c62828,color:#7f0000
+    classDef support fill:#e8f5e9,stroke:#2e7d32,color:#1b5e20
+    classDef data fill:#f3e5f5,stroke:#7b1fa2,color:#4a148c
+    classDef state fill:#e0f7fa,stroke:#00838f,color:#004d40
 
-    subgraph RUNTIME["Deterministic runtime (no real action)"]
-        ENG["ColonyEngine.runMission()<br/>canonical spine"] --> PLAN["Mission planning<br/>task decomposition"]
-        PLAN --> WORKERS["Specialized agents<br/>scout · builder · reviewer · tester"]
-        WORKERS <--> PHER["Pheromone bus<br/>decay · reinforcement · query"]
-        WORKERS --> PROP["Artifact proposals<br/>data, never applied"]
-        PROP --> REV["Review + verification"]
+    U([USER OBJECTIVE])
+
+    subgraph CONTROL["CONTROL — understand, plan, freeze, dispatch"]
+      direction TB
+      EER["EER<br/>understand the objective"]:::control
+      L1{"NAMLA LOOP"}:::gate
+      PLAN["PLAN<br/>build the engineering plan"]:::control
+      L2{"NAMLA LOOP"}:::gate
+      PROTOCOL["PROTOCOL<br/>freeze PlanContract<br/>cut WorkPackages"]:::control
+      L3{"NAMLA LOOP"}:::gate
+      PRO["PRO<br/>admit · dispatch · coordinate"]:::control
+      L4{"NAMLA LOOP"}:::gate
+      EER --> L1 --> PLAN --> L2 --> PROTOCOL --> L3 --> PRO --> L4
     end
 
-    REV --> GATE
+    U --> EER
+    CONTRACT[("Frozen PlanContract<br/>requirements + criteria + evidence needs<br/>NOT authority")]:::data
+    PROTOCOL -. creates .-> CONTRACT
 
-    subgraph BOUNDARY["Enforcement boundaries (fail closed)"]
-        GATE["SandboxPolicy.authorize()<br/>issues a single-use permit"]
-        GATE --> MOUNT["Mount source validation<br/>canonical + contained"]
-        GATE --> NET["Network policy<br/>denied is the only enforced mode"]
-        GATE --> SEC["Secret boundary<br/>outbound block + redaction"]
+    subgraph BUILD["EXECUTION — two isolated colonies solve the same bounded work"]
+      direction LR
+      A["COLONY A<br/>independent candidate"]:::work --> LA{"LOOP A"}:::gate
+      B["COLONY B<br/>independent candidate"]:::work --> LB{"LOOP B"}:::gate
     end
 
-    GATE -->|"permit, by identity"| SB["Container sandbox<br/>non-root · read-only root · no network"]
+    L4 -->|same WorkPackage| A
+    L4 -->|same WorkPackage| B
 
-    SB --> PROV["Provider CLI execution"]
-    SB --> VERIF["Verification commands<br/>typecheck · test · build"]
-    SB --> WS["Bounded workspace<br/>one writable mount"]
+    subgraph VERIFY["COMPARE → INTEGRATE → PROVE → PACKAGE"]
+      direction TB
+      SON["SON<br/>compare A vs B<br/>expose disagreements"]:::gate
+      L5{"NAMLA LOOP"}:::gate
+      LEGGO["LEGGO<br/>integrate compatible validated pieces"]:::work
+      L6{"NAMLA LOOP"}:::gate
+      PM["PROMAX<br/>verify everything against PlanContract<br/>with independent checks"]:::gate
+      L7{"NAMLA LOOP"}:::gate
+      LAB["NAMLA LAB<br/>manifest · checksums · delivery package"]:::work
+      L8{"NAMLA LOOP"}:::gate
+      SON --> L5 --> LEGGO --> L6 --> PM --> L7 --> LAB --> L8
+    end
 
-    PROV --> RCPT["Receipts / evidence<br/>reason codes, fingerprints, no raw output"]
-    VERIF --> RCPT
-    WS --> RCPT
-    REV --> RCPT
+    LA -->|Result A + evidence refs| SON
+    LB -->|Result B + evidence refs| SON
+    CONTRACT -. source of truth .-> PM
+    L8 --> D([DELIVERY])
+
+    subgraph SUPPORT["CROSS-CUTTING SAFETY + PROOF"]
+      direction LR
+      TK["TRUSTED KERNEL<br/>permits · provider boundary · workspace/filesystem<br/>sandbox · secrets · network · budget authority"]:::support
+      EV[("EVIDENCE STORE<br/>append-only proof history")]:::data
+      MS["MISSION STATE<br/>lifecycle · ownership · attempts · leases<br/>budget allocation/consumption · resume"]:::state
+    end
+
+    PRO -. real authority only through .-> TK
+    A -. effects constrained by .-> TK
+    B -. effects constrained by .-> TK
+    PM -. trusted mechanical checks through .-> TK
+
+    SON -. assessments .-> EV
+    PM -. assessments / verdict inputs .-> EV
+    TK -. attestations / receipts .-> EV
+    PRO -. updates .-> MS
+    VERIFY -. transitions .-> MS
+
+    FAIL["ANY LOOP FAIL<br/>classify → bounded Fixer OR A+B rework<br/>append invalidation → rerun minimal stale frontier<br/>authority/budget exhausted → HUMAN_REQUIRED"]:::gate
+    L1 -. FAIL .-> FAIL
+    L2 -. FAIL .-> FAIL
+    L3 -. FAIL .-> FAIL
+    L4 -. FAIL .-> FAIL
+    LA -. FAIL .-> FAIL
+    LB -. FAIL .-> FAIL
+    L5 -. FAIL .-> FAIL
+    L6 -. FAIL .-> FAIL
+    L7 -. FAIL .-> FAIL
+    L8 -. FAIL .-> FAIL
+    RESUME["RECOVERY ROUTER<br/>validate checkpoint + authority<br/>resume at minimal stale frontier"]:::state
+    FAIL --> RESUME
 ```
 
-The deterministic runtime performs no real action at all — it plans, coordinates and produces proposals. Anything that touches the host crosses the enforcement boundary, and if the boundary cannot prove its guarantees the request is refused rather than downgraded.
+### Read the diagram literally
 
-### Why an ant colony
+1. **EER** interprets the request. **PLAN** creates the draft engineering plan.
+2. **PROTOCOL** is the first point where the canonical **PlanContract** exists: it validates, version-binds, freezes it, and cuts bounded WorkPackages.
+3. **PRO** is the sole canonical dispatcher. It sends the same bounded package to **COLONY A** and **COLONY B**.
+4. A and B work independently. Neither may see the other's candidate before **SON**.
+5. **SON** compares; agreement is only a signal, never proof. **LEGGO** integrates compatible validated pieces.
+6. **PROMAX** performs the strongest contract-wide verification, including independent checks not solely generated by A/B.
+7. **NAMLA LAB** packages the accepted result, evidence manifest, and checksums. It does not silently fix engineering failures.
+8. Every major transition crosses **NAMLA LOOP**. FAIL never means "retry forever": classify, repair/rework within budget, invalidate stale evidence, rerun the minimal stale verification frontier, or stop at **HUMAN_REQUIRED**.
+9. The **Trusted Kernel** is the only authority plane. Every stage that needs a real effect (provider/process, filesystem/workspace, sandboxed verification, network-capable action, or protected packaging write) must pass through it. Claude/Codex are cognition providers, not authorities.
+10. **EvidenceStore is append-only history. Mission state is separate mutable orchestration state.**
 
-The analogy is a design choice, not decoration. Ant colonies allocate work across many simple agents with no agent holding a global plan, coordinating **stigmergically** — by modifying a shared environment (pheromone trails) rather than messaging each other. Three properties matter here:
+## The one canonical mission pipeline
 
-1. **Local information.** An agent decides from what it can currently sense, so agents can be added or removed without reconfiguring a scheduler.
-2. **Indirect coordination.** Signals decay, so stale coordination fades automatically instead of requiring explicit cleanup.
-3. **No critical individual.** Work reallocates when an agent fails.
+`EER → LOOP → PLAN → LOOP → PROTOCOL → LOOP → PRO → LOOP → (COLONY A → LOOP ∥ COLONY B → LOOP) → SON → LOOP → LEGGO → LOOP → PROMAX → LOOP → NAMLA LAB → LOOP → DELIVERY`
 
-Namla Pro implements this literally: `src/pheromones/` and `src/core/pheromoneBus.ts` provide a signal space with decay, reinforcement and query, and agents read and write it during a mission. The trade-off is deliberate — decentralized *coordination*, strictly centralized *authority to act*.
+There is no second V2 runtime. Legacy `simulation`, `colony`, `colonyMission`, `digital`, `civilization`, `twin`, `academy`, and related paths are **CURRENT implementation families to census and migrate**, not new V2 kingdoms.
 
----
+## Six architectural planes
 
-## Implementation status
-
-| Subsystem | Status | Real or simulated | Evidence |
-|---|---|---|---|
-| Colony runtime (`ColonyEngine.runMission`) | Implemented | Deterministic simulation — no real action | `src/engine/colonyEngine.ts`; `npm run demo`; 41 demos in the golden harness |
-| Stigmergic signalling | Implemented | Deterministic simulation | `src/pheromones/`, `src/core/pheromoneBus.ts`; `demoPheromoneFlow` |
-| Mission planning / task decomposition | Implemented | Deterministic simulation | `src/planner/`, `demoMissionPlanning` |
-| Proposal → review → verification | Implemented | Data only; nothing self-applies | `src/generation/`, `src/review/`, `demoReviewLoop` |
-| Receipt / evidence log | Implemented | Real in-memory records | `src/core/receiptLog.ts`, `demoReceiptStatusSemantics` |
-| Twin Empire differential verification | Implemented | Deterministic simulation; providers not connected | `src/twin/`, `demoNamolaTwinEmpireV1` (reports `realProviderCalls: 0`) |
-| Workspace containment | Implemented / enforced | Real filesystem checks | `src/cognitive/safeWorkspacePath.ts`; `workspaceSecurityTests` (27) |
-| Project-file creation boundary | Implemented / fail-closed | Real boundary; real writer installed but inactive | `src/application/projectFileCreator.ts`; `createTargetBindingTests` (14) |
-| Outbound provider boundary (secrets) | Implemented / fail-closed | Real | `src/cognitive/safeProviderRequest.ts`; `providerRequestContainmentTests` (18) |
-| Environment secret registry | Implemented | Real | `src/cognitive/environmentSecretBootstrap.ts`; `environmentSecretBootstrapTests` (20) |
-| Sandbox permit gate | Implemented / fail-closed | Real | `src/cognitive/sandboxPolicy.ts`; `sandboxPolicyTests` (25) |
-| Container isolation (Docker backend) | Implemented / verified in CI | Real containers in CI only | `src/cognitive/containerSandboxBackend.ts`; `real-container-sandbox` CI job |
-| Network policy enforcement | Implemented / partially supported | Real; only `denied` is enforceable | `src/cognitive/verificationSandbox.ts`; `containerSandboxTests` (66) |
-| Verification execution routing | Implemented / fail-closed | Real routing; unavailable without a verified sandbox | `src/cognitive/nodeProviderProcessDriver.ts`; `verificationSandboxTests` (21) |
-| Provider CLI execution | Implemented / gated | Real; requires human confirmation + permit | `src/cognitive/realProviderActivation.ts` |
-| Live Twin / live objective operations | Implemented / not demonstrated here | Real; excluded from the demo path | `src/cli/twinEmpireLiveCli.ts` |
-| Robot / desktop bodies | Planned | Simulated planning data only | `src/bodies/`, `docs/bot-desktop-model.md` |
-
----
-
-## Security status
-
-This section states only what there is evidence for. The word "secure" is deliberately not used.
-
-### Verified by tests and CI
-
-`.github/workflows/p0-security.yml` runs the suite on `ubuntu-latest`, `windows-latest` and `macos-latest`. Locally the gate reports **398 passed, 0 failed, 3 skipped** across 20 suites.
-
-- **Workspace containment** — junction and symlink escape (nested and doubly nested), prefix collision, case semantics, read/delete/rename escape, TOCTOU revalidation before every mutation.
-- **Bind-mount source validation** — every path handed to Docker is canonicalized, proven contained in a separately configured root, and refused if it is a symlink, traversal, or carries characters that would inject extra mount options.
-- **Network policy truthfulness** — `denied` maps to `--network none`; `loopback-only`, `provider-only` and `allowlisted` are refused as unenforceable rather than silently widened to a Docker bridge.
-- **Create-target binding** — the file a create attempt opens is derived from the approved relative path and proven against the inspection fingerprint before the grant is consumed.
-- **Secret handling** — credentials block an outbound request rather than being redacted and sent; registered environment credential values are scrubbed from receipts and summaries.
-- **Verification routing** — verification commands execute only through a sandbox permit; there is no host execution path in that function.
-- **Container isolation** — a probe running *inside* a real container confirmed non-root identity, hidden host root, absent Docker socket, no inherited secrets, private PID/IPC namespaces, read-only root filesystem, refused writes outside the workspace, read-only source mounts, denied network, and enforced CPU/memory/PID limits. The ubuntu CI leg reported `capabilityState: available-and-verified`. The check is the *Real container sandbox (isolation verification)* job in `.github/workflows/p0-security.yml`, driven by `src/tools/verifyContainerSandbox.ts` and `src/tools/containerIsolationProbe.ts`.
-
-Skips are treated as failures on the POSIX legs, so a platform-limited test cannot silently disappear. The three local skips are Windows file-symlink privilege limitations and do run on Linux and macOS.
-
-### Implemented but not proven here
-
-- Container isolation is verified **in CI**, not on an arbitrary developer machine. Without Docker, `detectContainerRuntime()` reports `unavailable` and high-risk execution refuses.
-- Detection is never verification: a resolvable `docker --version` yields at most `available-unverified`, which does not authorize execution.
-
-### Fail-closed by design
-
-- High-risk execution (`npm test`, a build, any package script — all of which can run project-controlled code) requires `available-and-verified`. Without it the runtime refuses before any process is created. **There is no host fallback**, because a silent fallback is worse than an error: the caller would believe it was sandboxed.
-- `provider-only` networking is currently unenforceable, so real provider execution under the sandbox is refused. This is an honest consequence of not letting an unrestricted bridge stand in for an allowlist.
-
----
-
-## Repository layout
-
-```
-src/engine/          Canonical mission runtime (public API)
-src/core/            Queen, orchestrator, safety guard, receipts, pheromone bus
-src/planner/         Mission and task decomposition
-src/ants/            Agent roles
-src/pheromones/      Stigmergic signal space (decay, reinforcement, query)
-src/senses/          Structured perception
-src/cognitive/       Trust boundaries: sandbox, secrets, paths, process, provider
-src/application/     Approval contracts and the guarded file-creation boundary
-src/inspector/       Read-only project inspection
-src/colony/          Colony lifecycle, genesis, scaling
-src/colonyMission/   Mission execution and cognitive workers
-src/civilization/    District/council coordination and MCP execution
-src/digital/         Objective runtime, verification, repair
-src/twin/            Twin Empire differential verification
-src/academy/         Agent training and skill passports
-src/cli/             Human-operated entry points
-src/examples/        49 runnable demos
-src/tools/           Test suites, security gate, reviewer demo
-docs/                Architecture and concept documentation
-```
-
-Roughly 360 TypeScript files and 66,000 lines. The [project overview](./docs/PROJECT_OVERVIEW.md) is the recommended way in.
-
----
-
-## Limitations and current research status
-
-Stated plainly, because an honest prototype is more useful than an overstated one.
-
-- **Experimental alpha.** Not production software, not a production autonomous coding platform, and not safe to run live on a machine holding credentials or data you care about.
-- **Live provider execution is currently blocked by design.** `provider-only` networking has no enforcement mechanism in this backend, so it fails closed rather than being approximated by unrestricted egress. Enabling it requires a real egress-control mechanism that does not yet exist here.
-- **Container image is not digest-pinned.** `IMAGE_DIGEST` is empty and `REQUIRE_PINNED_IMAGE` is false; the image is trusted because CI builds it in the same job. A registry-sourced image would need pinning first.
-- **Verification is unavailable outside CI.** No production composition root can currently supply a verified sandbox, so verification commands refuse on a normal developer machine.
-- **Architectural debt.** Several subsystems (colony, colonyMission, civilization, digital, twin) contain overlapping orchestration that grew as the project did. `docs/runtime-spine.md` records which path is canonical and which is legacy.
-- **Simulation is not evidence about the real world.** The deterministic layer proves coordination logic, not that agents produce good software.
-- **Open security findings.** Redaction pattern coverage and heuristic secret detection remain unresolved; see [SAFETY_INVARIANTS.md](./SAFETY_INVARIANTS.md).
-
----
-
-## Where to read next
-
-| Document | Purpose | Time |
+| Plane | Owns | Must not own |
 |---|---|---|
-| [docs/PROJECT_OVERVIEW.md](./docs/PROJECT_OVERVIEW.md) | Motivation, research question, design, results, limitations | 10–15 min |
-| [docs/DEMO.md](./docs/DEMO.md) | Hands-on validation for a reviewer | 5 min |
-| [docs/architecture.md](./docs/architecture.md) | Full architecture | 20 min |
-| [docs/runtime-spine.md](./docs/runtime-spine.md) | The canonical runtime path, and what is legacy | 10 min |
-| [SAFETY_INVARIANTS.md](./SAFETY_INVARIANTS.md) | Every enforced invariant and its proof | reference |
-| [NAMLA_BUILD_LAW.md](./NAMLA_BUILD_LAW.md) | The rules every change must obey | reference |
-| [docs/roadmap.md](./docs/roadmap.md) | Development history and what remains | reference |
+| **Control** | intent, plan draft, contract freeze, dispatch | real authority |
+| **Execution** | bounded engineering work and integration | self-granted capability |
+| **Verification** | gates, comparison, contract checks | mutable mission state |
+| **Trust / Authority** | permits, sandbox, filesystem, provider/process boundaries, secrets, budget ceilings/admission authority | semantic product truth |
+| **Evidence** | append-only claims, attestations, assessments, verdicts, invalidations | current runtime ownership/state |
+| **Mission State** | lifecycle, ownership, attempts, leases, current budget allocation/consumption, resume | historical proof store |
 
-## License
+## Authority rule
 
-UNLICENSED — research prototype, not distributed for use.
+A PlanContract defines **scope**, never power.
+
+`EffectiveAuthority = HardSecurityPolicy ∩ HumanOrBuildLawAuthorization ∩ TrustedKernelPermit ∩ PlanContractCapabilityScope ∩ RuntimeBudget ∩ EnvironmentCapability`
+
+If any term denies an action, the result is **DENY**.
+
+## Assurance profiles — selective independence, not "two empires everywhere"
+
+| Profile | Meaning | Baseline examples |
+|---|---|---|
+| `STANDARD` | one canonical implementation + normal independent verification | Protocol, Pro, Lab |
+| `HIGH` | add a materially independent critic / alternative method where useful | EER, Plan, Son, sometimes Leggo |
+| `CRITICAL` | genuine N-version / dual independent assurance | Colony A/B by architecture, ProMax |
+
+Running identical code twice is not independent assurance.
+
+## Current implementation vs V2
+
+The repository today contains multiple runtime/orchestration families. V2 consolidates them through a **strangler migration**, not a rewrite:
+
+**RESCUE → EXTRACT → REPLACE → VERIFY → REMOVE**
+
+The current `ColonyEngine` still depends on `src/simulation/colonySimulation.ts`, and `src/colony/` is a separate substantial family. No directory is marked disposable by name alone.
+
+See [00 · Current vs Target](./docs/00-current-vs-target.md).
+
+## Documentation map
+
+| # | Document | Purpose |
+|---:|---|---|
+| 00 | [Current vs Target](./docs/00-current-vs-target.md) | factual CURRENT map vs TARGET V2 |
+| 01 | [V2 Overview](./docs/01-namla-v2-overview.md) | components and six planes |
+| 02 | [Canonical Pipeline](./docs/02-canonical-pipeline.md) | one mission flow with every gate |
+| 03 | [Governance](./docs/03-governance-model.md) | ownership and DONE law |
+| 04 | [PlanContract](./docs/04-plan-contract.md) | chronology, freeze, scope-not-authority |
+| 05 | [NAMLA LOOP](./docs/05-namla-loop.md) | reusable gate contract |
+| 06 | [Failure & Recovery](./docs/06-failure-recovery.md) | Fixer, A/B rework, replan, human |
+| 07 | [Evidence Model](./docs/07-evidence-model.md) | Claim / Attestation / Assessment / GateVerdict |
+| 08 | [Trusted Kernel](./docs/08-trusted-kernel.md) | one security authority plane |
+| 09 | [Kingdom Contracts](./docs/09-kingdom-contracts.md) | StageContext and ownership |
+| 10 | [Colony A/B](./docs/10-colony-ab-model.md) | hard isolation and diversity |
+| 11 | [Son · Leggo · ProMax](./docs/11-son-leggo-promax.md) | distinct responsibilities |
+| 12 | [Namla Lab](./docs/12-namla-lab.md) | packaging only |
+| 13 | [Rescue Matrix](./docs/13-rescue-matrix-spec.md) | KEEP / EXTRACT / REWRITE / ARCHIVE / REMOVE |
+| 14 | [Migration](./docs/14-migration-strategy.md) | capability-by-capability strangler |
+| 15 | [First Sprint](./docs/15-first-sprint.md) | Rescue Census; zero production deletion |
+| 16 | [Security Boundaries](./docs/16-security-boundaries.md) | current security capital mapped to target |
+| 17 | [Testing Strategy](./docs/17-testing-strategy.md) | baseline, parity, security regression |
+| 18 | [Observability](./docs/18-observability-and-metrics.md) | metrics without false quality gates |
+| 19 | [Build Law Migration Draft](./docs/19-build-law-migration-draft.md) | proposal only; Build Law unchanged |
+| 20 | [Long-Horizon Roadmap](./docs/20-long-horizon-roadmap-draft.md) | non-binding future draft |
+| 21 | [Authority & Trust](./docs/21-authority-and-trust-model.md) | EffectiveAuthority and trust rules |
+| 22 | [Independence](./docs/22-independence-and-correlated-failure.md) | correlated-failure controls |
+| 23 | [Concurrency & Work Scope](./docs/23-concurrency-and-work-scope.md) | access modes and barriers |
+| 24 | [Budgets & Anti-Livelock](./docs/24-mission-budgets-and-anti-livelock.md) | hierarchy, reallocation, oscillation |
+| 25 | [Replay & Threat Model](./docs/25-replay-environment-and-threat-model.md) | reproducibility classes and threats |
+| 26 | [Assurance Profiles](./docs/26-assurance-profiles.md) | STANDARD / HIGH / CRITICAL |
+| 27 | [Mission State](./docs/27-mission-state-model.md) | Mission + WorkPackage state machines |
+| 28 | [Artifact & Environment Identity](./docs/28-artifact-and-environment-identity.md) | immutable evidence bindings |
+| 29 | [Architecture Readiness Gate](./docs/29-architecture-readiness.md) | exact gate before Rescue Census |
+
+## Build Law note
+
+`NAMLA_BUILD_LAW.md` remains authoritative and unchanged by this package. This architecture package proposes future migration rules but does not grant itself new execution, deletion, Git, package-installation, network, or filesystem authority.
+
+## Implementation start condition
+
+If [29 · Architecture Readiness Gate](./docs/29-architecture-readiness.md) has no P0/P1 blocker, the next milestone is **Repository Rescue Census**, not a rewrite and not bulk deletion.
