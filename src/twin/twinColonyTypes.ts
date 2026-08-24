@@ -195,9 +195,20 @@ export function fnv1a(input: string): string {
   return `tw-${h.toString(16).padStart(8, "0")}-${input.length}`;
 }
 
-/** Canonical projection used for the COMPLETE bundle fingerprint (excludes the fingerprint itself). */
+/**
+ * Canonical projection used for the COMPLETE bundle fingerprint (excludes the
+ * fingerprint itself).
+ *
+ * VERSIONED. The v1 projection below is EXACTLY what it always was, so every
+ * historical bundle keeps its historical digest - extending coverage must never
+ * silently restate an old fingerprint. A v2 bundle additionally covers its
+ * verification evidence, because that evidence decides whether a candidate may be
+ * crowned or merged: leaving it out meant a VERIFIED and a VERIFICATION_BLOCKED
+ * bundle with the same files produced the SAME fingerprint, so the digest could
+ * not distinguish the two states it most needed to.
+ */
 export function bundleCanonicalProjection(bundle: Omit<ColonyEvidenceBundle, "fingerprint" | "frozen">): string {
-  return JSON.stringify({
+  const v1 = {
     colonyId: bundle.colonyId,
     missionId: bundle.missionId,
     culture: bundle.culture,
@@ -212,5 +223,27 @@ export function bundleCanonicalProjection(bundle: Omit<ColonyEvidenceBundle, "fi
     uncertainty: bundle.uncertaintyRegister.length,
     reproduction: bundle.reproductionInstructions,
     artifactCount: bundle.artifacts.length,
+  };
+  // v1: byte-identical to the historical projection. Nothing is appended, so no
+  // existing bundle's digest moves.
+  if (bundle.evidenceVersion !== 2 || bundle.verification === undefined) return JSON.stringify(v1);
+  const v = bundle.verification;
+  // v2: the verdict AND the receipts that justify it. Receipts are included so
+  // appending or editing one changes the digest, not only flipping the verdict.
+  return JSON.stringify({
+    ...v1,
+    evidenceVersion: 2,
+    verification: {
+      s: v.finalStatus,
+      vr: v.verificationRounds,
+      ra: v.repairAttempts,
+      fa: v.filesAppliedByRepair,
+      sb: v.sandboxBackendId,
+      sv: v.sandboxVerified,
+      sr: v.stopReason,
+      wf: v.workspaceFingerprint,
+      stages: v.stageReceipts.map((r) => ({ a: r.attempt, st: r.stage, c: r.commandId, s: r.status, rc: r.safeReasonCode, l: r.outputLineCount, x: r.realProcessExecutions })),
+      repairs: v.repairReceipts.map((r) => ({ a: r.attempt, id: r.antId, ok: r.ok, x: r.realProcessExecution, fp: r.filesProposed, fa: r.filesApplied })),
+    },
   });
 }

@@ -131,18 +131,56 @@ export function runColonyForge(profile: ColonyProfile, packet: TwinMissionPacket
   return freezeBundle(draft);
 }
 
-/** Freeze a bundle: compute the immutable fingerprint and deep-freeze the object. */
+/**
+ * Freeze a bundle: compute the immutable fingerprint and deep-freeze the object.
+ *
+ * WHY EVERY NESTED STRUCTURE IS SEALED, NOT JUST THE NAMED ONES. `Object.freeze`
+ * is shallow. Anything that reached the result through the `...draft` spread kept
+ * its ORIGINAL reference and stayed mutable, and a shallow `Object.freeze({...x})`
+ * left x's own arrays mutable too. That made `frozen: true` a claim the object
+ * could not keep: a post-freeze `bundle.verification.finalStatus = "VERIFIED"`
+ * succeeded silently even under strict mode, flipped `isVerifiedCandidate` from
+ * false to true, and changed the court's verdict - while the stored AND recomputed
+ * fingerprints stayed identical, so no integrity check could see it.
+ *
+ * Every decision-relevant structure is therefore copied and frozen here. Copying
+ * matters as much as freezing: sealing the caller's own object would otherwise
+ * make the draft unusable afterwards, and sharing it would leave a live handle
+ * to "frozen" evidence.
+ */
 export function freezeBundle(draft: Omit<ColonyEvidenceBundle, "fingerprint" | "frozen">): ColonyEvidenceBundle {
   const fingerprint = fnv1a(bundleCanonicalProjection(draft));
+  const frozenList = <T>(items: readonly T[]): readonly T[] => Object.freeze(items.map((i) => Object.freeze({ ...i })));
+  const frozenStrings = (items: readonly string[]): readonly string[] => Object.freeze([...items]);
   const frozen: ColonyEvidenceBundle = {
     ...draft,
-    architecture: Object.freeze({ ...draft.architecture }),
-    artifacts: Object.freeze(draft.artifacts.map((a) => Object.freeze({ ...a }))),
-    artifactManifest: Object.freeze(draft.artifactManifest.map((m) => Object.freeze({ ...m }))),
-    reviews: Object.freeze(draft.reviews.map((r) => Object.freeze({ ...r }))),
-    securityEvidence: Object.freeze({ ...draft.securityEvidence, findings: Object.freeze([...draft.securityEvidence.findings]) }),
-    performanceEvidence: Object.freeze(draft.performanceEvidence.map((p) => Object.freeze({ ...p }))),
-    providerReceipts: Object.freeze(draft.providerReceipts.map((r) => Object.freeze({ ...r }))),
+    architecture: Object.freeze({
+      ...draft.architecture,
+      filePlan: frozenStrings(draft.architecture.filePlan),
+      acceptanceMapping: frozenStrings(draft.architecture.acceptanceMapping),
+      interfaceDecisions: frozenStrings(draft.architecture.interfaceDecisions),
+      risks: frozenStrings(draft.architecture.risks),
+    }),
+    artifacts: Object.freeze(draft.artifacts.map((a) => Object.freeze({ ...a, acceptanceCriteriaCovered: frozenStrings(a.acceptanceCriteriaCovered) }))),
+    artifactManifest: frozenList(draft.artifactManifest),
+    reviews: Object.freeze(draft.reviews.map((r) => Object.freeze({ ...r, findings: frozenStrings(r.findings), securityFindings: frozenStrings(r.securityFindings) }))),
+    testEvidence: Object.freeze({ ...draft.testEvidence }),
+    securityEvidence: Object.freeze({ ...draft.securityEvidence, findings: frozenStrings(draft.securityEvidence.findings) }),
+    performanceEvidence: frozenList(draft.performanceEvidence),
+    riskRegister: frozenStrings(draft.riskRegister),
+    failureRegister: frozenStrings(draft.failureRegister),
+    uncertaintyRegister: frozenStrings(draft.uncertaintyRegister),
+    minorityReports: frozenStrings(draft.minorityReports),
+    providerReceipts: frozenList(draft.providerReceipts),
+    costReport: Object.freeze({ ...draft.costReport }),
+    reproductionInstructions: frozenStrings(draft.reproductionInstructions),
+    // v2 only. `undefined` stays `undefined` so a v1 bundle is byte-identical to
+    // what it was before this seal.
+    verification: draft.verification === undefined ? undefined : Object.freeze({
+      ...draft.verification,
+      stageReceipts: frozenList(draft.verification.stageReceipts),
+      repairReceipts: frozenList(draft.verification.repairReceipts),
+    }),
     fingerprint,
     frozen: true,
   };
