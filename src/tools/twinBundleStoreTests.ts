@@ -170,7 +170,7 @@ test("resume state references ONLY the preserved bundle fingerprint and keeps ev
     completedRoles: ["architecture"],
     providerCalls: 2,
     artifactsApplied: 0,
-    diagnostics: [{ role: "implementation", antId: "cl-impl", providerId: "claude", ok: false, failureCategory: "provider-timeout", timeoutMs: 600000, durationMs: 600001, requestBytes: 512, responseBytes: 0 }],
+    diagnostics: [{ role: "implementation", antId: "cl-impl", providerId: "claude", ok: false, failureCategory: "provider-timeout", timeoutMs: 600000, durationMs: 600001, requestBytes: 512, responseBytes: 0, realProcessExecution: false }],
     architecturePlan: ["src/taskManager.ts"],
   });
   assert.equal(store.writeAttempt(CLAUDE_WS, attempt).ok, true);
@@ -210,7 +210,7 @@ test("no credentials, prompts, or raw provider output are persisted", () => {
   const store = new InMemoryTwinBundleStore();
   const codex = makeBundle("codex-crucible");
   store.writeBundle(CODEX_WS, codex);
-  const attempt = buildPersistedAttempt({ colonyId: "claude-forge", missionId: MISSION, ok: false, failureReason: "provider-timeout", reviewSkippedReason: "provider-timeout", completedRoles: ["architecture"], providerCalls: 2, artifactsApplied: 0, diagnostics: [{ role: "implementation", antId: "cl-impl", providerId: "claude", ok: false, failureCategory: "provider-timeout", timeoutMs: 600000, durationMs: 600001, requestBytes: 512, responseBytes: 0 }], architecturePlan: [] });
+  const attempt = buildPersistedAttempt({ colonyId: "claude-forge", missionId: MISSION, ok: false, failureReason: "provider-timeout", reviewSkippedReason: "provider-timeout", completedRoles: ["architecture"], providerCalls: 2, artifactsApplied: 0, diagnostics: [{ role: "implementation", antId: "cl-impl", providerId: "claude", ok: false, failureCategory: "provider-timeout", timeoutMs: 600000, durationMs: 600001, requestBytes: 512, responseBytes: 0, realProcessExecution: false }], architecturePlan: [] });
   const serialized = `${serializeBundle(codex)}|${JSON.stringify(attempt)}`;
   for (const forbidden of [/sk-[A-Za-z0-9]{16,}/, /ghp_[A-Za-z0-9]{16,}/, /-----BEGIN [A-Z ]*PRIVATE KEY-----/, /api[_-]?key\s*[:=]/i, /\bprompt\b/i, /process\.env/, /Bearer\s+[A-Za-z0-9._-]{12,}/]) {
     assert.equal(forbidden.test(serialized), false, `persisted record must not contain ${forbidden}`);

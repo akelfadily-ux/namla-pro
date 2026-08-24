@@ -226,7 +226,7 @@ test("raw secrets cannot reach bundle JSON, attempt JSON, or resume JSON", () =>
     completedRoles: ["architecture"],
     providerCalls: 2,
     artifactsApplied: 0,
-    diagnostics: [{ role: "implementation", antId: "cl-impl", providerId: "claude", ok: false, failureCategory: `failed: ${GITHUB}`, timeoutMs: 600000, durationMs: 600001, requestBytes: 512, responseBytes: 0 }],
+    diagnostics: [{ role: "implementation", antId: "cl-impl", providerId: "claude", ok: false, failureCategory: `failed: ${GITHUB}`, timeoutMs: 600000, durationMs: 600001, requestBytes: 512, responseBytes: 0, realProcessExecution: false }],
     architecturePlan: [],
   });
   assertNoRawSecret(attempt.failureReason ?? "", "attempt.failureReason (fail-closed)");

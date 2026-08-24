@@ -117,11 +117,12 @@ export function runTwinResume(input: TwinResumeInput): TwinResumeResult {
   const implSlot = acquireProviderSlot(input.empirePermit, colony);
   if (!implSlot.ok) return fail(implSlot.reasonCode);
   log("claude-repair-implementation-starting", { antId: input.implementationAntId, provider: input.provider, timeoutMs: implTimeoutMs });
+  const implRealBefore = input.providerDriver.realProviderProcessExecutions;
   const implRes = input.providerDriver.call({ antId: input.implementationAntId, providerId: input.provider, taskId: `${record.missionId}-${colony}-repair-implementation`, role: "build", timeoutMs: implTimeoutMs, contextBrief: `PLAN: ${architecturePlan.join(", ")}` });
   releaseProviderSlot(input.empirePermit, colony);
   additionalProviderCalls += 1;
   const implCategory = implRes.ok ? "none" : mapCallFailure(implRes.failureCategory ?? "spawn-failed");
-  diagnostics.push({ role: "implementation", antId: input.implementationAntId, providerId: input.provider, ok: implRes.ok, failureCategory: implCategory, timeoutMs: implTimeoutMs, durationMs: implRes.durationMs ?? 0, requestBytes: implRes.requestBytes ?? 0, responseBytes: implRes.responseBytes ?? 0 });
+  diagnostics.push({ role: "implementation", antId: input.implementationAntId, providerId: input.provider, ok: implRes.ok, failureCategory: implCategory, timeoutMs: implTimeoutMs, durationMs: implRes.durationMs ?? 0, requestBytes: implRes.requestBytes ?? 0, responseBytes: implRes.responseBytes ?? 0, realProcessExecution: input.providerDriver.realProviderProcessExecutions > implRealBefore });
   log("claude-repair-implementation-completed", { ok: implRes.ok, failureCategory: implCategory, durationMs: implRes.durationMs ?? 0 });
 
   if (!implRes.ok || !implRes.payload) {
@@ -143,11 +144,12 @@ export function runTwinResume(input: TwinResumeInput): TwinResumeResult {
   const reviewSlot = acquireProviderSlot(input.empirePermit, colony);
   if (!reviewSlot.ok) return fail(reviewSlot.reasonCode, { additionalProviderCalls, preservedBundleUnchanged: true });
   log("claude-repair-review-starting", { antId: input.reviewAntId, artifacts: proposals.length, timeoutMs: REPAIR_REVIEW_TIMEOUT_MS });
+  const reviewRealBefore = input.providerDriver.realProviderProcessExecutions;
   const reviewRes = input.providerDriver.call({ antId: input.reviewAntId, providerId: input.provider, taskId: `${record.missionId}-${colony}-repair-review`, role: "review", timeoutMs: REPAIR_REVIEW_TIMEOUT_MS, contextBrief: `ARTIFACTS: ${proposals.map((p) => p.relativePath).join(", ")}` });
   releaseProviderSlot(input.empirePermit, colony);
   additionalProviderCalls += 1;
   const reviewCategory = reviewRes.ok ? "none" : mapCallFailure(reviewRes.failureCategory ?? "spawn-failed");
-  diagnostics.push({ role: "review", antId: input.reviewAntId, providerId: input.provider, ok: reviewRes.ok, failureCategory: reviewCategory, timeoutMs: REPAIR_REVIEW_TIMEOUT_MS, durationMs: reviewRes.durationMs ?? 0, requestBytes: reviewRes.requestBytes ?? 0, responseBytes: reviewRes.responseBytes ?? 0 });
+  diagnostics.push({ role: "review", antId: input.reviewAntId, providerId: input.provider, ok: reviewRes.ok, failureCategory: reviewCategory, timeoutMs: REPAIR_REVIEW_TIMEOUT_MS, durationMs: reviewRes.durationMs ?? 0, requestBytes: reviewRes.requestBytes ?? 0, responseBytes: reviewRes.responseBytes ?? 0, realProcessExecution: input.providerDriver.realProviderProcessExecutions > reviewRealBefore });
   log("claude-repair-review-completed", { ok: reviewRes.ok, failureCategory: reviewCategory });
   if (!reviewRes.ok || !reviewRes.payload) return fail(reviewCategory, { additionalProviderCalls, preservedBundleUnchanged: true });
 
@@ -187,8 +189,14 @@ export function runTwinResume(input: TwinResumeInput): TwinResumeResult {
     failureRegister: [`first attempt failed at ${record.failedRole} with ${record.failureCategory}`],
     uncertaintyRegister: [`${colony}: repaired in ${record.repairArea}; original attempt preserved`],
     minorityReports: [],
-    providerReceipts: diagnostics.map((d) => ({ antId: d.antId, providerId: d.providerId, role: d.role, ok: d.ok, real: false as const })),
-    costReport: { providerCalls: additionalProviderCalls, realProviderCalls: 0 },
+    providerReceipts: diagnostics.map((d) => ({ antId: d.antId, providerId: d.providerId, role: d.role, ok: d.ok, real: d.realProcessExecution })),
+    // TRUTHFUL COUNT, derived from execution provenance (the same per-call
+    // samples the receipts use), never from the provider's name or its own claim.
+    // This path performs NO verification, so a resumed bundle that really called a
+    // provider is correctly disqualified by the v1 rule below rather than being
+    // crowned unexamined. Reporting 0 here would have made the bundle's own
+    // receipts contradict its own total.
+    costReport: { providerCalls: additionalProviderCalls, realProviderCalls: diagnostics.filter((d) => d.realProcessExecution).length },
     reproductionInstructions: ["npx.cmd tsc --noEmit", "npm.cmd test"],
   });
   log("claude-bundle-frozen", { fingerprint: repairedBundle.fingerprint, artifacts: appliedArtifacts.length });

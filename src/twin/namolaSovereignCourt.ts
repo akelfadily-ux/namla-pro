@@ -14,6 +14,7 @@
 import type { ColonyEvidenceBundle, ColonyId } from "./twinColonyTypes";
 import { fnv1a } from "./twinColonyTypes";
 import { validateFrozenBundle } from "./frozenBundleValidator";
+import { isVerifiedCandidate } from "./twinColonyTypes";
 import type { EvidenceDominanceDecision } from "./differentialTruth";
 import type { WitnessIntegrityReport } from "./silentWitness";
 
@@ -77,6 +78,13 @@ export function evaluateHardRejections(input: NamolaCourtInput): readonly HardRe
   const severeSecurity = !claude.securityEvidence.passed || !codex.securityEvidence.passed;
   const fakeFindingCategory = input.admittedFindings.some((f) => f.findingCategory === "invalid-test-evidence");
   return [
+    // A v2 candidate carries a verification VERDICT, and structural validity is
+    // not that verdict: a bundle whose loop ended VERIFICATION_BLOCKED is
+    // perfectly well-formed and still had nothing checked. This court approves
+    // MERGE COMPONENTS, so without this check unverified files could be merged on
+    // the strength of being well-formed. v1 bundles are unaffected - they predate
+    // verification and are judged by their own rules.
+    { id: "no-unverified-v2-candidate", passed: (claude.evidenceVersion !== 2 || isVerifiedCandidate(claude)) && (codex.evidenceVersion !== 2 || isVerifiedCandidate(codex)), detail: `claudeV2=${claude.evidenceVersion === 2} claudeVerified=${isVerifiedCandidate(claude)} codexV2=${codex.evidenceVersion === 2} codexVerified=${isVerifiedCandidate(codex)}` },
     { id: "both-bundles-valid", passed: claudeValid && codexValid, detail: `claudeValid=${claudeValid} codexValid=${codexValid}` },
     { id: "not-both-lack-implementation", passed: claudeImpl || codexImpl, detail: `claudeImpl=${claudeImpl} codexImpl=${codexImpl}` },
     { id: "independent-review-exists", passed: independentReview, detail: `independentReview=${independentReview}` },
