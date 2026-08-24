@@ -7,8 +7,15 @@
  * empire permit (≤1 concurrent call per colony). Outputs are normalized via the
  * reused role contracts; implementation artifacts are applied ONLY after an
  * independent (non-self) review, into the colony's isolated in-memory/real
- * workspace; then the bundle is frozen. A colony with no valid implementation
- * artifacts stops with `no-build-artifacts` and NO verification.
+ * workspace; the applied candidate is then VERIFIED through the injected
+ * verification backend, repaired by this same colony's provider while its bounded
+ * budget allows, and only then frozen. A colony with no valid implementation
+ * artifacts stops with `no-build-artifacts` and never reaches verification.
+ *
+ * TWIN-R1: a frozen bundle no longer means merely "files were generated". It
+ * carries `evidenceVersion: 2` and a verdict of VERIFIED, FAILED or
+ * VERIFICATION_BLOCKED. A caller that supplies no verification backend gets
+ * VERIFICATION_BLOCKED — never a pass.
  *
  * Providers never write files, execute MCP, select ants, read the competitor,
  * change acceptance criteria, or invoke another provider. No fs, no child_process,
@@ -29,6 +36,8 @@ import { freezeBundle } from "./colonyForge";
 import type { ColonyEvidenceBundle, ColonyCulture, ColonyArtifactProposal, ColonyReview } from "./twinColonyTypes";
 import { fnv1a } from "./twinColonyTypes";
 import { ColonyWorkspaceAuthority } from "./colonyWorkspace";
+import { runTwinBuildLoop, TWIN_DEFAULT_MAX_REPAIR_ATTEMPTS } from "./twinBuildLoop";
+import type { TwinBuildLoopResult, TwinVerificationBackend, TwinRepairSlot } from "./twinBuildLoop";
 
 export type TwinRole = "architecture" | "implementation" | "review";
 const TWIN_ROLE_ORDER: readonly TwinRole[] = ["architecture", "implementation", "review"];
@@ -91,6 +100,12 @@ export interface TwinProviderDiagnostic {
   readonly durationMs: number;
   readonly requestBytes: number;
   readonly responseBytes: number;
+  /**
+   * True only when the driver's real-execution counter advanced ACROSS THIS CALL.
+   * Sampled per call rather than read as a total, so a run that spawned one real
+   * process cannot mark every receipt real.
+   */
+  readonly realProcessExecution: boolean;
 }
 
 export interface TwinColonyLiveInput {
@@ -105,6 +120,21 @@ export interface TwinColonyLiveInput {
   readonly applier: TwinWorkspaceApplier;
   readonly acceptance: readonly string[];
   readonly roleTimeouts?: RoleTimeoutPolicy;
+  /**
+   * The mission text the repair objective restates. Absent only on legacy callers
+   * that never reach repair; the live CLI always supplies it.
+   */
+  readonly missionObjective?: string;
+  /**
+   * Verification capability. ABSENT is treated exactly like an unavailable
+   * sandbox: the candidate is frozen as VERIFICATION_BLOCKED. It is never a
+   * reason to assume the candidate is good.
+   */
+  readonly verification?: TwinVerificationBackend;
+  /** Pre-minted repair authorizations from the composition root. */
+  readonly repairSlots?: readonly TwinRepairSlot[];
+  readonly maxRepairAttempts?: number;
+  readonly repairTimeoutMs?: number;
   readonly log: (stage: string, meta?: Record<string, string | number | boolean>) => void;
 }
 
@@ -126,6 +156,13 @@ export interface TwinColonyLiveResult {
   readonly reviewSkippedReason: string | null;
   /** Roles whose provider call succeeded — the resume record reuses these. */
   readonly completedRoles: readonly string[];
+  /**
+   * TWIN-R1 loop outcome. Null only when the colony never produced a candidate,
+   * so there was nothing to verify.
+   */
+  readonly loop: TwinBuildLoopResult | null;
+  /** True ONLY for a candidate a real verification driver actually passed. */
+  readonly candidateVerified: boolean;
 }
 
 const TWIN_TO_LIVE_ROLE: Readonly<Record<TwinRole, LiveRole>> = { architecture: "architecture", implementation: "build", review: "review" };
@@ -162,15 +199,17 @@ export function runTwinColonyLive(input: TwinColonyLiveInput): TwinColonyLiveRes
     const timeoutMs = resolveRoleTimeout(role === "implementation" ? "coding" : role === "architecture" ? "architecture" : "security-review", timeouts);
     const slot = acquireProviderSlot(input.empirePermit, input.colonyId);
     if (!slot.ok) {
-      diagnostics.push({ role, antId: member.antId, providerId: input.provider, ok: false, failureCategory: slot.reasonCode, timeoutMs, durationMs: 0, requestBytes: 0, responseBytes: 0 });
+      diagnostics.push({ role, antId: member.antId, providerId: input.provider, ok: false, failureCategory: slot.reasonCode, timeoutMs, durationMs: 0, requestBytes: 0, responseBytes: 0, realProcessExecution: false });
       continue;
     }
     input.log(`${prefix}-provider-starting`, { role, antId: member.antId, provider: input.provider, timeoutMs });
+    const realBefore = input.providerDriver.realProviderProcessExecutions;
     const res = input.providerDriver.call({ antId: member.antId, providerId: input.provider, taskId: `${input.missionId}-${input.colonyId}-${role}`, role: liveRole, timeoutMs });
     releaseProviderSlot(input.empirePermit, input.colonyId);
     providerCalls += 1;
+    const realProcessExecution = input.providerDriver.realProviderProcessExecutions > realBefore;
     const failureCategory = res.ok ? "none" : mapCallFailure(res.failureCategory ?? "spawn-failed");
-    diagnostics.push({ role, antId: member.antId, providerId: input.provider, ok: res.ok, failureCategory, timeoutMs, durationMs: res.durationMs ?? 0, requestBytes: res.requestBytes ?? 0, responseBytes: res.responseBytes ?? 0 });
+    diagnostics.push({ role, antId: member.antId, providerId: input.provider, ok: res.ok, failureCategory, timeoutMs, durationMs: res.durationMs ?? 0, requestBytes: res.requestBytes ?? 0, responseBytes: res.responseBytes ?? 0, realProcessExecution });
     input.log(`${prefix}-provider-completed`, { role, ok: res.ok, failureCategory });
     if (!res.ok || !res.payload) {
       // provider-timeout / provider-exit-failure / malformed-provider-envelope …
@@ -198,7 +237,7 @@ export function runTwinColonyLive(input: TwinColonyLiveInput): TwinColonyLiveRes
   if (proposals.length === 0) {
     const failureReason = implementationFailure ?? "no-build-artifacts";
     input.log(`${prefix}-artifacts-reviewed`, { applied: 0, reason: failureReason, reviewSkipped: reviewSkippedReason !== null });
-    return { colonyId: input.colonyId, ok: false, failureReason, bundle: null, providerCalls, artifactsApplied: 0, independentReviews: 0, selfReviewsAccepted: 0, architecturePlan, reviewApproved: false, diagnostics, realProviderProcessExecutions: input.providerDriver.realProviderProcessExecutions, normalizationReceipts, reviewSkippedReason, completedRoles: diagnostics.filter((d) => d.ok).map((d) => d.role) };
+    return { colonyId: input.colonyId, ok: false, failureReason, bundle: null, providerCalls, artifactsApplied: 0, independentReviews: 0, selfReviewsAccepted: 0, architecturePlan, reviewApproved: false, diagnostics, realProviderProcessExecutions: input.providerDriver.realProviderProcessExecutions, normalizationReceipts, reviewSkippedReason, completedRoles: diagnostics.filter((d) => d.ok).map((d) => d.role), loop: null, candidateVerified: false };
   }
 
   // Independent review must exist and must NOT be self-review before application.
@@ -221,8 +260,36 @@ export function runTwinColonyLive(input: TwinColonyLiveInput): TwinColonyLiveRes
   input.log(`${prefix}-artifacts-reviewed`, { applied: artifactsApplied, independentReview: reviewApproved, selfReview });
 
   if (artifactsApplied === 0) {
-    return { colonyId: input.colonyId, ok: false, failureReason: reviewApproved ? "no-build-artifacts" : "review-not-approved", bundle: null, providerCalls, artifactsApplied: 0, independentReviews: reviewApproved ? 1 : 0, selfReviewsAccepted: 0, architecturePlan, reviewApproved, diagnostics, realProviderProcessExecutions: input.providerDriver.realProviderProcessExecutions, normalizationReceipts, reviewSkippedReason, completedRoles: diagnostics.filter((d) => d.ok).map((d) => d.role) };
+    return { colonyId: input.colonyId, ok: false, failureReason: reviewApproved ? "no-build-artifacts" : "review-not-approved", bundle: null, providerCalls, artifactsApplied: 0, independentReviews: reviewApproved ? 1 : 0, selfReviewsAccepted: 0, architecturePlan, reviewApproved, diagnostics, realProviderProcessExecutions: input.providerDriver.realProviderProcessExecutions, normalizationReceipts, reviewSkippedReason, completedRoles: diagnostics.filter((d) => d.ok).map((d) => d.role), loop: null, candidateVerified: false };
   }
+
+  // ---- TWIN-R1: VERIFY -> REPAIR -> RETEST, bounded, before freezing --------
+  // The candidate exists on disk at this point. Everything below decides what
+  // the frozen bundle is permitted to CLAIM about it.
+  const verification: TwinVerificationBackend = input.verification ?? { driver: null, sandboxBackendId: "none", sandboxVerified: false };
+  const loop = runTwinBuildLoop({
+    colonyId: input.colonyId,
+    missionId: input.missionId,
+    provider: input.provider,
+    workspaceId: input.workspaceId,
+    applier: input.applier,
+    verification,
+    providerDriver: input.providerDriver,
+    empirePermit: input.empirePermit,
+    repairSlots: input.repairSlots ?? [],
+    maxRepairAttempts: input.maxRepairAttempts ?? TWIN_DEFAULT_MAX_REPAIR_ATTEMPTS,
+    repairTimeoutMs: input.repairTimeoutMs ?? 600000,
+    candidatePaths: appliedArtifacts.map((a) => a.relativePath),
+    missionObjective: input.missionObjective ?? input.acceptance.join("; "),
+    log: input.log,
+  });
+  const candidateVerified = loop.state === "CANDIDATE_VERIFIED";
+  const finalStatus: "VERIFIED" | "FAILED" | "VERIFICATION_BLOCKED" = candidateVerified ? "VERIFIED" : loop.state === "VERIFICATION_BLOCKED" ? "VERIFICATION_BLOCKED" : "FAILED";
+  // A path-set identity, not a content digest: contents after repair are held by
+  // the workspace, not by this module, so claiming a content hash here would be
+  // claiming something never computed.
+  const workspaceFingerprint = fnv1a(`${input.colonyId}|${[...loop.finalCandidatePaths].sort().join(",")}|${input.applier.fileCount}`);
+  input.log(`${prefix}-loop-complete`, { state: loop.state, finalStatus, rounds: loop.verificationRounds, repairs: loop.repairAttempts });
 
   const review: ColonyReview = { reviewerAntId: reviewMember?.antId ?? "reviewer", authorAntId: implMember?.antId ?? "author", decision: "approve", findings: ["independent review approved the applied artifacts"], securityFindings: [], selfReview };
   const bundle = freezeBundle({
@@ -241,13 +308,28 @@ export function runTwinColonyLive(input: TwinColonyLiveInput): TwinColonyLiveRes
     failureRegister: [],
     uncertaintyRegister: [`${input.colonyId}: real provider variability not captured in one run`],
     minorityReports: [],
-    providerReceipts: diagnostics.map((d) => ({ antId: d.antId, providerId: d.providerId, role: d.role, ok: d.ok, real: false as const })),
-    costReport: { providerCalls, realProviderCalls: 0 },
+    providerReceipts: diagnostics.map((d) => ({ antId: d.antId, providerId: d.providerId, role: d.role, ok: d.ok, real: d.realProcessExecution })),
+    // Counted from the per-call samples, including repair calls. A live run that
+    // spawned real provider processes now says so instead of recording zero.
+    costReport: { providerCalls, realProviderCalls: diagnostics.filter((d) => d.realProcessExecution).length + loop.repairReceipts.filter((r) => r.realProcessExecution).length },
     reproductionInstructions: ["npx.cmd tsc --noEmit", "npm.cmd test"],
+    evidenceVersion: 2 as const,
+    verification: {
+      finalStatus,
+      verificationRounds: loop.verificationRounds,
+      repairAttempts: loop.repairAttempts,
+      filesAppliedByRepair: loop.filesAppliedByRepair,
+      sandboxBackendId: verification.sandboxBackendId,
+      sandboxVerified: verification.sandboxVerified,
+      stopReason: loop.stopReason,
+      stageReceipts: loop.receipts.map((r) => ({ attempt: r.attempt, stage: r.stage, commandId: r.commandId, status: r.status, safeReasonCode: r.safeReasonCode, outputLineCount: r.outputLineCount, realProcessExecutions: r.realProcessExecutions })),
+      repairReceipts: loop.repairReceipts.map((r) => ({ attempt: r.attempt, antId: r.antId, ok: r.ok, realProcessExecution: r.realProcessExecution, filesProposed: r.filesProposed, filesApplied: r.filesApplied })),
+      workspaceFingerprint,
+    },
   });
   input.log(`${prefix}-bundle-frozen`, { fingerprint: bundle.fingerprint, artifacts: artifactsApplied });
 
-  return { colonyId: input.colonyId, ok: true, failureReason: null, bundle, providerCalls, artifactsApplied, independentReviews: 1, selfReviewsAccepted: 0, architecturePlan, reviewApproved, diagnostics, realProviderProcessExecutions: input.providerDriver.realProviderProcessExecutions, normalizationReceipts, reviewSkippedReason, completedRoles: diagnostics.filter((d) => d.ok).map((d) => d.role) };
+  return { colonyId: input.colonyId, ok: true, failureReason: null, bundle, providerCalls, artifactsApplied, independentReviews: 1, selfReviewsAccepted: 0, architecturePlan, reviewApproved, diagnostics, realProviderProcessExecutions: input.providerDriver.realProviderProcessExecutions, normalizationReceipts, reviewSkippedReason, completedRoles: diagnostics.filter((d) => d.ok).map((d) => d.role), loop, candidateVerified };
 }
 
 export interface TwinEmpireLiveRunInput {
@@ -262,6 +344,13 @@ export interface TwinEmpireLiveRunResult {
   readonly codex: TwinColonyLiveResult;
   readonly bothFrozen: boolean;
   readonly distinctFingerprints: boolean;
+  /**
+   * True ONLY when a real verification driver passed BOTH candidates. Frozen and
+   * verified are different facts and are reported separately on purpose.
+   */
+  readonly bothVerified: boolean;
+  readonly claudeVerificationStatus: string;
+  readonly codexVerificationStatus: string;
 }
 
 /** Run BOTH colonies independently (Claude then Codex) to frozen bundles, then stop. */
@@ -270,10 +359,13 @@ export function runTwinEmpireLive(input: TwinEmpireLiveRunInput): TwinEmpireLive
   const codex = runTwinColonyLive(input.codex);
   const bothFrozen = claude.ok && codex.ok && claude.bundle !== null && codex.bundle !== null && claude.bundle.frozen && codex.bundle.frozen;
   const distinctFingerprints = claude.bundle !== null && codex.bundle !== null && claude.bundle.fingerprint !== codex.bundle.fingerprint;
+  const bothVerified = claude.candidateVerified && codex.candidateVerified;
+  const claudeVerificationStatus = claude.bundle?.verification?.finalStatus ?? "NOT_PRODUCED";
+  const codexVerificationStatus = codex.bundle?.verification?.finalStatus ?? "NOT_PRODUCED";
   if (bothFrozen && distinctFingerprints) {
     input.log("twin-bundles-frozen", { claude: claude.bundle!.fingerprint, codex: codex.bundle!.fingerprint });
-    return { status: "twin-bundles-frozen", claude, codex, bothFrozen, distinctFingerprints };
+    return { status: "twin-bundles-frozen", claude, codex, bothFrozen, distinctFingerprints, bothVerified, claudeVerificationStatus, codexVerificationStatus };
   }
   input.log("twin-live-run-failed", { claudeReason: claude.failureReason ?? "none", codexReason: codex.failureReason ?? "none" });
-  return { status: "twin-live-run-failed", claude, codex, bothFrozen, distinctFingerprints };
+  return { status: "twin-live-run-failed", claude, codex, bothFrozen, distinctFingerprints, bothVerified, claudeVerificationStatus, codexVerificationStatus };
 }

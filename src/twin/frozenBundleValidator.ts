@@ -32,7 +32,17 @@ export function validateFrozenBundle(bundle: ColonyEvidenceBundle): FrozenBundle
   if (bundle.riskRegister.length === 0) issues.push("no-risk-register");
   if (bundle.uncertaintyRegister.length === 0) issues.push("no-uncertainty-register");
   if (bundle.reproductionInstructions.length === 0) issues.push("no-reproduction-instructions");
-  if (bundle.costReport.realProviderCalls !== 0) issues.push("unexpected-real-provider-call");
+  // VERSION-KEYED, because the two producers have opposite expectations and one
+  // rule cannot be true of both. A v1 forge bundle is deterministic, so ANY real
+  // provider call means something ran that should not have. A v2 live bundle is
+  // produced BY real provider calls, so zero of them would be the anomaly; what
+  // it must instead carry is the verification evidence that says what happened to
+  // the files. Neither rule is relaxed - each is applied where it is true.
+  if (bundle.evidenceVersion === 2) {
+    if (!bundle.verification) issues.push("v2-bundle-missing-verification-evidence");
+  } else if (bundle.costReport.realProviderCalls !== 0) {
+    issues.push("unexpected-real-provider-call");
+  }
 
   const recomputed = fnv1a(bundleCanonicalProjection(bundle));
   const fingerprintMatches = recomputed === bundle.fingerprint;

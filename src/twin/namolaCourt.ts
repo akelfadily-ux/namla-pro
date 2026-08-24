@@ -11,7 +11,7 @@
  * No fs, no child_process, no network, no wall clock.
  */
 
-import { fnv1a } from "./twinColonyTypes";
+import { fnv1a, isVerifiedCandidate } from "./twinColonyTypes";
 import type { ColonyEvidenceBundle, NamolaDecision } from "./twinColonyTypes";
 import type { WitnessIntegrityReport } from "./silentWitness";
 
@@ -28,6 +28,12 @@ export interface BundleEvidenceScore {
   readonly artifactCount: number;
   readonly independentReviews: number;
   readonly score: number;
+  /**
+   * True ONLY for a v2 bundle a real verification driver passed. A v1 forge
+   * bundle is `false` here because nothing verified it - that is a statement of
+   * fact about the bundle, not a mark against the forge.
+   */
+  readonly verified: boolean;
 }
 
 export interface NamolaCourtDecision {
@@ -51,11 +57,20 @@ function scoreBundle(bundle: ColonyEvidenceBundle, contract: NamolaAcceptanceCon
   if (bundle.artifacts.length === 0) disqualifiers.push("no-artifacts");
   const independentReviews = bundle.reviews.filter((r) => !r.selfReview && r.decision === "approve").length;
   if (contract.requireIndependentReview && independentReviews === 0) disqualifiers.push("no-independent-review");
-  if (bundle.costReport.realProviderCalls !== 0) disqualifiers.push("unexpected-real-provider-call");
+  // VERSION-KEYED. A v1 forge bundle is deterministic, so any real provider call
+  // disqualifies it. A v2 live bundle is PRODUCED by real provider calls, so the
+  // question that matters instead is whether anything ever verified the files it
+  // carries: a candidate nothing could check must not be crowned the winner on
+  // the strength of how many files it happens to contain.
+  if (bundle.evidenceVersion === 2) {
+    if (!isVerifiedCandidate(bundle)) disqualifiers.push("candidate-not-verified");
+  } else if (bundle.costReport.realProviderCalls !== 0) {
+    disqualifiers.push("unexpected-real-provider-call");
+  }
   const valid = disqualifiers.length === 0;
   const acceptanceCovered = new Set(bundle.artifacts.flatMap((a) => a.acceptanceCriteriaCovered)).size;
   const score = valid ? bundle.artifacts.length * 2 + independentReviews * 2 + acceptanceCovered - bundle.riskRegister.length * 0.25 : 0;
-  return { colonyId: bundle.colonyId, valid, disqualifiers, artifactCount: bundle.artifacts.length, independentReviews, score: Math.round(score * 1000) / 1000 };
+  return { colonyId: bundle.colonyId, valid, disqualifiers, artifactCount: bundle.artifacts.length, independentReviews, score: Math.round(score * 1000) / 1000, verified: isVerifiedCandidate(bundle) };
 }
 
 /**
@@ -85,10 +100,10 @@ export function judgeTwinBundles(claude: ColonyEvidenceBundle, codex: ColonyEvid
       reason = "both-valid-and-complementary-components";
     } else if (claudeScore.score >= codexScore.score) {
       decision = "SELECT_CLAUDE";
-      reason = "claude-dominates-on-verified-evidence";
+      reason = claudeScore.verified ? "claude-dominates-on-verified-evidence" : "claude-dominates-on-bundle-evidence";
     } else {
       decision = "SELECT_CODEX";
-      reason = "codex-dominates-on-verified-evidence";
+      reason = codexScore.verified ? "codex-dominates-on-verified-evidence" : "codex-dominates-on-bundle-evidence";
     }
   } else if (claudeScore.valid) {
     decision = "SELECT_CLAUDE";

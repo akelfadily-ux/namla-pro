@@ -110,12 +110,21 @@ const REQUEST_EXECUTABLE_MAP: Readonly<Record<ProviderExecutableId, string>> = {
 // influence the permission decision. The deny list is stated at the fixed argv
 // layer, where mission text cannot reach it, so Namla states this boundary
 // independently of ambient settings.
+// The mutation names are denied on the strength of the SAME Build Law sentence,
+// whose first clause is about writing: a provider "never writes files". The parsed
+// provider payload's file operations are applied by Namla's own workspace writer, so
+// provider generation never needs a native write tool for the product to work.
+// Denying them states that half of the invariant at the same fixed argv layer where
+// the read and shell halves are already stated. Until now it was not stated there at
+// all: Codex's `--sandbox read-only` governs model-generated shell commands rather
+// than a native tool set, so no existing flag carried the write clause. It rested on
+// host-CLI behaviour that Namla does not own, does not state, and does not test.
 // Scope: this removes these tool NAMES from the provider-generation session; it
-// is not a claim that no file is reachable and no command can run by any other
-// mechanism, and it is not OS-level process isolation.
+// is not a claim that no file is reachable or writable and no command can run by
+// any other mechanism, and it is not OS-level process isolation.
 // Installed 2.1.237: `--disallowedTools <tools...>`, comma or space separated;
 // canonical identifiers verified against the shipped tool catalog.
-const CLAUDE_FLAGS: readonly string[] = ["--print", "--output-format", "json", "--disallowedTools", "Read,Glob,Grep,Bash,PowerShell"];
+const CLAUDE_FLAGS: readonly string[] = ["--print", "--output-format", "json", "--disallowedTools", "Read,Glob,Grep,Bash,PowerShell,Write,Edit,MultiEdit,NotebookEdit"];
 // `--ignore-user-config` and `--sandbox read-only` are SECURITY flags, not
 // ergonomics. The Codex provider process runs directly on the host, outside the
 // verification container, so its authority would otherwise be whatever the CLI

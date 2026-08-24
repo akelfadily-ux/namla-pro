@@ -93,7 +93,7 @@ export function runDemoCodexInvocationFix() {
   // fixed template to deny Bash and PowerShell. The guard therefore states the
   // contract that is actually load-bearing and still true: a FIXED flag
   // template, the prompt on stdin, and no mission text anywhere in argv.
-  set("claude-invocation-fixed-template", !!cspec && cspec.executableId === "claude" && JSON.stringify(cspec.argumentList) === JSON.stringify(["--print", "--output-format", "json", "--disallowedTools", "Read,Glob,Grep,Bash,PowerShell"]) && !cspec.argumentList.some((a) => a.includes(PROMPT)));
+  set("claude-invocation-fixed-template", !!cspec && cspec.executableId === "claude" && JSON.stringify(cspec.argumentList) === JSON.stringify(["--print", "--output-format", "json", "--disallowedTools", "Read,Glob,Grep,Bash,PowerShell,Write,Edit,MultiEdit,NotebookEdit"]) && !cspec.argumentList.some((a) => a.includes(PROMPT)));
   set("claude-prompt-on-stdin", !!cspec && cspec.stdinData === PROMPT && claudeRes.ok === true);
 
   // 5: Multi-line JSONL parsed correctly (direct parser).

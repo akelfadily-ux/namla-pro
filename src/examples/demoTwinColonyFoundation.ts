@@ -340,7 +340,11 @@ export function runDemoTwinColonyFoundation() {
     ["valid-scenario-produces-merge", namolaReceipt.decision === "MERGE_APPROVED_COMPONENTS"],
     ["at-least-one-claude-component-approved", namolaReceipt.approvedComponents.some((c) => c.sourceColony === "claude-forge")],
     ["at-least-one-codex-component-approved", namolaReceipt.approvedComponents.some((c) => c.sourceColony === "codex-crucible")],
-    ["decision-receipt-complete", namolaReceipt.hardRejectionChecks.length === 10 && namolaReceipt.evidenceRejected.includes("provider-reputation") && namolaReceipt.decisionFingerprint.length > 0],
+    // TWIN-R1 added the `no-unverified-v2-candidate` hard rejection, so the court
+    // now runs 11 checks rather than 10. The count is asserted ALONGSIDE the new
+    // check's identity so the number cannot drift silently again: a future check
+    // must be named here, not merely counted.
+    ["decision-receipt-complete", namolaReceipt.hardRejectionChecks.length === 11 && namolaReceipt.hardRejectionChecks.some((c) => c.id === "no-unverified-v2-candidate") && namolaReceipt.evidenceRejected.includes("provider-reputation") && namolaReceipt.decisionFingerprint.length > 0],
     ["approved-components-retain-provenance", forge.provenanceRecords.length === 2 && forge.provenanceRecords.every((p) => p.originalFingerprint.length > 0 && p.sourceColony.length > 0 && p.mergeFingerprint.length > 0)],
     ["unapproved-component-rejected", forge.rejectedComponents.some((r) => !r.ok && r.reasonCode === "missing-provenance") && admission.accepted === 2],
     ["merge-workspace-starts-fresh", forge.mergeWorkspacePath === `workspaces/namola-twin/${MISSION_ID}/merge-forge` && forge.fileCount === 2],
@@ -354,7 +358,7 @@ export function runDemoTwinColonyFoundation() {
     ["residual-uncertainty-remains-disclosed", namolaReceipt.residualUncertainty.length > 0 && namolaReceipt.remainingRisks.length > 0],
     ["both-original-bundles-unchanged-after-merge", bundlesUnchangedAfterMerge === true],
     ["witness-integrity-remains-true", finalWitnessReport.integrityIntact === true],
-    ["witness-records-court-merge-process", finalWitnessReport.courtOpened === true && finalWitnessReport.hardRejectionChecksObserved === 10 && finalWitnessReport.mergeWorkspaceCreated === true && finalWitnessReport.provenanceRetainedObserved === true && finalWitnessReport.mergeFailuresObserved === 1 && finalWitnessReport.repairsExecutedObserved === 1 && finalWitnessReport.verificationRerunsObserved >= 1 && finalWitnessReport.unapprovedComponentBlocked === true && finalWitnessReport.mergeTestCountBounded === true],
+    ["witness-records-court-merge-process", finalWitnessReport.courtOpened === true && finalWitnessReport.hardRejectionChecksObserved === 11 && finalWitnessReport.mergeWorkspaceCreated === true && finalWitnessReport.provenanceRetainedObserved === true && finalWitnessReport.mergeFailuresObserved === 1 && finalWitnessReport.repairsExecutedObserved === 1 && finalWitnessReport.verificationRerunsObserved >= 1 && finalWitnessReport.unapprovedComponentBlocked === true && finalWitnessReport.mergeTestCountBounded === true],
     // --- customer delivery ---
     ["delivery-blocked-before-final-verification", blockedDelivery.ok === false && (blockedDelivery as { reasonCode: string }).reasonCode === "merge-verification-not-passed"],
     ["delivery-succeeds-after-final-verification", deliveryResult.ok === true && delivery !== null],

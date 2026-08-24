@@ -2,10 +2,18 @@
  * twinEmpireLivePlan — the deterministic, human-readable plan for a live twin
  * empire run, plus the orchestration seam (`TwinEmpireLiveSession`) the CLI calls
  * after the exact confirmation. Building the plan and displaying it performs ZERO
- * real action; authorizing a session mints the empire + colony provider permits
- * but this milestone stops before any real provider/MCP/workspace execution.
+ * real action; authorizing a session mints the empire + colony provider permits.
  *
- * No fs, no child_process, no network, no wall clock, no real provider calls.
+ * SCOPE OF THIS MODULE, STATED NARROWLY. Planning and permit minting happen here
+ * and nothing else does: no provider is called, no workspace is created, no
+ * command is executed by any function in this file. That is a statement about
+ * THIS module, not about the milestone — the CLI that consumes this plan does
+ * go on to spawn real provider processes and apply real files. An earlier
+ * version of this comment said execution was "not enabled", which stopped being
+ * true once the CLI was wired to the real drivers.
+ *
+ * No fs, no child_process, no network, no wall clock, no real provider calls
+ * IN THIS MODULE.
  */
 
 import type { DigitalWorker } from "../digital/digitalWorkers";
@@ -74,7 +82,7 @@ function coverageOf(cohort: readonly TwinCohortMember[]): TwinCapabilityCoverage
 }
 
 /** Build the plan from disjoint colony identity slices. Each colony gets its own provider. */
-export function buildTwinEmpireLivePlan(workers: readonly DigitalWorker[], providers: readonly RealProviderId[], missionId: string): TwinEmpireLivePlan {
+export function buildTwinEmpireLivePlan(workers: readonly DigitalWorker[], providers: readonly RealProviderId[], missionId: string, objectiveOverride?: string): TwinEmpireLivePlan {
   const claudeWorkers = workers.slice(0, 440);
   const codexWorkers = workers.slice(440, 880);
   const claudeProvider: RealProviderId = providers.includes("claude") ? "claude" : providers[0] ?? "claude";
@@ -84,7 +92,11 @@ export function buildTwinEmpireLivePlan(workers: readonly DigitalWorker[], provi
   const root = `workspaces/namola-twin/${missionId}`;
   return {
     missionId,
-    objective: "small TypeScript task manager (projects + tasks CRUD, in-memory storage, tests, docs)",
+    // The compiled-in objective is the COMPATIBILITY DEFAULT for the existing
+    // demo run. A real trial supplies its own through `--objective-file`, which
+    // reaches here already bounded and validated. Either way the objective is
+    // data: it is never an argv entry and never a command.
+    objective: objectiveOverride ?? "small TypeScript task manager (projects + tasks CRUD, in-memory storage, tests, docs)",
     acceptanceCriteria: ["tasks CRUD + completion", "in-memory storage", "unit tests present", "README + architecture docs", "security review"],
     providers,
     claudeCohort,
