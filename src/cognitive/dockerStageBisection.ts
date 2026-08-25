@@ -20,7 +20,7 @@
  */
 
 import { spawnSync } from "child_process";
-import { approvedImageReference, containerAbsenceProven, containerEnumerationArgs, resolveTrustedWorkspaceIdentity, IMAGE_DEFAULT_IDENTITY, CONTAINER_WORKSPACE_MOUNT, CONTAINER_SOURCE_MOUNT, CONTAINER_PROBE_MOUNT } from "./containerSandboxBackend";
+import { approvedImageReference, containerAbsenceProven, containerEnumerationArgs, emptyEnvFilePath, resolveTrustedWorkspaceIdentity, IMAGE_DEFAULT_IDENTITY, CONTAINER_WORKSPACE_MOUNT, CONTAINER_SOURCE_MOUNT, CONTAINER_PROBE_MOUNT } from "./containerSandboxBackend";
 import { classifyContainerStartup, type ContainerStderrCategory } from "./containerStartupDiagnostics";
 import type { CanonicalMountSource } from "./safeMountSource";
 
@@ -70,7 +70,7 @@ export function stageDefinitions(inputs: StageInputs): readonly StageDefinition[
     { stage: 3, label: "private-ipc-namespace", flags: ["--ipc", "private"] },
     { stage: 4, label: "readonly-root-and-tmpfs", flags: ["--read-only", "--tmpfs", "/tmp:rw,noexec,nosuid,size=64m"] },
     { stage: 5, label: "resource-limits", flags: ["--cpus", "1", "--memory", "512m", "--memory-swap", "512m", "--pids-limit", "64", "--ulimit", "nofile=256:256", "--ulimit", "fsize=67108864"] },
-    { stage: 6, label: "hostname-env-network", flags: ["--hostname", "namla-sandbox", "--env-file", "/dev/null", "--network", "none"] },
+    { stage: 6, label: "hostname-env-network", flags: ["--hostname", "namla-sandbox", "--env-file", emptyEnvFilePath(), "--network", "none"] },
     { stage: 7, label: "workspace-mount-and-workdir", flags: ["--mount", `type=bind,source=${inputs.workspaceHostPath},target=${CONTAINER_WORKSPACE_MOUNT},readonly=false`, "--workdir", CONTAINER_WORKSPACE_MOUNT] },
     { stage: 8, label: "probe-mount-and-probe-command", flags: ["--mount", `type=bind,source=${inputs.probeHostDir},target=${CONTAINER_PROBE_MOUNT},readonly=true`] },
   ];

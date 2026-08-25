@@ -97,7 +97,7 @@ function killAndProveDead(pid: number, attempts = 200): void {
 function goodFindings(over: Partial<ProbeFindings> = {}): ProbeFindings {
   return {
     uidNonRoot: true,
-    hostRootHidden: true,
+    sensitiveHostMarkersAbsent: true, unexpectedApplicationMounts: [],
     dockerSocketAbsent: true,
     secretsAbsent: true,
     pidNamespaceIsolated: true,
