@@ -5,16 +5,17 @@
  * Exercises all required test scenarios and regression cases:
  * 1. ZERO / NO CANDIDATE
  * 2. FAKE IS NOT REAL
- * 3. PROVIDER TOTALS
+ * 3. PROVIDER TOTALS & INITIAL AVERAGES
  * 4. ROLE BREAKDOWN (diagnosticCount)
  * 5. VERIFIED CANDIDATE
  * 6. VERIFICATION BLOCKED
  * 7. FAIL CLOSED
  * 8. REPAIR METRICS
  * 9. DETERMINISM
- * 10. STRENGTHENED INPUT IMMUTABILITY & FREEZE
+ * 10. STRENGTHENED DEEP-VALUE INPUT IMMUTABILITY & FREEZE
  * 11. GLOBAL REAL PROCESS EXECUTION INCLUDES REPAIRS
  * 12. SLOT ACQUISITION FAILURE DIAGNOSTIC SEMANTICS
+ * 13. SCOPE CONSISTENCY & GLOBAL BYTE TOTALS
  */
 
 import assert from "node:assert/strict";
@@ -57,14 +58,17 @@ export function runTwinRunMetricsTests(): { readonly ok: true; readonly testsPas
     assert.equal(metrics.colonyOk, false);
     assert.equal(metrics.failureReason, "no-build-artifacts");
     assert.equal(metrics.candidateVerified, false);
-    assert.equal(metrics.providerCalls, 0);
-    assert.equal(metrics.realProviderProcessExecutions, 0);
-    assert.equal(metrics.totalProviderDurationMs, 0);
+    assert.equal(metrics.initialProviderCalls, 0);
+    assert.equal(metrics.initialRealProviderProcessExecutions, 0);
+    assert.equal(metrics.totalRealProviderProcessExecutions, 0);
+    assert.equal(metrics.initialProviderDurationMs, 0);
+    assert.equal(metrics.initialProviderRequestBytes, 0);
+    assert.equal(metrics.initialProviderResponseBytes, 0);
     assert.equal(metrics.totalProviderRequestBytes, 0);
     assert.equal(metrics.totalProviderResponseBytes, 0);
-    assert.equal(metrics.averageProviderDurationMs, null);
-    assert.equal(metrics.averageProviderRequestBytes, null);
-    assert.equal(metrics.averageProviderResponseBytes, null);
+    assert.equal(metrics.averageInitialProviderDurationMs, null);
+    assert.equal(metrics.averageInitialProviderRequestBytes, null);
+    assert.equal(metrics.averageInitialProviderResponseBytes, null);
 
     assert.equal(metrics.artifactsApplied, 0);
     assert.equal(metrics.independentReviews, 0);
@@ -113,13 +117,14 @@ export function runTwinRunMetricsTests(): { readonly ok: true; readonly testsPas
     });
     const metrics = collectTwinRunMetrics(res);
 
-    assert.equal(metrics.providerCalls, 1);
-    assert.equal(metrics.realProviderProcessExecutions, 0);
+    assert.equal(metrics.initialProviderCalls, 1);
+    assert.equal(metrics.initialRealProviderProcessExecutions, 0);
+    assert.equal(metrics.totalRealProviderProcessExecutions, 0);
 
     testsPassed += 1;
   }
 
-  // 3. PROVIDER TOTALS & AVERAGES
+  // 3. PROVIDER TOTALS & INITIAL AVERAGES
   {
     const diag1: TwinProviderDiagnostic = {
       role: "architecture",
@@ -151,14 +156,17 @@ export function runTwinRunMetricsTests(): { readonly ok: true; readonly testsPas
     });
     const metrics = collectTwinRunMetrics(res);
 
-    assert.equal(metrics.providerCalls, 2);
-    assert.equal(metrics.realProviderProcessExecutions, 2);
-    assert.equal(metrics.totalProviderDurationMs, 400);
+    assert.equal(metrics.initialProviderCalls, 2);
+    assert.equal(metrics.initialRealProviderProcessExecutions, 2);
+    assert.equal(metrics.totalRealProviderProcessExecutions, 2);
+    assert.equal(metrics.initialProviderDurationMs, 400);
+    assert.equal(metrics.initialProviderRequestBytes, 1000);
+    assert.equal(metrics.initialProviderResponseBytes, 1600);
     assert.equal(metrics.totalProviderRequestBytes, 1000);
     assert.equal(metrics.totalProviderResponseBytes, 1600);
-    assert.equal(metrics.averageProviderDurationMs, 200);
-    assert.equal(metrics.averageProviderRequestBytes, 500);
-    assert.equal(metrics.averageProviderResponseBytes, 800);
+    assert.equal(metrics.averageInitialProviderDurationMs, 200);
+    assert.equal(metrics.averageInitialProviderRequestBytes, 500);
+    assert.equal(metrics.averageInitialProviderResponseBytes, 800);
 
     testsPassed += 1;
   }
@@ -444,7 +452,7 @@ export function runTwinRunMetricsTests(): { readonly ok: true; readonly testsPas
     testsPassed += 1;
   }
 
-  // 10. STRENGTHENED INPUT IMMUTABILITY & FREEZE
+  // 10. STRENGTHENED DEEP-VALUE INPUT IMMUTABILITY & FREEZE
   {
     const diag: TwinProviderDiagnostic = {
       role: "architecture",
@@ -509,9 +517,15 @@ export function runTwinRunMetricsTests(): { readonly ok: true; readonly testsPas
       loop: loopResult,
     });
 
+    // Capture deep value snapshot before collection
+    const preCallSerialized = JSON.stringify(res);
+
     const metrics = collectTwinRunMetrics(res);
 
-    // Verify input result structure & nested objects are unchanged
+    // Assert exact deep-value equality of input after collection
+    assert.equal(JSON.stringify(res), preCallSerialized);
+
+    // Verify references unchanged
     assert.equal(res.diagnostics, originalDiagnostics);
     assert.equal(res.diagnostics.length, 1);
     assert.equal(res.diagnostics[0], diag);
@@ -586,8 +600,9 @@ export function runTwinRunMetricsTests(): { readonly ok: true; readonly testsPas
 
     const metrics = collectTwinRunMetrics(res);
 
-    assert.equal(metrics.realProviderProcessExecutions, 2);
+    assert.equal(metrics.initialRealProviderProcessExecutions, 1);
     assert.equal(metrics.repair.repairRealProviderProcessExecutions, 1);
+    assert.equal(metrics.totalRealProviderProcessExecutions, 2);
 
     testsPassed += 1;
   }
@@ -614,8 +629,72 @@ export function runTwinRunMetricsTests(): { readonly ok: true; readonly testsPas
     const metrics = collectTwinRunMetrics(res);
 
     assert.equal(metrics.roleBreakdown.architecture.diagnosticCount, 1);
-    assert.equal(metrics.providerCalls, 0);
+    assert.equal(metrics.initialProviderCalls, 0);
     assert.equal("callCount" in metrics.roleBreakdown.architecture, false);
+
+    testsPassed += 1;
+  }
+
+  // 13. SCOPE CONSISTENCY & GLOBAL BYTE TOTALS
+  {
+    const diag: TwinProviderDiagnostic = {
+      role: "architecture",
+      antId: "ant-arch",
+      providerId: "claude",
+      ok: true,
+      failureCategory: "none",
+      timeoutMs: 60000,
+      durationMs: 100,
+      requestBytes: 600,
+      responseBytes: 1200,
+      realProcessExecution: true,
+    };
+    const repReceipt: TwinRepairReceipt = {
+      colonyId: "claude-forge",
+      attempt: 1,
+      antId: "ant-repair",
+      taskId: "task-repair-1",
+      providerId: "claude",
+      ok: true,
+      failureCategory: null,
+      realProcessExecution: true,
+      filesProposed: 1,
+      filesApplied: 1,
+      requestBytes: 400,
+      responseBytes: 800,
+      order: 0,
+    };
+    const loopResult: TwinBuildLoopResult = {
+      state: "CANDIDATE_VERIFIED",
+      finalStatus: "PASS",
+      verificationRounds: 2,
+      repairAttempts: 1,
+      filesAppliedByRepair: 1,
+      receipts: [],
+      repairReceipts: [repReceipt],
+      stopReason: null,
+      finalCandidatePaths: ["src/index.ts"],
+    };
+    const res = makeMinimalResult({
+      providerCalls: 1,
+      diagnostics: [diag],
+      loop: loopResult,
+    });
+
+    const metrics = collectTwinRunMetrics(res);
+
+    assert.equal(metrics.initialProviderCalls, 1);
+    assert.equal(metrics.initialRealProviderProcessExecutions, 1);
+    assert.equal(metrics.repair.repairRealProviderProcessExecutions, 1);
+    assert.equal(metrics.totalRealProviderProcessExecutions, 2);
+
+    assert.equal(metrics.initialProviderRequestBytes, 600);
+    assert.equal(metrics.repair.repairRequestBytes, 400);
+    assert.equal(metrics.totalProviderRequestBytes, 1000);
+
+    assert.equal(metrics.initialProviderResponseBytes, 1200);
+    assert.equal(metrics.repair.repairResponseBytes, 800);
+    assert.equal(metrics.totalProviderResponseBytes, 2000);
 
     testsPassed += 1;
   }

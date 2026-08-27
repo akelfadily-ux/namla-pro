@@ -65,12 +65,19 @@ export interface TwinRunMetricsSnapshot {
   readonly failureReason: string | null;
   readonly candidateVerified: boolean;
 
-  // PROVIDER EXECUTION
-  readonly providerCalls: number;
+  // INITIAL PROVIDER EXECUTION (architecture / implementation / review role calls)
+  readonly initialProviderCalls: number;
+  readonly initialRealProviderProcessExecutions: number;
+  readonly initialProviderDurationMs: number;
+  readonly initialProviderRequestBytes: number;
+  readonly initialProviderResponseBytes: number;
+
+  // GLOBAL REAL PROCESS EXECUTION & BYTE TOTALS (initial + repair)
   /** Sum of real process executions from initial provider diagnostics AND repair receipts. */
-  readonly realProviderProcessExecutions: number;
-  readonly totalProviderDurationMs: number;
+  readonly totalRealProviderProcessExecutions: number;
+  /** Sum of request bytes from initial provider diagnostics AND repair receipts. */
   readonly totalProviderRequestBytes: number;
+  /** Sum of response bytes from initial provider diagnostics AND repair receipts. */
   readonly totalProviderResponseBytes: number;
 
   // ROLE BREAKDOWN
@@ -91,10 +98,14 @@ export interface TwinRunMetricsSnapshot {
   // REPAIR EXECUTION
   readonly repair: TwinRepairMetricsSnapshot;
 
-  // DERIVED AVERAGES (null when providerCalls === 0)
-  readonly averageProviderDurationMs: number | null;
-  readonly averageProviderRequestBytes: number | null;
-  readonly averageProviderResponseBytes: number | null;
+  // DERIVED INITIAL AVERAGES (null when initialProviderCalls === 0)
+  /**
+   * Repair duration is not included because the current TwinRepairReceipt contract
+   * does not expose repair duration evidence. This is an evidence limitation, not a value of zero.
+   */
+  readonly averageInitialProviderDurationMs: number | null;
+  readonly averageInitialProviderRequestBytes: number | null;
+  readonly averageInitialProviderResponseBytes: number | null;
 }
 
 /**
@@ -108,11 +119,11 @@ export function collectTwinRunMetrics(result: TwinColonyLiveResult): TwinRunMetr
   const failureReason = result.failureReason;
   const candidateVerified = result.candidateVerified;
 
-  // Provider Execution & Role Breakdown
-  let realProviderProcessExecutions = 0;
-  let totalProviderDurationMs = 0;
-  let totalProviderRequestBytes = 0;
-  let totalProviderResponseBytes = 0;
+  // Initial Provider Execution & Role Breakdown
+  let initialRealProviderProcessExecutions = 0;
+  let initialProviderDurationMs = 0;
+  let initialProviderRequestBytes = 0;
+  let initialProviderResponseBytes = 0;
 
   const roleData: Record<TwinRole, { diagnosticCount: number; durationMs: number; requestBytes: number; responseBytes: number }> = {
     architecture: { diagnosticCount: 0, durationMs: 0, requestBytes: 0, responseBytes: 0 },
@@ -122,11 +133,11 @@ export function collectTwinRunMetrics(result: TwinColonyLiveResult): TwinRunMetr
 
   for (const diag of result.diagnostics) {
     if (diag.realProcessExecution) {
-      realProviderProcessExecutions += 1;
+      initialRealProviderProcessExecutions += 1;
     }
-    totalProviderDurationMs += diag.durationMs;
-    totalProviderRequestBytes += diag.requestBytes;
-    totalProviderResponseBytes += diag.responseBytes;
+    initialProviderDurationMs += diag.durationMs;
+    initialProviderRequestBytes += diag.requestBytes;
+    initialProviderResponseBytes += diag.responseBytes;
 
     const roleAcc = roleData[diag.role];
     if (roleAcc) {
@@ -137,12 +148,12 @@ export function collectTwinRunMetrics(result: TwinColonyLiveResult): TwinRunMetr
     }
   }
 
-  const providerCalls = result.providerCalls;
+  const initialProviderCalls = result.providerCalls;
 
-  // Derived Averages
-  const averageProviderDurationMs = providerCalls > 0 ? totalProviderDurationMs / providerCalls : null;
-  const averageProviderRequestBytes = providerCalls > 0 ? totalProviderRequestBytes / providerCalls : null;
-  const averageProviderResponseBytes = providerCalls > 0 ? totalProviderResponseBytes / providerCalls : null;
+  // Derived Initial Averages
+  const averageInitialProviderDurationMs = initialProviderCalls > 0 ? initialProviderDurationMs / initialProviderCalls : null;
+  const averageInitialProviderRequestBytes = initialProviderCalls > 0 ? initialProviderRequestBytes / initialProviderCalls : null;
+  const averageInitialProviderResponseBytes = initialProviderCalls > 0 ? initialProviderResponseBytes / initialProviderCalls : null;
 
   // Role Metrics Snapshot
   const roleBreakdown = Object.freeze({
@@ -229,7 +240,6 @@ export function collectTwinRunMetrics(result: TwinColonyLiveResult): TwinRunMetr
     for (const repReceipt of result.loop.repairReceipts) {
       if (repReceipt.realProcessExecution) {
         repairRealProviderProcessExecutions += 1;
-        realProviderProcessExecutions += 1;
       }
       repairFilesProposed += repReceipt.filesProposed;
       repairFilesApplied += repReceipt.filesApplied;
@@ -247,14 +257,22 @@ export function collectTwinRunMetrics(result: TwinColonyLiveResult): TwinRunMetr
     repairResponseBytes,
   });
 
+  // Global Real Execution & Byte Totals (Initial + Repair)
+  const totalRealProviderProcessExecutions = initialRealProviderProcessExecutions + repairRealProviderProcessExecutions;
+  const totalProviderRequestBytes = initialProviderRequestBytes + repairRequestBytes;
+  const totalProviderResponseBytes = initialProviderResponseBytes + repairResponseBytes;
+
   const snapshot: TwinRunMetricsSnapshot = Object.freeze({
     colonyId,
     colonyOk,
     failureReason,
     candidateVerified,
-    providerCalls,
-    realProviderProcessExecutions,
-    totalProviderDurationMs,
+    initialProviderCalls,
+    initialRealProviderProcessExecutions,
+    initialProviderDurationMs,
+    initialProviderRequestBytes,
+    initialProviderResponseBytes,
+    totalRealProviderProcessExecutions,
     totalProviderRequestBytes,
     totalProviderResponseBytes,
     roleBreakdown,
@@ -263,9 +281,9 @@ export function collectTwinRunMetrics(result: TwinColonyLiveResult): TwinRunMetr
     reviewApproved,
     loop: loopSnapshot,
     repair: repairSnapshot,
-    averageProviderDurationMs,
-    averageProviderRequestBytes,
-    averageProviderResponseBytes,
+    averageInitialProviderDurationMs,
+    averageInitialProviderRequestBytes,
+    averageInitialProviderResponseBytes,
   });
 
   return snapshot;
