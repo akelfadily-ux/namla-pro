@@ -55,7 +55,7 @@ const WORKSPACE = process.cwd();
 function realisticClaims(): SandboxIsolationClaims {
   return claimsFromProbe({
     uidNonRoot: true,
-    hostRootHidden: true,
+    sensitiveHostMarkersAbsent: true, unexpectedApplicationMounts: [],
     dockerSocketAbsent: true,
     secretsAbsent: true,
     pidNamespaceIsolated: true,
