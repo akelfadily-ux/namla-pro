@@ -1,18 +1,20 @@
 /**
  * twinRunMetricsTests — focused deterministic test suite for `twinRunMetrics.ts`
- * (TASK 001).
+ * (TASK 001 Review Fixes).
  *
- * Exercises all 10 required test scenarios:
+ * Exercises all required test scenarios and regression cases:
  * 1. ZERO / NO CANDIDATE
  * 2. FAKE IS NOT REAL
  * 3. PROVIDER TOTALS
- * 4. ROLE BREAKDOWN
+ * 4. ROLE BREAKDOWN (diagnosticCount)
  * 5. VERIFIED CANDIDATE
  * 6. VERIFICATION BLOCKED
  * 7. FAIL CLOSED
  * 8. REPAIR METRICS
  * 9. DETERMINISM
- * 10. INPUT IMMUTABILITY
+ * 10. STRENGTHENED INPUT IMMUTABILITY & FREEZE
+ * 11. GLOBAL REAL PROCESS EXECUTION INCLUDES REPAIRS
+ * 12. SLOT ACQUISITION FAILURE DIAGNOSTIC SEMANTICS
  */
 
 import assert from "node:assert/strict";
@@ -161,7 +163,7 @@ export function runTwinRunMetricsTests(): { readonly ok: true; readonly testsPas
     testsPassed += 1;
   }
 
-  // 4. ROLE BREAKDOWN
+  // 4. ROLE BREAKDOWN (diagnosticCount)
   {
     const diagArch: TwinProviderDiagnostic = {
       role: "architecture",
@@ -205,17 +207,17 @@ export function runTwinRunMetricsTests(): { readonly ok: true; readonly testsPas
     });
     const metrics = collectTwinRunMetrics(res);
 
-    assert.equal(metrics.roleBreakdown.architecture.callCount, 1);
+    assert.equal(metrics.roleBreakdown.architecture.diagnosticCount, 1);
     assert.equal(metrics.roleBreakdown.architecture.durationMs, 150);
     assert.equal(metrics.roleBreakdown.architecture.requestBytes, 300);
     assert.equal(metrics.roleBreakdown.architecture.responseBytes, 600);
 
-    assert.equal(metrics.roleBreakdown.implementation.callCount, 1);
+    assert.equal(metrics.roleBreakdown.implementation.diagnosticCount, 1);
     assert.equal(metrics.roleBreakdown.implementation.durationMs, 250);
     assert.equal(metrics.roleBreakdown.implementation.requestBytes, 500);
     assert.equal(metrics.roleBreakdown.implementation.responseBytes, 1000);
 
-    assert.equal(metrics.roleBreakdown.review.callCount, 1);
+    assert.equal(metrics.roleBreakdown.review.diagnosticCount, 1);
     assert.equal(metrics.roleBreakdown.review.durationMs, 100);
     assert.equal(metrics.roleBreakdown.review.requestBytes, 200);
     assert.equal(metrics.roleBreakdown.review.responseBytes, 400);
@@ -442,7 +444,7 @@ export function runTwinRunMetricsTests(): { readonly ok: true; readonly testsPas
     testsPassed += 1;
   }
 
-  // 10. INPUT IMMUTABILITY & FREEZE
+  // 10. STRENGTHENED INPUT IMMUTABILITY & FREEZE
   {
     const diag: TwinProviderDiagnostic = {
       role: "architecture",
@@ -456,23 +458,164 @@ export function runTwinRunMetricsTests(): { readonly ok: true; readonly testsPas
       responseBytes: 1500,
       realProcessExecution: false,
     };
+    const vReceipt: TwinVerificationReceipt = {
+      colonyId: "claude-forge",
+      attempt: 0,
+      stage: "typecheck",
+      commandId: "typecheck",
+      status: "PASS",
+      failureCategory: null,
+      safeReasonCode: "verification-passed",
+      outputLineCount: 10,
+      realProcessExecutions: 0,
+      sandboxBackendId: "fake-test-backend",
+      sandboxVerified: false,
+      order: 0,
+    };
+    const repReceipt: TwinRepairReceipt = {
+      colonyId: "claude-forge",
+      attempt: 1,
+      antId: "ant-repair",
+      taskId: "task-repair-1",
+      providerId: "claude",
+      ok: true,
+      failureCategory: null,
+      realProcessExecution: false,
+      filesProposed: 1,
+      filesApplied: 1,
+      requestBytes: 300,
+      responseBytes: 600,
+      order: 1,
+    };
     const originalDiagnostics = [diag];
+    const originalReceipts = [vReceipt];
+    const originalRepairReceipts = [repReceipt];
+
+    const loopResult: TwinBuildLoopResult = {
+      state: "CANDIDATE_VERIFIED",
+      finalStatus: "PASS",
+      verificationRounds: 1,
+      repairAttempts: 1,
+      filesAppliedByRepair: 1,
+      receipts: originalReceipts,
+      repairReceipts: originalRepairReceipts,
+      stopReason: null,
+      finalCandidatePaths: ["src/index.ts"],
+    };
+
     const res = makeMinimalResult({
       providerCalls: 1,
       diagnostics: originalDiagnostics,
+      loop: loopResult,
     });
 
     const metrics = collectTwinRunMetrics(res);
 
-    // Verify input result was not mutated
+    // Verify input result structure & nested objects are unchanged
     assert.equal(res.diagnostics, originalDiagnostics);
     assert.equal(res.diagnostics.length, 1);
+    assert.equal(res.diagnostics[0], diag);
+    assert.equal(res.loop, loopResult);
+    assert.equal(res.loop?.receipts, originalReceipts);
+    assert.equal(res.loop?.receipts[0], vReceipt);
+    assert.equal(res.loop?.repairReceipts, originalRepairReceipts);
+    assert.equal(res.loop?.repairReceipts[0], repReceipt);
 
-    // Verify returned snapshot is frozen
+    // Verify caller's input was not frozen or mutated
+    assert.equal(Object.isFrozen(res), false);
+    assert.equal(Object.isFrozen(res.diagnostics), false);
+    assert.equal(Object.isFrozen(loopResult), false);
+    assert.equal(Object.isFrozen(originalReceipts), false);
+    assert.equal(Object.isFrozen(originalRepairReceipts), false);
+
+    // Verify returned snapshot is deep-frozen
     assert.equal(Object.isFrozen(metrics), true);
     assert.equal(Object.isFrozen(metrics.roleBreakdown), true);
     assert.equal(Object.isFrozen(metrics.loop), true);
+    assert.equal(Object.isFrozen(metrics.loop.statusCounts), true);
     assert.equal(Object.isFrozen(metrics.repair), true);
+
+    testsPassed += 1;
+  }
+
+  // 11. GLOBAL REAL PROCESS EXECUTION INCLUDES REPAIRS
+  {
+    const diagReal: TwinProviderDiagnostic = {
+      role: "implementation",
+      antId: "ant-impl",
+      providerId: "claude",
+      ok: true,
+      failureCategory: "none",
+      timeoutMs: 60000,
+      durationMs: 300,
+      requestBytes: 600,
+      responseBytes: 1200,
+      realProcessExecution: true,
+    };
+    const repReceiptReal: TwinRepairReceipt = {
+      colonyId: "claude-forge",
+      attempt: 1,
+      antId: "ant-repair",
+      taskId: "task-repair-1",
+      providerId: "claude",
+      ok: true,
+      failureCategory: null,
+      realProcessExecution: true,
+      filesProposed: 1,
+      filesApplied: 1,
+      requestBytes: 400,
+      responseBytes: 800,
+      order: 0,
+    };
+    const loopResult: TwinBuildLoopResult = {
+      state: "CANDIDATE_VERIFIED",
+      finalStatus: "PASS",
+      verificationRounds: 2,
+      repairAttempts: 1,
+      filesAppliedByRepair: 1,
+      receipts: [],
+      repairReceipts: [repReceiptReal],
+      stopReason: null,
+      finalCandidatePaths: ["src/index.ts"],
+    };
+    const res = makeMinimalResult({
+      providerCalls: 1,
+      diagnostics: [diagReal],
+      loop: loopResult,
+    });
+
+    const metrics = collectTwinRunMetrics(res);
+
+    assert.equal(metrics.realProviderProcessExecutions, 2);
+    assert.equal(metrics.repair.repairRealProviderProcessExecutions, 1);
+
+    testsPassed += 1;
+  }
+
+  // 12. SLOT ACQUISITION FAILURE DIAGNOSTIC SEMANTICS
+  {
+    const diagSlotFail: TwinProviderDiagnostic = {
+      role: "architecture",
+      antId: "ant-arch",
+      providerId: "claude",
+      ok: false,
+      failureCategory: "empire-permit-slot-unavailable",
+      timeoutMs: 60000,
+      durationMs: 0,
+      requestBytes: 0,
+      responseBytes: 0,
+      realProcessExecution: false,
+    };
+    const res = makeMinimalResult({
+      providerCalls: 0, // slot failure means providerDriver.call was NOT executed
+      diagnostics: [diagSlotFail],
+    });
+
+    const metrics = collectTwinRunMetrics(res);
+
+    assert.equal(metrics.roleBreakdown.architecture.diagnosticCount, 1);
+    assert.equal(metrics.providerCalls, 0);
+    assert.equal("callCount" in metrics.roleBreakdown.architecture, false);
 
     testsPassed += 1;
   }

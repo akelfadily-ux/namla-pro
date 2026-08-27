@@ -18,7 +18,13 @@ import type { TwinLoopState, TwinVerificationStatus } from "./twinBuildLoop";
 
 export interface TwinRoleMetrics {
   readonly role: TwinRole;
-  readonly callCount: number;
+  /**
+   * Exact per-role provider call count is NOT derivable from the current
+   * TwinProviderDiagnostic contract because slot-acquisition failures also
+   * produce diagnostics without executing a provider call. This represents the
+   * number of TwinProviderDiagnostic records recorded for this role.
+   */
+  readonly diagnosticCount: number;
   readonly durationMs: number;
   readonly requestBytes: number;
   readonly responseBytes: number;
@@ -61,6 +67,7 @@ export interface TwinRunMetricsSnapshot {
 
   // PROVIDER EXECUTION
   readonly providerCalls: number;
+  /** Sum of real process executions from initial provider diagnostics AND repair receipts. */
   readonly realProviderProcessExecutions: number;
   readonly totalProviderDurationMs: number;
   readonly totalProviderRequestBytes: number;
@@ -90,16 +97,6 @@ export interface TwinRunMetricsSnapshot {
   readonly averageProviderResponseBytes: number | null;
 }
 
-function emptyRoleMetrics(role: TwinRole): TwinRoleMetrics {
-  return Object.freeze({
-    role,
-    callCount: 0,
-    durationMs: 0,
-    requestBytes: 0,
-    responseBytes: 0,
-  });
-}
-
 /**
  * Derive a pure, deterministic metrics snapshot from an existing `TwinColonyLiveResult`.
  * Returns a deep-frozen structure. Does NOT mutate the input.
@@ -117,10 +114,10 @@ export function collectTwinRunMetrics(result: TwinColonyLiveResult): TwinRunMetr
   let totalProviderRequestBytes = 0;
   let totalProviderResponseBytes = 0;
 
-  const roleData: Record<TwinRole, { callCount: number; durationMs: number; requestBytes: number; responseBytes: number }> = {
-    architecture: { callCount: 0, durationMs: 0, requestBytes: 0, responseBytes: 0 },
-    implementation: { callCount: 0, durationMs: 0, requestBytes: 0, responseBytes: 0 },
-    review: { callCount: 0, durationMs: 0, requestBytes: 0, responseBytes: 0 },
+  const roleData: Record<TwinRole, { diagnosticCount: number; durationMs: number; requestBytes: number; responseBytes: number }> = {
+    architecture: { diagnosticCount: 0, durationMs: 0, requestBytes: 0, responseBytes: 0 },
+    implementation: { diagnosticCount: 0, durationMs: 0, requestBytes: 0, responseBytes: 0 },
+    review: { diagnosticCount: 0, durationMs: 0, requestBytes: 0, responseBytes: 0 },
   };
 
   for (const diag of result.diagnostics) {
@@ -133,7 +130,7 @@ export function collectTwinRunMetrics(result: TwinColonyLiveResult): TwinRunMetr
 
     const roleAcc = roleData[diag.role];
     if (roleAcc) {
-      roleAcc.callCount += 1;
+      roleAcc.diagnosticCount += 1;
       roleAcc.durationMs += diag.durationMs;
       roleAcc.requestBytes += diag.requestBytes;
       roleAcc.responseBytes += diag.responseBytes;
@@ -232,6 +229,7 @@ export function collectTwinRunMetrics(result: TwinColonyLiveResult): TwinRunMetr
     for (const repReceipt of result.loop.repairReceipts) {
       if (repReceipt.realProcessExecution) {
         repairRealProviderProcessExecutions += 1;
+        realProviderProcessExecutions += 1;
       }
       repairFilesProposed += repReceipt.filesProposed;
       repairFilesApplied += repReceipt.filesApplied;
