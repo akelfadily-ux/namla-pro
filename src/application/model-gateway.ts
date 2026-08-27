@@ -39,6 +39,43 @@ export class ModelGateway {
       throw new Error(`Model provider not configured: ${provider}`);
     }
 
-    return adapter.generate(request);
+    const now = new Date();
+    await this.state.appendEvent({
+      type: "model.started",
+      runId,
+      traceId: `trace-${runId}`,
+      timestamp: now,
+      payload: { provider, model: request.model },
+    });
+
+    try {
+      const response = await adapter.generate(request);
+
+      await this.state.appendEvent({
+        type: "model.completed",
+        runId,
+        traceId: `trace-${runId}`,
+        timestamp: new Date(),
+        payload: {
+          provider,
+          model: response.model,
+          inputTokens: response.usage.inputTokens,
+          outputTokens: response.usage.outputTokens,
+          costUsd: response.usage.estimatedCostUsd,
+        },
+      });
+
+      return response;
+    } catch (error) {
+      const errMsg = error instanceof Error ? error.message : "Model generation failed";
+      await this.state.appendEvent({
+        type: "model.failed",
+        runId,
+        traceId: `trace-${runId}`,
+        timestamp: new Date(),
+        payload: { provider, model: request.model, error: errMsg },
+      });
+      throw error;
+    }
   }
 }

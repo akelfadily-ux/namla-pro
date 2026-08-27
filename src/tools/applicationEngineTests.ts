@@ -14,12 +14,46 @@ class MockStateRepository {
   public operations = new Map<string, any>();
   public tasks = new Map<string, any>();
 
-  async getOperationResult<T>(opId: string): Promise<T | null> {
+  async claimOperation(op: any, workerId: string): Promise<any> {
+    const existing = this.operations.get(op.id);
+    if (existing) {
+      if (existing.inputHash && existing.inputHash !== op.inputHash) {
+        return { status: "INPUT_HASH_MISMATCH", record: existing };
+      }
+      if (existing.status === "COMPLETED") {
+        return { status: "COMPLETED", record: existing };
+      }
+    }
+    const record = { ...op, status: "RUNNING", owner: workerId };
+    this.operations.set(op.id, record);
+    return { status: "CLAIMED", record };
+  }
+
+  async completeOperation(opId: string, workerId: string, result: any): Promise<void> {
+    const op = this.operations.get(opId) || { id: opId };
+    op.status = "COMPLETED";
+    op.result = result;
+    this.operations.set(opId, op);
+  }
+
+  async failOperation(opId: string, workerId: string, error: string): Promise<void> {
+    const op = this.operations.get(opId) || { id: opId };
+    op.status = "FAILED";
+    op.error = error;
+    this.operations.set(opId, op);
+  }
+
+  async getOperationRecord(opId: string): Promise<any> {
     return this.operations.get(opId) ?? null;
   }
 
+  async getOperationResult<T>(opId: string): Promise<T | null> {
+    const op = this.operations.get(opId);
+    return (op && op.status === "COMPLETED") ? op.result : null;
+  }
+
   async saveOperationResult<T>(opId: string, val: T): Promise<void> {
-    this.operations.set(opId, val);
+    this.completeOperation(opId, "system", val);
   }
 
   async getTask(taskId: string): Promise<any> {

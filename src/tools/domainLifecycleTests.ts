@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { assertTaskTransition, InvalidTaskTransitionError } from "../domain/lifecycle";
-import { TaskStatus } from "../domain/types";
+import { assertRunTransition, assertTaskTransition, InvalidRunTransitionError, InvalidTaskTransitionError } from "../domain/lifecycle";
+import { RunStatus, TaskStatus } from "../domain/types";
 import {
   BudgetExceededError,
   ConfigurationError,
@@ -33,6 +33,21 @@ test("Task lifecycle transition rules", async (t) => {
     assert.throws(
       () => assertTaskTransition(TaskStatus.Approved, TaskStatus.Running),
       InvalidTaskTransitionError,
+    );
+  });
+});
+
+test("Run lifecycle transition rules", async (t) => {
+  await t.test("allows valid run transitions", () => {
+    expectNoThrow(() => assertRunTransition(RunStatus.Created, RunStatus.Planning));
+    expectNoThrow(() => assertRunTransition(RunStatus.Planning, RunStatus.Running));
+    expectNoThrow(() => assertRunTransition(RunStatus.Running, RunStatus.Completed));
+  });
+
+  await t.test("rejects illegal run transitions", () => {
+    assert.throws(
+      () => assertRunTransition(RunStatus.Created, RunStatus.Completed),
+      InvalidRunTransitionError,
     );
   });
 });

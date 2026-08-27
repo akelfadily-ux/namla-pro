@@ -24,10 +24,22 @@ export interface EventRecord {
   payload: Record<string, unknown>;
 }
 
+import { AntId, OperationRecord, RunRecord, RunStatus, WorkerId } from "./types";
+
 export interface StateRepository {
+  createRun(run: RunRecord): Promise<void>;
+
+  getRun(runId: RunId): Promise<RunRecord | null>;
+
+  transitionRun(
+    runId: RunId,
+    expectedStatus: RunStatus,
+    nextStatus: RunStatus,
+  ): Promise<RunRecord>;
+
   getTask(taskId: TaskId): Promise<TaskRecord | null>;
 
-  saveTask(task: TaskRecord): Promise<void>;
+  createTask(task: TaskRecord): Promise<void>;
 
   transitionTask(
     taskId: TaskId,
@@ -38,6 +50,27 @@ export interface StateRepository {
 
   listRunnableTasks(runId: RunId): Promise<TaskRecord[]>;
 
+  claimTaskLease(
+    taskId: TaskId,
+    workerId: WorkerId,
+    leaseDurationMs?: number,
+  ): Promise<TaskRecord | null>;
+
+  renewTaskLease(
+    taskId: TaskId,
+    workerId: WorkerId,
+    leaseDurationMs?: number,
+  ): Promise<boolean>;
+
+  releaseTaskLease(
+    taskId: TaskId,
+    workerId: WorkerId,
+  ): Promise<void>;
+
+  recoverExpiredLeases(
+    runId: RunId,
+  ): Promise<number>;
+
   saveAntExecution(execution: AntExecution): Promise<void>;
 
   saveArtifact(artifact: Artifact): Promise<void>;
@@ -47,6 +80,28 @@ export interface StateRepository {
   getBudgetUsage(runId: RunId): Promise<BudgetUsage>;
 
   getBudgetLimits(runId: RunId): Promise<BudgetLimits>;
+
+  getOperationRecord(
+    operationId: OperationId,
+  ): Promise<OperationRecord | null>;
+
+  claimOperation(
+    operation: Partial<OperationRecord> & { id: OperationId; toolName: string; inputHash: string; runId: RunId; taskId: TaskId; antId: AntId },
+    workerId: WorkerId,
+    leaseDurationMs?: number,
+  ): Promise<{ status: "CLAIMED" | "COMPLETED" | "RUNNING_OTHER_LEASE" | "INPUT_HASH_MISMATCH"; record?: OperationRecord }>;
+
+  completeOperation<T>(
+    operationId: OperationId,
+    workerId: WorkerId,
+    value: T,
+  ): Promise<void>;
+
+  failOperation(
+    operationId: OperationId,
+    workerId: WorkerId,
+    error: string,
+  ): Promise<void>;
 
   getOperationResult<T>(
     operationId: OperationId,

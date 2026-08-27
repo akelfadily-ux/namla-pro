@@ -53,6 +53,24 @@ class MockDatabase {
         if (ant !== null) task.assigned_ant_id = ant;
         return { rows: [task] };
       }
+      if (s.includes("SET LEASE_OWNER = $1")) {
+        const [workerId, expiresAt, taskId] = params;
+        const task = this.tasks.get(taskId);
+        if (!task) return { rows: [] };
+        if (task.lease_expires_at && task.lease_expires_at >= new Date()) return { rows: [] };
+        task.lease_owner = workerId;
+        task.lease_expires_at = expiresAt;
+        return { rows: [task] };
+      }
+      if (s.includes("SET LEASE_OWNER = NULL")) {
+        const [taskId, workerId] = params;
+        const task = this.tasks.get(taskId);
+        if (task && task.lease_owner === workerId) {
+          task.lease_owner = null;
+          task.lease_expires_at = null;
+        }
+        return { rows: [] };
+      }
     }
 
     if (s.startsWith("SELECT * FROM TASKS WHERE RUN_ID =")) {
@@ -84,7 +102,7 @@ test("PostgresStateRepository & Scheduler atomic state logic", async (t) => {
     const repo = new PostgresStateRepository(db);
 
     const now = new Date();
-    await repo.saveTask({
+    await repo.createTask({
       id: "task-1",
       runId: "run-1",
       title: "Implement Feature",
@@ -116,7 +134,7 @@ test("PostgresStateRepository & Scheduler atomic state logic", async (t) => {
     const scheduler = new Scheduler(repo);
 
     const now = new Date();
-    await repo.saveTask({
+    await repo.createTask({
       id: "task-dep",
       runId: "run-1",
       title: "Dependency",
@@ -132,7 +150,7 @@ test("PostgresStateRepository & Scheduler atomic state logic", async (t) => {
       updatedAt: now,
     });
 
-    await repo.saveTask({
+    await repo.createTask({
       id: "task-main",
       runId: "run-1",
       title: "Main Task",

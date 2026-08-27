@@ -1,4 +1,27 @@
-import { TaskStatus } from "./types";
+import { RunStatus, TaskStatus } from "./types";
+
+const runTransitions: Record<RunStatus, readonly RunStatus[]> = {
+  [RunStatus.Created]: [RunStatus.Planning, RunStatus.Cancelled],
+  [RunStatus.Planning]: [RunStatus.Running, RunStatus.Failed, RunStatus.Cancelled],
+  [RunStatus.Running]: [RunStatus.Paused, RunStatus.Completed, RunStatus.Failed, RunStatus.Cancelled],
+  [RunStatus.Paused]: [RunStatus.Running, RunStatus.Cancelled],
+  [RunStatus.Completed]: [],
+  [RunStatus.Failed]: [],
+  [RunStatus.Cancelled]: [],
+};
+
+export class InvalidRunTransitionError extends Error {
+  constructor(public readonly from: RunStatus, public readonly to: RunStatus) {
+    super(`Invalid run transition: ${from} -> ${to}`);
+    this.name = "InvalidRunTransitionError";
+  }
+}
+
+export function assertRunTransition(from: RunStatus, to: RunStatus): void {
+  if (!runTransitions[from].includes(to)) {
+    throw new InvalidRunTransitionError(from, to);
+  }
+}
 
 const transitions: Record<TaskStatus, readonly TaskStatus[]> = {
   [TaskStatus.Created]: [

@@ -5,6 +5,30 @@ export type ArtifactId = string;
 export type OperationId = string;
 export type TraceId = string;
 
+export enum OperationStatus {
+  Pending = "PENDING",
+  Running = "RUNNING",
+  Completed = "COMPLETED",
+  Failed = "FAILED",
+  Unknown = "UNKNOWN",
+}
+
+export interface OperationRecord {
+  id: OperationId;
+  runId: RunId;
+  taskId: TaskId;
+  antId: AntId;
+  toolName: string;
+  inputHash: string;
+  status: OperationStatus;
+  owner?: WorkerId;
+  leaseExpiresAt?: Date;
+  result?: unknown;
+  error?: string;
+  createdAt: Date;
+  completedAt?: Date;
+}
+
 export enum RunStatus {
   Created = "CREATED",
   Planning = "PLANNING",
@@ -59,6 +83,18 @@ export interface BudgetUsage {
   startedAt: Date;
 }
 
+export interface RunRecord {
+  id: RunId;
+  status: RunStatus;
+  goal: string;
+  repositoryPath?: string;
+  budgetLimits: BudgetLimits;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export type WorkerId = string;
+
 export interface TaskRecord {
   id: TaskId;
   runId: RunId;
@@ -82,6 +118,8 @@ export interface TaskRecord {
   dependencies: TaskId[];
 
   assignedAntId?: AntId;
+  leaseOwner?: WorkerId;
+  leaseExpiresAt?: Date;
 
   createdAt: Date;
   updatedAt: Date;

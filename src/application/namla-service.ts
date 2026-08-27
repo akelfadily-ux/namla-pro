@@ -1,5 +1,7 @@
+import { randomUUID } from "crypto";
 import { Container } from "../bootstrap/container";
-import { TaskRecord, TaskStatus, AntRole } from "../domain/types";
+import { TaskRecord, TaskStatus, AntRole, RunRecord, RunStatus } from "../domain/types";
+import { ConfigurationError } from "../domain/errors";
 
 export interface CreateRunInput {
   goal: string;
@@ -18,10 +20,39 @@ export interface RunSummary {
 export class NamlaService {
   constructor(private readonly container: Container) {}
 
+  validateCreateRunInput(input: CreateRunInput): void {
+    if (!input.goal || typeof input.goal !== "string" || input.goal.trim().length === 0) {
+      throw new ConfigurationError("CreateRunInput.goal must be a non-empty string");
+    }
+    if (input.budget) {
+      if (input.budget.maxCostUsd !== undefined && (typeof input.budget.maxCostUsd !== "number" || input.budget.maxCostUsd < 0)) {
+        throw new ConfigurationError("CreateRunInput.budget.maxCostUsd must be a non-negative number");
+      }
+      if (input.budget.maxTokens !== undefined && (typeof input.budget.maxTokens !== "number" || input.budget.maxTokens < 0)) {
+        throw new ConfigurationError("CreateRunInput.budget.maxTokens must be a non-negative number");
+      }
+    }
+  }
+
   async createRun(input: CreateRunInput): Promise<RunSummary> {
-    const runId = `run-${Date.now()}`;
-    const initialTaskId = `task-plan-${Date.now()}`;
+    this.validateCreateRunInput(input);
+
+    const runId = randomUUID();
+    const initialTaskId = randomUUID();
     const now = new Date();
+
+    const runRecord: RunRecord = {
+      id: runId,
+      status: RunStatus.Created,
+      goal: input.goal,
+      repositoryPath: input.repositoryPath,
+      budgetLimits: {
+        maxCostUsd: input.budget?.maxCostUsd,
+        maxTokens: input.budget?.maxTokens,
+      },
+      createdAt: now,
+      updatedAt: now,
+    };
 
     const initialTask: TaskRecord = {
       id: initialTaskId,
@@ -39,7 +70,9 @@ export class NamlaService {
       updatedAt: now,
     };
 
-    await this.container.state.saveTask(initialTask);
+    // Transactional order: Persist Run FIRST before child tasks & events
+    await this.container.state.createRun(runRecord);
+    await this.container.state.createTask(initialTask);
 
     await this.container.state.appendEvent({
       type: "run.created",
@@ -52,22 +85,31 @@ export class NamlaService {
 
     return {
       id: runId,
-      status: "CREATED",
+      status: RunStatus.Created,
     };
   }
 
   async processRun(runId: string, workerId = "worker-1"): Promise<void> {
+    await this.container.state.recoverExpiredLeases(runId);
     const runnable = await this.container.scheduler.getRunnable(runId, workerId);
 
     for (const task of runnable) {
+      const leasedTask = await this.container.state.claimTaskLease(task.id, workerId);
+      if (!leasedTask) continue;
+
+      const expectedStatus = leasedTask.status === TaskStatus.Retrying ? TaskStatus.Retrying : TaskStatus.Created;
+
       const claimed = await this.container.state.transitionTask(
-        task.id,
-        TaskStatus.Created,
+        leasedTask.id,
+        expectedStatus,
         TaskStatus.Assigned,
-        { assignedAntId: workerId },
       );
 
-      await this.container.namlaLoop.executeTask(claimed.id);
+      try {
+        await this.container.namlaLoop.executeTask(claimed.id);
+      } finally {
+        await this.container.state.releaseTaskLease(claimed.id, workerId);
+      }
     }
   }
 }

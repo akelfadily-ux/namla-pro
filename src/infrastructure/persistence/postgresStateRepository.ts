@@ -1,17 +1,33 @@
 import {
   AntExecution,
+  AntId,
   Artifact,
   BudgetLimits,
   BudgetUsage,
   OperationId,
+  OperationRecord,
+  OperationStatus,
   RunId,
+  RunRecord,
+  RunStatus,
   TaskId,
   TaskRecord,
   TaskStatus,
+  WorkerId,
 } from "../../domain/types";
 import { StateRepository, EventRecord } from "../../domain/contracts";
-import { assertTaskTransition } from "../../domain/lifecycle";
+import { assertRunTransition, assertTaskTransition } from "../../domain/lifecycle";
 import { StateConflictError } from "../../domain/errors";
+
+export interface PostgresRunRow {
+  id: string;
+  status: string;
+  goal: string;
+  repository_path: string | null;
+  budget_limits: string | object;
+  created_at: Date;
+  updated_at: Date;
+}
 
 export interface PostgresTaskRow {
   id: string;
@@ -40,6 +56,74 @@ export interface DatabaseClient {
 export class PostgresStateRepository implements StateRepository {
   constructor(private readonly db: DatabaseClient) {}
 
+  async createRun(run: RunRecord): Promise<void> {
+    await this.db.query(
+      `INSERT INTO runs (id, status, goal, repository_path, budget_limits, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [
+        run.id,
+        run.status,
+        run.goal,
+        run.repositoryPath ?? null,
+        JSON.stringify(run.budgetLimits),
+        run.createdAt,
+        run.updatedAt,
+      ],
+    );
+  }
+
+  async getRun(runId: RunId): Promise<RunRecord | null> {
+    const res = await this.db.query<PostgresRunRow>(
+      `SELECT * FROM runs WHERE id = $1`,
+      [runId],
+    );
+    if (res.rows.length === 0) return null;
+    const r = res.rows[0];
+    return {
+      id: r.id,
+      status: r.status as RunStatus,
+      goal: r.goal,
+      repositoryPath: r.repository_path ?? undefined,
+      budgetLimits: typeof r.budget_limits === "string" ? JSON.parse(r.budget_limits) : r.budget_limits || {},
+      createdAt: new Date(r.created_at),
+      updatedAt: new Date(r.updated_at),
+    };
+  }
+
+  async transitionRun(
+    runId: RunId,
+    expectedStatus: RunStatus,
+    nextStatus: RunStatus,
+  ): Promise<RunRecord> {
+    assertRunTransition(expectedStatus, nextStatus);
+
+    const now = new Date();
+    const res = await this.db.query<PostgresRunRow>(
+      `UPDATE runs
+       SET status = $1, updated_at = $2
+       WHERE id = $3 AND status = $4
+       RETURNING *`,
+      [nextStatus, now, runId, expectedStatus],
+    );
+
+    if (res.rows.length === 0) {
+      throw new StateConflictError(
+        `State conflict when transitioning run ${runId} from ${expectedStatus} to ${nextStatus}`,
+      );
+    }
+
+    const r = res.rows[0];
+    return {
+      id: r.id,
+      status: r.status as RunStatus,
+      goal: r.goal,
+      repositoryPath: r.repository_path ?? undefined,
+      budgetLimits: typeof r.budget_limits === "string" ? JSON.parse(r.budget_limits) : r.budget_limits || {},
+      createdAt: new Date(r.created_at),
+      updatedAt: new Date(r.updated_at),
+    };
+  }
+
   async getTask(taskId: TaskId): Promise<TaskRecord | null> {
     const res = await this.db.query<PostgresTaskRow>(
       `SELECT * FROM tasks WHERE id = $1`,
@@ -50,20 +134,14 @@ export class PostgresStateRepository implements StateRepository {
     return this.mapTaskRow(res.rows[0]);
   }
 
-  async saveTask(task: TaskRecord): Promise<void> {
-    await this.db.query(
+  async createTask(task: TaskRecord): Promise<void> {
+    const res = await this.db.query(
       `INSERT INTO tasks (
         id, run_id, parent_task_id, title, description, role, status,
-        attempt, max_attempts, depth, requirements, dependencies, assigned_ant_id,
+        attempt, max_attempts, depth, requirements, dependencies, assigned_ant_id, lease_owner, lease_expires_at,
         created_at, updated_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
-      ON CONFLICT (id) DO UPDATE SET
-        title = EXCLUDED.title,
-        description = EXCLUDED.description,
-        status = EXCLUDED.status,
-        attempt = EXCLUDED.attempt,
-        assigned_ant_id = EXCLUDED.assigned_ant_id,
-        updated_at = EXCLUDED.updated_at`,
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+      ON CONFLICT (id) DO NOTHING`,
       [
         task.id,
         task.runId,
@@ -78,10 +156,16 @@ export class PostgresStateRepository implements StateRepository {
         JSON.stringify(task.requirements),
         JSON.stringify(task.dependencies),
         task.assignedAntId ?? null,
+        task.leaseOwner ?? null,
+        task.leaseExpiresAt ?? null,
         task.createdAt,
         task.updatedAt,
       ],
     );
+
+    if (res.rows && res.rows.length === 0 && (res as any).rowCount === 0) {
+      throw new StateConflictError(`Task with id ${task.id} already exists`);
+    }
   }
 
   async transitionTask(
@@ -144,20 +228,65 @@ export class PostgresStateRepository implements StateRepository {
 
   async claimTaskLease(
     taskId: TaskId,
-    workerId: string,
+    workerId: WorkerId,
+    leaseDurationMs = 120_000,
+  ): Promise<TaskRecord | null> {
+    const expiresAt = new Date(Date.now() + leaseDurationMs);
+    const res = await this.db.query<PostgresTaskRow>(
+      `UPDATE tasks
+       SET
+         lease_owner = $1,
+         lease_expires_at = $2
+       WHERE id = $3
+         AND status IN ('CREATED', 'RETRYING')
+         AND (lease_expires_at IS NULL OR lease_expires_at < NOW())
+       RETURNING *`,
+      [workerId, expiresAt, taskId],
+    );
+
+    if (res.rows.length === 0) return null;
+    return this.mapTaskRow(res.rows[0]);
+  }
+
+  async renewTaskLease(
+    taskId: TaskId,
+    workerId: WorkerId,
     leaseDurationMs = 120_000,
   ): Promise<boolean> {
     const expiresAt = new Date(Date.now() + leaseDurationMs);
     const res = await this.db.query(
       `UPDATE tasks
-       SET
-         lease_owner = $1,
-         lease_expires_at = $2
-       WHERE id = $3 AND (lease_expires_at IS NULL OR lease_expires_at < NOW())`,
-      [workerId, expiresAt, taskId],
+       SET lease_expires_at = $1
+       WHERE id = $2 AND lease_owner = $3`,
+      [expiresAt, taskId, workerId],
     );
 
-    return res.rows.length > 0;
+    return (res.rows && res.rows.length > 0) || Boolean((res as any).rowCount);
+  }
+
+  async releaseTaskLease(
+    taskId: TaskId,
+    workerId: WorkerId,
+  ): Promise<void> {
+    await this.db.query(
+      `UPDATE tasks
+       SET lease_owner = NULL, lease_expires_at = NULL
+       WHERE id = $1 AND lease_owner = $2`,
+      [taskId, workerId],
+    );
+  }
+
+  async recoverExpiredLeases(
+    runId: RunId,
+  ): Promise<number> {
+    const res = await this.db.query(
+      `UPDATE tasks
+       SET lease_owner = NULL, lease_expires_at = NULL
+       WHERE run_id = $1 AND lease_expires_at IS NOT NULL AND lease_expires_at < NOW()`,
+      [runId],
+    );
+
+    return (res.rows ? res.rows.length : 0) || (res as any).rowCount || 0;
   }
 
   async saveAntExecution(execution: AntExecution): Promise<void> {
@@ -254,33 +383,110 @@ export class PostgresStateRepository implements StateRepository {
       : res.rows[0].budget_limits || {};
   }
 
-  async getOperationResult<T>(
+  async getOperationRecord(
     operationId: OperationId,
-  ): Promise<T | null> {
+  ): Promise<OperationRecord | null> {
     const res = await this.db.query(
-      `SELECT result FROM operations WHERE operation_id = $1 AND status = 'COMPLETED'`,
+      `SELECT * FROM operations WHERE operation_id = $1 OR id = $1`,
       [operationId],
     );
 
     if (res.rows.length === 0) return null;
-    const raw = res.rows[0].result;
-    return typeof raw === "string" ? JSON.parse(raw) : raw;
+    const r = res.rows[0];
+    return {
+      id: r.operation_id || r.id,
+      runId: r.run_id,
+      taskId: r.task_id,
+      antId: r.ant_id,
+      toolName: r.tool_name || r.operation_type,
+      inputHash: r.input_hash || "",
+      status: r.status as OperationStatus,
+      owner: r.owner || r.lease_owner,
+      leaseExpiresAt: r.lease_expires_at ? new Date(r.lease_expires_at) : undefined,
+      result: typeof r.result === "string" ? JSON.parse(r.result) : r.result,
+      error: r.error,
+      createdAt: new Date(r.created_at || Date.now()),
+      completedAt: r.completed_at ? new Date(r.completed_at) : undefined,
+    };
+  }
+
+  async claimOperation(
+    op: Partial<OperationRecord> & { id: OperationId; toolName: string; inputHash: string; runId: RunId; taskId: TaskId; antId: AntId },
+    workerId: WorkerId,
+    leaseDurationMs = 60_000,
+  ): Promise<{ status: "CLAIMED" | "COMPLETED" | "RUNNING_OTHER_LEASE" | "INPUT_HASH_MISMATCH"; record?: OperationRecord }> {
+    const existing = await this.getOperationRecord(op.id);
+
+    if (existing) {
+      if (existing.inputHash && existing.inputHash !== op.inputHash) {
+        return { status: "INPUT_HASH_MISMATCH", record: existing };
+      }
+      if (existing.status === OperationStatus.Completed) {
+        return { status: "COMPLETED", record: existing };
+      }
+      if (existing.status === OperationStatus.Running && existing.leaseExpiresAt && existing.leaseExpiresAt > new Date() && existing.owner !== workerId) {
+        return { status: "RUNNING_OTHER_LEASE", record: existing };
+      }
+    }
+
+    const expiresAt = new Date(Date.now() + leaseDurationMs);
+    const now = new Date();
+
+    await this.db.query(
+      `INSERT INTO operations (
+        operation_id, id, run_id, task_id, ant_id, operation_type, tool_name, input_hash, status, lease_owner, owner, lease_expires_at, created_at
+      ) VALUES ($1, $1, $2, $3, $4, $5, $5, $6, 'RUNNING', $7, $7, $8, $9)
+      ON CONFLICT (operation_id) DO UPDATE SET
+        status = 'RUNNING',
+        lease_owner = EXCLUDED.lease_owner,
+        owner = EXCLUDED.owner,
+        lease_expires_at = EXCLUDED.lease_expires_at`,
+      [op.id, op.runId, op.taskId, op.antId, op.toolName, op.inputHash, workerId, expiresAt, now],
+    );
+
+    const record = await this.getOperationRecord(op.id);
+    return { status: "CLAIMED", record: record ?? undefined };
+  }
+
+  async completeOperation<T>(
+    operationId: OperationId,
+    workerId: WorkerId,
+    value: T,
+  ): Promise<void> {
+    await this.db.query(
+      `UPDATE operations
+       SET status = 'COMPLETED', result = $1, completed_at = NOW(), lease_owner = NULL, owner = NULL, lease_expires_at = NULL
+       WHERE (operation_id = $2 OR id = $2)`,
+      [JSON.stringify(value), operationId],
+    );
+  }
+
+  async failOperation(
+    operationId: OperationId,
+    workerId: WorkerId,
+    error: string,
+  ): Promise<void> {
+    await this.db.query(
+      `UPDATE operations
+       SET status = 'FAILED', error = $1, completed_at = NOW(), lease_owner = NULL, owner = NULL, lease_expires_at = NULL
+       WHERE (operation_id = $2 OR id = $2)`,
+      [error, operationId],
+    );
+  }
+
+  async getOperationResult<T>(
+    operationId: OperationId,
+  ): Promise<T | null> {
+    const record = await this.getOperationRecord(operationId);
+    if (!record || record.status !== OperationStatus.Completed) return null;
+    return record.result as T;
   }
 
   async saveOperationResult<T>(
     operationId: OperationId,
     value: T,
   ): Promise<void> {
-    await this.db.query(
-      `INSERT INTO operations (
-        operation_id, status, result, completed_at
-      ) VALUES ($1, 'COMPLETED', $2, NOW())
-      ON CONFLICT (operation_id) DO UPDATE SET
-        status = EXCLUDED.status,
-        result = EXCLUDED.result,
-        completed_at = EXCLUDED.completed_at`,
-      [operationId, JSON.stringify(value)],
-    );
+    await this.completeOperation(operationId, "system", value);
   }
 
   private mapTaskRow(r: PostgresTaskRow): TaskRecord {

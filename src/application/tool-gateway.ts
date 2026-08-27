@@ -1,3 +1,4 @@
+import { createHash } from "crypto";
 import {
   StateRepository,
   ToolAdapter,
@@ -22,20 +23,18 @@ export class ToolGateway {
     }
   }
 
+  canonicalizeAndHashInput(rawInput: unknown): string {
+    const stringified = JSON.stringify(rawInput, Object.keys(rawInput as object || {}).sort());
+    return createHash("sha256").update(stringified || "").digest("hex");
+  }
+
   async execute<I, O>(
     toolName: string,
     rawInput: unknown,
     context: ToolExecutionContext,
     timeoutMs = 60_000,
+    workerId = "worker-1",
   ): Promise<O> {
-    const existing = await this.state.getOperationResult<O>(
-      context.operationId,
-    );
-
-    if (existing !== null) {
-      return existing;
-    }
-
     const adapter = this.tools.get(toolName);
 
     if (!adapter) {
@@ -48,9 +47,58 @@ export class ToolGateway {
     );
 
     const input = adapter.validateInput(rawInput);
+    const inputHash = this.canonicalizeAndHashInput(input);
+
+    const claim = await this.state.claimOperation(
+      {
+        id: context.operationId,
+        toolName,
+        inputHash,
+        runId: context.runId,
+        taskId: context.taskId,
+        antId: context.antId,
+      },
+      workerId,
+      timeoutMs,
+    );
+
+    if (claim.status === "INPUT_HASH_MISMATCH") {
+      throw new ToolExecutionError(
+        `Operation ID ${context.operationId} was previously used with different input hash`,
+        false,
+      );
+    }
+
+    if (claim.status === "COMPLETED") {
+      await this.state.appendEvent({
+        type: "tool.replayed",
+        runId: context.runId,
+        taskId: context.taskId,
+        traceId: context.traceId,
+        timestamp: new Date(),
+        payload: { operationId: context.operationId, toolName },
+      });
+      return claim.record?.result as O;
+    }
+
+    if (claim.status === "RUNNING_OTHER_LEASE") {
+      throw new ToolExecutionError(
+        `Operation ${context.operationId} is currently being executed by another worker`,
+        true,
+      );
+    }
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+    await this.state.appendEvent({
+      type: "tool.started",
+      runId: context.runId,
+      taskId: context.taskId,
+      traceId: context.traceId,
+      timestamp: new Date(),
+      payload: { operationId: context.operationId, toolName },
+    });
 
     try {
       const output = await adapter.execute(
@@ -59,10 +107,31 @@ export class ToolGateway {
         controller.signal,
       );
 
-      await this.state.saveOperationResult(context.operationId, output);
+      await this.state.completeOperation(context.operationId, workerId, output);
+
+      await this.state.appendEvent({
+        type: "tool.completed",
+        runId: context.runId,
+        taskId: context.taskId,
+        traceId: context.traceId,
+        timestamp: new Date(),
+        payload: { operationId: context.operationId, toolName },
+      });
 
       return output as O;
     } catch (error) {
+      const errMsg = error instanceof Error ? error.message : "Execution failed";
+      await this.state.failOperation(context.operationId, workerId, errMsg);
+
+      await this.state.appendEvent({
+        type: "tool.failed",
+        runId: context.runId,
+        taskId: context.taskId,
+        traceId: context.traceId,
+        timestamp: new Date(),
+        payload: { operationId: context.operationId, toolName, error: errMsg },
+      });
+
       if (controller.signal.aborted) {
         throw new ToolExecutionError(
           `${toolName} timed out after ${timeoutMs}ms`,

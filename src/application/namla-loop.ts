@@ -48,18 +48,55 @@ export class NamlaLoop {
         workspacePath: execution.workspacePath,
       };
 
+      await this.state.appendEvent({
+        type: "gate.started",
+        runId: task.runId,
+        taskId: task.id,
+        traceId: `trace-${task.runId}`,
+        timestamp: new Date(),
+        payload: { taskTitle: task.title },
+      });
+
       const gateResults = await this.gates.evaluate(gateContext);
 
       if (!GateEngine.passed(gateResults)) {
-        await this.handleFailure(task, "Automated gate rejected task");
+        const failedGate = gateResults.find((r) => !r.passed);
+        await this.state.appendEvent({
+          type: "gate.failed",
+          runId: task.runId,
+          taskId: task.id,
+          traceId: `trace-${task.runId}`,
+          timestamp: new Date(),
+          payload: { results: gateResults, reason: failedGate?.reason },
+        });
+
+        await this.handleFailure(task, failedGate?.reason || "Automated gate rejected task");
         return;
       }
+
+      await this.state.appendEvent({
+        type: "gate.passed",
+        runId: task.runId,
+        taskId: task.id,
+        traceId: `trace-${task.runId}`,
+        timestamp: new Date(),
+        payload: { results: gateResults },
+      });
 
       task = await this.state.transitionTask(
         task.id,
         TaskStatus.Testing,
         TaskStatus.Review,
       );
+
+      await this.state.appendEvent({
+        type: "supervisor.review.started",
+        runId: task.runId,
+        taskId: task.id,
+        traceId: `trace-${task.runId}`,
+        timestamp: new Date(),
+        payload: { taskTitle: task.title },
+      });
 
       const decision = await this.supervisor.review({
         task,
@@ -68,9 +105,27 @@ export class NamlaLoop {
       });
 
       if (!decision.approved) {
+        await this.state.appendEvent({
+          type: "supervisor.rejected",
+          runId: task.runId,
+          taskId: task.id,
+          traceId: `trace-${task.runId}`,
+          timestamp: new Date(),
+          payload: { reason: decision.reason, risks: decision.risks, requiredFixes: decision.requiredFixes },
+        });
+
         await this.handleFailure(task, decision.reason);
         return;
       }
+
+      await this.state.appendEvent({
+        type: "supervisor.approved",
+        runId: task.runId,
+        taskId: task.id,
+        traceId: `trace-${task.runId}`,
+        timestamp: new Date(),
+        payload: { reason: decision.reason, risks: decision.risks },
+      });
 
       await this.state.transitionTask(
         task.id,
@@ -103,6 +158,15 @@ export class NamlaLoop {
     reason: string,
   ): Promise<void> {
     const shouldRetry = task.attempt + 1 < task.maxAttempts;
+
+    await this.state.appendEvent({
+      type: shouldRetry ? "task.retrying" : "task.failed",
+      runId: task.runId,
+      taskId: task.id,
+      traceId: `trace-${task.runId}`,
+      timestamp: new Date(),
+      payload: { reason, attempt: task.attempt + 1, maxAttempts: task.maxAttempts },
+    });
 
     if (shouldRetry) {
       await this.state.transitionTask(
