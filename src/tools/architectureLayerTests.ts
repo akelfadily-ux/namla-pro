@@ -76,18 +76,32 @@ export function checkDomainFileArchitecture(filePath: string, content: string): 
   return violations;
 }
 
-test("Architecture Layer Isolation AST Validator", () => {
+function getAllFilesRecursive(dir: string): string[] {
+  const entries = fs.readdirSync(dir, { withFileTypes: true });
+  const files: string[] = [];
+  for (const entry of entries) {
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...getAllFilesRecursive(fullPath));
+    } else if (entry.isFile() && (entry.name.endsWith(".ts") || entry.name.endsWith(".tsx"))) {
+      files.push(fullPath);
+    }
+  }
+  return files;
+}
+
+test("Architecture Layer Isolation AST Validator (Recursive)", () => {
   const domainDir = path.resolve(process.cwd(), "src/domain");
   assert.strictEqual(fs.existsSync(domainDir), true, "src/domain directory must exist");
 
-  const domainFiles = fs.readdirSync(domainDir).filter((f) => f.endsWith(".ts"));
+  const domainFiles = getAllFilesRecursive(domainDir);
   assert.ok(domainFiles.length > 0, "src/domain must contain files");
 
-  for (const file of domainFiles) {
-    const fullPath = path.join(domainDir, file);
+  for (const fullPath of domainFiles) {
+    const relativePath = path.relative(domainDir, fullPath);
     const content = fs.readFileSync(fullPath, "utf8");
-    const violations = checkDomainFileArchitecture(file, content);
-    assert.deepStrictEqual(violations, [], `Architecture violations in src/domain/${file}:\n${violations.join("\n")}`);
+    const violations = checkDomainFileArchitecture(relativePath, content);
+    assert.deepStrictEqual(violations, [], `Architecture violations in src/domain/${relativePath}:\n${violations.join("\n")}`);
   }
 });
 

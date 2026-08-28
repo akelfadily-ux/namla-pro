@@ -118,6 +118,7 @@ test("Golden E2E Software Task Execution", async () => {
   const testTool: ToolAdapter<{ cmd: string }, { stdout: string }> = {
     name: "shell",
     validateInput: (i: any) => ({ cmd: String(i.cmd) }),
+    getPermissionRequests: () => [{ capability: "tool:shell" }],
     execute: async (input) => ({ stdout: "ALL TESTS PASSED\n" }),
   };
 

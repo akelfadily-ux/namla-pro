@@ -1,11 +1,9 @@
 import { relative, isAbsolute, resolve } from "path";
 import { realpathSync, existsSync } from "fs";
 import { PermissionDeniedError } from "../domain/errors";
+import { PermissionRequest } from "../domain/types";
 
-export interface PermissionRequest {
-  capability: string;
-  resource?: string;
-}
+export { PermissionRequest };
 
 export interface AntPolicy {
   permissions: readonly string[];

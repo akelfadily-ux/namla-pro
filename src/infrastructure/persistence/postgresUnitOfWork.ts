@@ -1,10 +1,5 @@
 import { StateRepository } from "../../domain/contracts";
-
-export interface UnitOfWork {
-  transaction<T>(
-    fn: (state: StateRepository) => Promise<T>,
-  ): Promise<T>;
-}
+import { UnitOfWork } from "../../domain/unit-of-work";
 
 export class PostgresUnitOfWork implements UnitOfWork {
   constructor(private readonly repository: StateRepository, private readonly poolOrClient?: any) {}
@@ -36,9 +31,6 @@ export class PostgresUnitOfWork implements UnitOfWork {
         throw error;
       }
     }
-    if (this.repository) {
-      return fn(this.repository);
-    }
-    throw new Error("UnitOfWork requires a valid PostgreSQL database connection/pool to execute transactions");
+    throw new Error("UnitOfWork requires a valid PostgreSQL database connection or pool to execute transactions");
   }
 }

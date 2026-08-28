@@ -147,6 +147,7 @@ test("Deterministic Golden Runtime E2E Suite", async () => {
     const fileWriterTool: ToolAdapter<{ relativePath: string; content: string }, { bytesWritten: number }> = {
       name: "filesystem.write",
       validateInput: (i: any) => ({ relativePath: String(i.relativePath), content: String(i.content) }),
+      getPermissionRequests: (input) => [{ capability: "filesystem.write", resource: join(tmpWorkspace, input.relativePath) }],
       execute: async (input, ctx) => {
         const fullPath = join(tmpWorkspace, input.relativePath);
         mkdirSync(join(fullPath, ".."), { recursive: true });
@@ -197,7 +198,7 @@ test("Deterministic Golden Runtime E2E Suite", async () => {
           antId: "ant-engineer",
           traceId: `trace-${task.runId}`,
           operationId: `op-${task.id}`,
-          permissions: ["tool:filesystem.write"],
+          permissions: [`filesystem.write:${join(tmpWorkspace, "src", "server.ts")}`],
         };
 
         await container.tools.execute("filesystem.write", { relativePath: "src/server.ts", content: "export function todoApi() { return { status: 200 }; }" }, toolCtx);

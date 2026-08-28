@@ -71,6 +71,16 @@ class MockStateRepository {
     return t;
   }
 
+  async transitionTaskFenced(id: string, expected: TaskStatus, next: TaskStatus, workerId: string, leaseToken: string, patch?: any): Promise<any> {
+    const t = this.tasks.get(id);
+    if (!t || t.status !== expected) throw new Error("Fenced transition conflict");
+    t.status = next;
+    if (patch) Object.assign(t, patch);
+    return t;
+  }
+
+  async renewTaskLease() { return true; }
+
   async getBudgetLimits() { return {}; }
   async getBudgetUsage() { return { costUsd: 0, inputTokens: 0, outputTokens: 0, modelCalls: 0, toolCalls: 0, startedAt: new Date() }; }
   async saveTask() {}
@@ -113,6 +123,7 @@ test("Application Core Components Unit Tests", async (t) => {
     const mockTool: ToolAdapter<{ cmd: string }, { exitCode: number }> = {
       name: "shell",
       validateInput: (i: any) => ({ cmd: String(i.cmd) }),
+      getPermissionRequests: () => [{ capability: "tool:shell" }],
       execute: async (input) => {
         execCount++;
         return { exitCode: 0 };
@@ -165,7 +176,7 @@ test("Application Core Components Unit Tests", async (t) => {
     };
 
     const loop = new NamlaLoop(state as any, executor, gates, supervisor);
-    await loop.executeTask("task-1");
+    await loop.executeTask("task-1", { workerId: "worker-1", leaseToken: "token-1" });
 
     const finalTask = await state.getTask("task-1");
     assert.equal(finalTask.status, TaskStatus.Approved);

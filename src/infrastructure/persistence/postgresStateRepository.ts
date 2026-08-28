@@ -349,7 +349,7 @@ export class PostgresStateRepository implements StateRepository {
   ): Promise<{ recoveredCount: number }> {
     const res = await this.db.query<PostgresTaskRow>(
       `UPDATE tasks
-       SET status = 'RETRYING', lease_owner = NULL, lease_expires_at = NULL, attempt = attempt + 1, updated_at = NOW()
+       SET status = 'RETRYING', lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL, attempt = attempt + 1, updated_at = NOW()
        WHERE run_id = $1
          AND status IN ('ASSIGNED', 'RUNNING', 'TESTING', 'REVIEW')
          AND lease_expires_at IS NOT NULL
@@ -361,10 +361,29 @@ export class PostgresStateRepository implements StateRepository {
 
     const count = (res.rows ? res.rows.length : 0) || (res as any).rowCount || 0;
 
+    if (res.rows && res.rows.length > 0) {
+      for (const row of res.rows) {
+        await this.appendEvent({
+          type: "task.recovered",
+          runId,
+          taskId: row.id,
+          traceId: `trace-${runId}`,
+          timestamp: new Date(),
+          payload: {
+            fromStatus: row.status,
+            toStatus: "RETRYING",
+            oldWorkerId: row.lease_owner,
+            reason: "LEASE_EXPIRED",
+            attempt: row.attempt,
+          },
+        });
+      }
+    }
+
     // Transition tasks that exceeded max_attempts to FAILED
     await this.db.query(
       `UPDATE tasks
-       SET status = 'FAILED', lease_owner = NULL, lease_expires_at = NULL, updated_at = NOW()
+       SET status = 'FAILED', lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL, updated_at = NOW()
        WHERE run_id = $1
          AND status IN ('ASSIGNED', 'RUNNING', 'TESTING', 'REVIEW')
          AND lease_expires_at IS NOT NULL
@@ -436,22 +455,21 @@ export class PostgresStateRepository implements StateRepository {
   async getBudgetUsage(runId: RunId): Promise<BudgetUsage> {
     const res = await this.db.query(
       `SELECT
-        COALESCE(SUM((payload->>'costUsd')::numeric), 0) as cost_usd,
-        COALESCE(SUM((payload->>'inputTokens')::numeric), 0) as input_tokens,
-        COALESCE(SUM((payload->>'outputTokens')::numeric), 0) as output_tokens,
-        COUNT(CASE WHEN event_type = 'model.completed' THEN 1 END) as model_calls,
-        COUNT(CASE WHEN event_type = 'tool.completed' THEN 1 END) as tool_calls,
+        COALESCE(SUM(actual_cost_usd), 0) as cost_usd,
+        COALESCE(SUM(actual_tokens), 0) as tokens,
+        COUNT(CASE WHEN kind = 'MODEL' THEN 1 END) as model_calls,
+        COUNT(CASE WHEN kind = 'TOOL' THEN 1 END) as tool_calls,
         MIN(created_at) as started_at
-       FROM events
-       WHERE run_id = $1`,
+       FROM budget_reservations
+       WHERE run_id = $1 AND status = 'RECONCILED'`,
       [runId],
     );
 
     const r = res.rows[0] || {};
     return {
       costUsd: Number(r.cost_usd || 0),
-      inputTokens: Number(r.input_tokens || 0),
-      outputTokens: Number(r.output_tokens || 0),
+      inputTokens: Math.floor(Number(r.tokens || 0) / 2),
+      outputTokens: Math.ceil(Number(r.tokens || 0) / 2),
       modelCalls: Number(r.model_calls || 0),
       toolCalls: Number(r.tool_calls || 0),
       startedAt: r.started_at ? new Date(r.started_at) : new Date(),

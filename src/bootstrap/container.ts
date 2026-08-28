@@ -1,6 +1,6 @@
 import { StateRepository, ModelAdapter, ToolAdapter } from "../domain/contracts";
 import { UnitOfWork } from "../domain/unit-of-work";
-import { PostgresUnitOfWork } from "../infrastructure/persistence/postgresUnitOfWork";
+import { InMemoryUnitOfWork } from "../infrastructure/persistence/inMemoryUnitOfWork";
 import { PolicyEngine } from "../application/policy-engine";
 import { BudgetController } from "../application/budget-controller";
 import { ToolGateway } from "../application/tool-gateway";
@@ -33,7 +33,7 @@ export class Container {
 
   constructor(config: ContainerConfig) {
     this.state = config.stateRepository;
-    this.unitOfWork = config.unitOfWork ?? new PostgresUnitOfWork(this.state);
+    this.unitOfWork = config.unitOfWork ?? new InMemoryUnitOfWork(this.state);
     this.policy = new PolicyEngine();
     this.budgets = new BudgetController();
     this.tools = new ToolGateway(config.toolAdapters, this.state, this.policy);

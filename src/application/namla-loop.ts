@@ -3,13 +3,18 @@ import { TaskRecord, TaskStatus } from "../domain/types";
 import { GateEngine, GateContext } from "./gate-engine";
 import { Supervisor } from "./supervisor";
 
+export interface TaskExecutionAuthority {
+  workerId: string;
+  leaseToken: string;
+}
+
 export interface TaskExecutor {
   execute(
     task: TaskRecord,
-    context?: {
-      signal?: AbortSignal;
-      workerId?: string;
-      leaseToken?: string;
+    context: {
+      signal: AbortSignal;
+      workerId: string;
+      leaseToken: string;
     },
   ): Promise<{
     artifacts: any[];
@@ -27,8 +32,7 @@ export class NamlaLoop {
 
   async executeTask(
     taskId: string,
-    workerId?: string,
-    leaseToken?: string,
+    authority: TaskExecutionAuthority,
   ): Promise<void> {
     let task = await this.state.getTask(taskId);
 
@@ -36,38 +40,33 @@ export class NamlaLoop {
       throw new Error(`Task not found: ${taskId}`);
     }
 
-    // Heartbeat setup if worker lease details provided
+    const { workerId, leaseToken } = authority;
+
+    // Heartbeat setup for worker lease
     let heartbeatTimer: NodeJS.Timeout | undefined;
     const abortController = new AbortController();
 
-    if (workerId && leaseToken) {
-      heartbeatTimer = setInterval(async () => {
-        try {
-          const renewed = await this.state.renewTaskLease(taskId, workerId, leaseToken, 30_000);
-          if (!renewed) {
-            abortController.abort(new Error(`Lease renewal lost for task ${taskId}`));
-            if (heartbeatTimer) clearInterval(heartbeatTimer);
-          }
-        } catch {
-          // Ignore transient errors
+    heartbeatTimer = setInterval(async () => {
+      try {
+        const renewed = await this.state.renewTaskLease(taskId, workerId, leaseToken, 30_000);
+        if (!renewed) {
+          abortController.abort(new Error(`Lease renewal lost for task ${taskId}`));
+          if (heartbeatTimer) clearInterval(heartbeatTimer);
         }
-      }, 10_000);
-    }
+      } catch {
+        abortController.abort(new Error(`Lease heartbeat network failure for task ${taskId}`));
+        if (heartbeatTimer) clearInterval(heartbeatTimer);
+      }
+    }, 10_000);
 
     if (task.status === TaskStatus.Assigned) {
-      task = leaseToken && workerId && this.state.transitionTaskFenced
-        ? await this.state.transitionTaskFenced(
-            task.id,
-            TaskStatus.Assigned,
-            TaskStatus.Running,
-            workerId,
-            leaseToken,
-          )
-        : await this.state.transitionTask(
-            task.id,
-            TaskStatus.Assigned,
-            TaskStatus.Running,
-          );
+      task = await this.state.transitionTaskFenced(
+        task.id,
+        TaskStatus.Assigned,
+        TaskStatus.Running,
+        workerId,
+        leaseToken,
+      );
     }
 
     try {
@@ -111,19 +110,13 @@ export class NamlaLoop {
         }
       }
 
-      task = workerId && leaseToken && this.state.transitionTaskFenced
-        ? await this.state.transitionTaskFenced(
-            task.id,
-            TaskStatus.Running,
-            TaskStatus.Testing,
-            workerId,
-            leaseToken,
-          )
-        : await this.state.transitionTask(
-            task.id,
-            TaskStatus.Running,
-            TaskStatus.Testing,
-          );
+      task = await this.state.transitionTaskFenced(
+        task.id,
+        TaskStatus.Running,
+        TaskStatus.Testing,
+        workerId,
+        leaseToken,
+      );
 
       const gateContext: GateContext = {
         task,
@@ -166,10 +159,12 @@ export class NamlaLoop {
         payload: { results: gateResults },
       });
 
-      task = await this.state.transitionTask(
+      task = await this.state.transitionTaskFenced(
         task.id,
         TaskStatus.Testing,
         TaskStatus.Review,
+        workerId,
+        leaseToken,
       );
 
       await this.state.appendEvent({
@@ -210,10 +205,12 @@ export class NamlaLoop {
         payload: { reason: decision.reason, risks: decision.risks },
       });
 
-      await this.state.transitionTask(
+      await this.state.transitionTaskFenced(
         task.id,
         TaskStatus.Review,
         TaskStatus.Approved,
+        workerId,
+        leaseToken,
       );
     } catch (error) {
       const latest = await this.state.getTask(taskId);

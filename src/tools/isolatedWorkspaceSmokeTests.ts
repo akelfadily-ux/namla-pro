@@ -147,6 +147,7 @@ test("Real Isolated Workspace Golden Runtime E2E", async () => {
     const fileWriterTool: ToolAdapter<{ relativePath: string; content: string }, { bytesWritten: number }> = {
       name: "filesystem.write",
       validateInput: (i: any) => ({ relativePath: String(i.relativePath), content: String(i.content) }),
+      getPermissionRequests: (input) => [{ capability: "filesystem.write", resource: join(tmpWorkspace, input.relativePath) }],
       execute: async (input, ctx) => {
         const fullPath = join(tmpWorkspace, input.relativePath);
         mkdirSync(join(fullPath, ".."), { recursive: true });

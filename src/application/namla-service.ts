@@ -123,7 +123,10 @@ export class NamlaService {
       }, 30_000);
 
       try {
-        await this.container.namlaLoop.executeTask(claimed.id);
+        await this.container.namlaLoop.executeTask(claimed.id, {
+          workerId,
+          leaseToken,
+        });
       } finally {
         clearInterval(timer);
         await this.container.state.releaseTaskLease(claimed.id, workerId, leaseToken);

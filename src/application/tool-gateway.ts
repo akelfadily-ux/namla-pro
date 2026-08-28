@@ -10,6 +10,8 @@ import { fingerprintOperation } from "./operation-fingerprint";
 export class ToolGateway {
   private readonly tools = new Map<string, ToolAdapter<any, any>>();
 
+  private static readonly PRIVILEGED_PREFIXES = ["filesystem.", "shell", "git", "github", "docker", "deployment", "db."];
+
   constructor(
     adapters: readonly ToolAdapter[],
     private readonly state: StateRepository,
@@ -18,6 +20,10 @@ export class ToolGateway {
     for (const adapter of adapters) {
       if (this.tools.has(adapter.name)) {
         throw new Error(`Duplicate tool registered: ${adapter.name}`);
+      }
+      const isPrivileged = ToolGateway.PRIVILEGED_PREFIXES.some((p) => adapter.name.startsWith(p));
+      if (isPrivileged && typeof adapter.getPermissionRequests !== "function") {
+        throw new Error(`CONFIGURATION ERROR: Privileged tool '${adapter.name}' must implement getPermissionRequests`);
       }
       this.tools.set(adapter.name, adapter);
     }

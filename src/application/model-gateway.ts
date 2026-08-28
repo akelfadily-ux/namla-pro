@@ -33,16 +33,22 @@ export class ModelGateway {
 
     this.budgets.assertWithinLimits(limits, usage);
 
-    // Reserve budget atomically prior to provider call
-    const reservation = await this.state.reserveBudget(runId, 0.01, 100);
-    if (!reservation.reserved) {
-      throw new Error("Budget limit exceeded during atomic reservation");
-    }
-
     const adapter = this.adapters.get(provider);
 
     if (!adapter) {
       throw new Error(`Model provider not configured: ${provider}`);
+    }
+
+    // Conservative estimation based on prompt input length
+    const inputChars = (request.system?.length || 0) + (request.input?.length || 0);
+    const estimatedInputTokens = Math.ceil(inputChars / 4) + 10;
+    const estimatedOutputTokens = 1000;
+    const estimatedCost = (estimatedInputTokens + estimatedOutputTokens) * 0.00001;
+
+    // Reserve budget atomically prior to provider call
+    const reservation = await this.state.reserveBudget(runId, estimatedCost, estimatedInputTokens + estimatedOutputTokens);
+    if (!reservation.reserved) {
+      throw new Error("Budget limit exceeded during atomic reservation");
     }
 
     const now = new Date();
