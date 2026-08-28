@@ -66,6 +66,7 @@ class MockStateRepository {
       id: taskId,
       leaseOwner: "worker-1",
       leaseToken: "test-authority-token",
+      leaseExpiresAt: new Date(Date.now() + 60_000),
     };
   }
 

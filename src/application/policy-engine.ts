@@ -51,9 +51,11 @@ export class PolicyEngine {
     const reqRes = request.resource;
 
     // ABSOLUTE HUMAN-ONLY GIT POLICY DENY: evaluated BEFORE any permission match or wildcard '*'
-    const FORBIDDEN_GIT_OPS = ["git pull", "git merge", "git rebase", "git cherry-pick", "git am"];
+    const FORBIDDEN_GIT_OPS = ["pull", "merge", "rebase", "cherry-pick", "am", "git pull", "git merge", "git rebase", "git cherry-pick", "git am"];
+    const isGitCapability = reqCap === "git" || reqCap.startsWith("git:") || reqCap.startsWith("tool:git") || reqCap === "shell" || reqCap.startsWith("shell.");
+
     if (
-      (reqCap === "git" || reqCap.startsWith("git:") || reqCap.startsWith("tool:git")) &&
+      isGitCapability &&
       reqRes &&
       FORBIDDEN_GIT_OPS.some((op) => reqRes.toLowerCase().includes(op))
     ) {

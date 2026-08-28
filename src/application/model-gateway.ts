@@ -7,19 +7,38 @@ import {
 import { RunId } from "../domain/types";
 import { BudgetController } from "./budget-controller";
 
+export interface ModelPricing {
+  provider: string;
+  model: string;
+  inputUsdPerToken: number;
+  outputUsdPerToken: number;
+  maxOutputTokens: number;
+}
+
 export class ModelGateway {
   private readonly adapters = new Map<string, ModelAdapter>();
+  private readonly pricingCatalog = new Map<string, ModelPricing>([
+    ["openai:gpt-4", { provider: "openai", model: "gpt-4", inputUsdPerToken: 0.00003, outputUsdPerToken: 0.00006, maxOutputTokens: 2000 }],
+    ["openai:gpt-3.5-turbo", { provider: "openai", model: "gpt-3.5-turbo", inputUsdPerToken: 0.0000015, outputUsdPerToken: 0.000002, maxOutputTokens: 2000 }],
+    ["anthropic:claude-3-opus", { provider: "anthropic", model: "claude-3-opus", inputUsdPerToken: 0.000015, outputUsdPerToken: 0.000075, maxOutputTokens: 2000 }],
+  ]);
 
   constructor(
     adapters: readonly ModelAdapter[],
     private readonly state: StateRepository,
     private readonly budgets: BudgetController,
+    pricingOverrides?: readonly ModelPricing[],
   ) {
     for (const adapter of adapters) {
       if (this.adapters.has(adapter.provider)) {
         throw new Error(`Duplicate model provider: ${adapter.provider}`);
       }
       this.adapters.set(adapter.provider, adapter);
+    }
+    if (pricingOverrides) {
+      for (const p of pricingOverrides) {
+        this.pricingCatalog.set(`${p.provider}:${p.model}`, p);
+      }
     }
   }
 
@@ -39,11 +58,20 @@ export class ModelGateway {
       throw new Error(`Model provider not configured: ${provider}`);
     }
 
-    // Conservative estimation based on prompt input length
+    const modelName = request.model || "gpt-4";
+    const pricing = this.pricingCatalog.get(`${provider}:${modelName}`) || {
+      provider,
+      model: modelName,
+      inputUsdPerToken: 0.00003,
+      outputUsdPerToken: 0.00006,
+      maxOutputTokens: 2000,
+    };
+
+    // Model/provider-aware conservative cost estimation
     const inputChars = (request.system?.length || 0) + (request.input?.length || 0);
-    const estimatedInputTokens = Math.ceil(inputChars / 4) + 10;
-    const estimatedOutputTokens = 1000;
-    const estimatedCost = (estimatedInputTokens + estimatedOutputTokens) * 0.00001;
+    const estimatedInputTokens = Math.ceil(inputChars / 4) + 20;
+    const estimatedOutputTokens = pricing.maxOutputTokens;
+    const estimatedCost = (estimatedInputTokens * pricing.inputUsdPerToken) + (estimatedOutputTokens * pricing.outputUsdPerToken);
 
     // Reserve budget atomically prior to provider call
     const reservation = await this.state.reserveBudget(runId, estimatedCost, estimatedInputTokens + estimatedOutputTokens);
