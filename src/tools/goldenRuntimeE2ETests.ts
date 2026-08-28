@@ -115,6 +115,16 @@ class DeterministicPgDatabase {
       return { rows: op ? [op] : [], rowCount: op ? 1 : 0 };
     }
 
+    if (s.startsWith("INSERT INTO BUDGET_RESERVATIONS")) {
+      const [id, run_id, kind, cost, tokens, status, created_at] = params;
+      this.operations.set(`budget-${id}`, { id, status: "RESERVED" });
+      return { rows: [], rowCount: 1 };
+    }
+
+    if (s.startsWith("UPDATE BUDGET_RESERVATIONS")) {
+      return { rows: [{ id: "res-1" } as unknown as T], rowCount: 1 };
+    }
+
     if (s.startsWith("INSERT INTO OPERATIONS")) {
       const opId = params[0];
       const row = { id: opId, operation_id: opId, run_id: params[1], task_id: params[2], ant_id: params[3], tool_name: params[4], input_hash: params[5], status: "RUNNING", owner: params[6] };
@@ -199,6 +209,7 @@ test("Deterministic Golden Runtime E2E Suite", async () => {
           traceId: `trace-${task.runId}`,
           operationId: `op-${task.id}`,
           permissions: [`filesystem.write:${join(tmpWorkspace, "src", "server.ts")}`],
+          authority: { workerId: "worker-e2e", leaseToken: task.leaseToken || "token-e2e" },
         };
 
         await container.tools.execute("filesystem.write", { relativePath: "src/server.ts", content: "export function todoApi() { return { status: 200 }; }" }, toolCtx);

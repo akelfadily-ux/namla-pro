@@ -100,18 +100,20 @@ export class NamlaService {
       const leasedTask = await this.container.state.claimTaskLease(task.id, workerId);
       if (!leasedTask) continue;
 
-      const expectedStatus = leasedTask.status === TaskStatus.Retrying ? TaskStatus.Retrying : TaskStatus.Created;
-
-      const claimed = await this.container.state.transitionTask(
-        leasedTask.id,
-        expectedStatus,
-        TaskStatus.Assigned,
-      );
-
       if (!leasedTask.leaseToken) {
         throw new Error(`Invariant violation: claimed task ${leasedTask.id} has no fencing token`);
       }
       const leaseToken = leasedTask.leaseToken;
+
+      const expectedStatus = leasedTask.status === TaskStatus.Retrying ? TaskStatus.Retrying : TaskStatus.Created;
+
+      const claimed = await this.container.state.transitionTaskFenced(
+        leasedTask.id,
+        expectedStatus,
+        TaskStatus.Assigned,
+        workerId,
+        leaseToken,
+      );
 
       try {
         await this.container.namlaLoop.executeTask(claimed.id, {

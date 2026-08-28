@@ -78,6 +78,18 @@ export class ToolGateway {
       );
     }
 
+    // Verify task lease ownership for privileged tools prior to execution side effects
+    const isPrivileged = ToolGateway.PRIVILEGED_PREFIXES.some((p) => toolName.startsWith(p));
+    if (isPrivileged) {
+      const task = await this.state.getTask(context.taskId);
+      if (!task || !task.leaseOwner || !context.authority || task.leaseOwner !== context.authority.workerId || task.leaseToken !== context.authority.leaseToken) {
+        throw new ToolExecutionError(
+          `Task lease authority lost for ${context.taskId}: worker ${context.authority?.workerId} with lease token ${context.authority?.leaseToken} does not hold active task lease`,
+          false,
+        );
+      }
+    }
+
     if (claim.status === "COMPLETED") {
       // Telemetry failure MUST NOT turn successful side effects into failure
       try {

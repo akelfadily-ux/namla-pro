@@ -47,20 +47,26 @@ export class PolicyEngine {
     policy: AntPolicy,
     request: PermissionRequest,
   ): void {
-    const wildcard = policy.permissions.includes("*");
-    if (wildcard) return;
-
     const reqCap = request.capability;
     const reqRes = request.resource;
 
+    // ABSOLUTE HUMAN-ONLY GIT POLICY DENY: evaluated BEFORE any permission match or wildcard '*'
+    const FORBIDDEN_GIT_OPS = ["git pull", "git merge", "git rebase", "git cherry-pick", "git am"];
+    if (
+      (reqCap === "git" || reqCap.startsWith("git:") || reqCap.startsWith("tool:git")) &&
+      reqRes &&
+      FORBIDDEN_GIT_OPS.some((op) => reqRes.toLowerCase().includes(op))
+    ) {
+      throw new PermissionDeniedError(
+        `HUMAN-ONLY POLICY VIOLATION: Agent execution of '${reqRes}' is strictly forbidden`,
+      );
+    }
+
+    const wildcard = policy.permissions.includes("*");
+    if (wildcard) return;
+
     const matched = policy.permissions.some((perm) => {
       if (perm === reqCap) return true;
-
-      // Human-only Git policy rule: block agent invocations of git pull, merge, rebase, cherry-pick, am
-      const FORBIDDEN_GIT_OPS = ["git pull", "git merge", "git rebase", "git cherry-pick", "git am"];
-      if (reqRes && FORBIDDEN_GIT_OPS.some((op) => reqRes.includes(op))) {
-        return false;
-      }
 
       // Handle wildcard prefixes, e.g. "tool:shell:*" matching "tool:shell:test"
       if (perm.endsWith("*")) {

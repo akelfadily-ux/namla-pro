@@ -336,7 +336,7 @@ export class PostgresStateRepository implements StateRepository {
   ): Promise<number> {
     const res = await this.db.query(
       `UPDATE tasks
-       SET lease_owner = NULL, lease_expires_at = NULL
+       SET lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL
        WHERE run_id = $1 AND lease_expires_at IS NOT NULL AND lease_expires_at < NOW()`,
       [runId],
     );
@@ -549,24 +549,32 @@ export class PostgresStateRepository implements StateRepository {
     actualCostUsd: number,
     actualTokens: number,
   ): Promise<void> {
-    await this.db.query(
+    const res = await this.db.query(
       `UPDATE budget_reservations
        SET status = 'RECONCILED', actual_cost_usd = $1, actual_tokens = $2, reconciled_at = NOW()
-       WHERE id = $3`,
+       WHERE id = $3 AND status = 'RESERVED'`,
       [actualCostUsd, actualTokens, reservationId],
     );
+
+    if (res.rows && res.rows.length === 0 && (res as any).rowCount === 0) {
+      throw new Error(`ACCOUNTING STATE CONFLICT: Budget reservation ${reservationId} is not in RESERVED state`);
+    }
   }
 
   async releaseBudgetReservation(
     reservationId: string,
     reason = "RELEASED",
   ): Promise<void> {
-    await this.db.query(
+    const res = await this.db.query(
       `UPDATE budget_reservations
        SET status = 'RELEASED', actual_cost_usd = 0, actual_tokens = 0, reconciled_at = NOW()
        WHERE id = $1 AND status = 'RESERVED'`,
       [reservationId],
     );
+
+    if (res.rows && res.rows.length === 0 && (res as any).rowCount === 0) {
+      throw new Error(`ACCOUNTING STATE CONFLICT: Budget reservation ${reservationId} cannot be released from non-RESERVED state`);
+    }
   }
 
   async getOperationRecord(

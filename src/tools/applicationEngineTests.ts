@@ -60,7 +60,13 @@ class MockStateRepository {
   }
 
   async getTask(taskId: string): Promise<any> {
-    return this.tasks.get(taskId) ?? null;
+    const t = this.tasks.get(taskId);
+    if (t) return t;
+    return {
+      id: taskId,
+      leaseOwner: "worker-1",
+      leaseToken: "test-authority-token",
+    };
   }
 
   async transitionTask(id: string, expected: TaskStatus, next: TaskStatus, patch?: any): Promise<any> {
@@ -138,6 +144,7 @@ test("Application Core Components Unit Tests", async (t) => {
       traceId: "trace-1",
       operationId: "op-unique-123",
       permissions: ["tool:shell"],
+      authority: { workerId: "worker-1", leaseToken: "test-authority-token" },
     };
 
     const res1 = await gateway.execute("shell", { cmd: "npm test" }, ctx);

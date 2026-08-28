@@ -191,6 +191,11 @@ export interface ToolExecutionContext {
   operationId: OperationId;
 
   permissions: readonly string[];
+
+  authority?: {
+    workerId: WorkerId;
+    leaseToken: string;
+  };
 }
 
 export interface ToolAdapter<I = unknown, O = unknown> {

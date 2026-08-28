@@ -257,52 +257,29 @@ export class NamlaLoop {
     });
 
     if (shouldRetry) {
-      if (this.state.transitionTaskFenced) {
-        await this.state.transitionTaskFenced(
-          task.id,
-          task.status,
-          TaskStatus.Retrying,
-          authority.workerId,
-          authority.leaseToken,
-          {
-            attempt: task.attempt + 1,
-            updatedAt: new Date(),
-          },
-        );
-      } else {
-        await this.state.transitionTask(
-          task.id,
-          task.status,
-          TaskStatus.Retrying,
-          {
-            attempt: task.attempt + 1,
-            updatedAt: new Date(),
-          },
-        );
-      }
-      return;
-    }
-
-    if (this.state.transitionTaskFenced) {
       await this.state.transitionTaskFenced(
         task.id,
         task.status,
-        TaskStatus.Failed,
+        TaskStatus.Retrying,
         authority.workerId,
         authority.leaseToken,
         {
+          attempt: task.attempt + 1,
           updatedAt: new Date(),
         },
       );
-    } else {
-      await this.state.transitionTask(
-        task.id,
-        task.status,
-        TaskStatus.Failed,
-        {
-          updatedAt: new Date(),
-        },
-      );
+      return;
     }
+
+    await this.state.transitionTaskFenced(
+      task.id,
+      task.status,
+      TaskStatus.Failed,
+      authority.workerId,
+      authority.leaseToken,
+      {
+        updatedAt: new Date(),
+      },
+    );
   }
 }
