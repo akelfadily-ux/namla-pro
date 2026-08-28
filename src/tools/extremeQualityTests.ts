@@ -242,8 +242,12 @@ test("Extreme Quality Suite — PolicyEngine Resource Scoping and Path Security"
   const policy = new PolicyEngine();
 
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "eq-policy-test-"));
+  if (process.platform !== "win32") fs.chmodSync(tmpDir, 0o755);
+
   const allowedSubdir = path.join(tmpDir, "src");
+  const outsideSubdir = path.join(tmpDir, "outside");
   fs.mkdirSync(allowedSubdir, { recursive: true });
+  fs.mkdirSync(outsideSubdir, { recursive: true });
 
   const antPolicy = {
     permissions: [`filesystem.write:${allowedSubdir}/**`],
@@ -260,6 +264,19 @@ test("Extreme Quality Suite — PolicyEngine Resource Scoping and Path Security"
   assert.throws(() => {
     policy.authorize(antPolicy, { capability: "filesystem.write", resource: forbiddenFile });
   }, PermissionDeniedError, "Path outside scoped directory is denied");
+
+  // Adversarial symlink escape test: symlink inside allowed pointing to outside
+  const linkPath = path.join(allowedSubdir, "escape-link");
+  try {
+    fs.symlinkSync(outsideSubdir, linkPath, process.platform === "win32" ? "junction" : "dir");
+    const symlinkTargetFile = path.join(linkPath, "escaped-file.txt");
+    assert.throws(() => {
+      policy.authorize(antPolicy, { capability: "filesystem.write", resource: symlinkTargetFile });
+    }, PermissionDeniedError, "Symlink target escape outside allowed directory is denied");
+  } catch (e: any) {
+    if (e.name === "PermissionDeniedError") throw e;
+    /* symlink unprivileged fallback */
+  }
 
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });

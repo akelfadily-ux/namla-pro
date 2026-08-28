@@ -347,52 +347,61 @@ export class PostgresStateRepository implements StateRepository {
   async recoverExpiredTaskExecutions(
     runId: RunId,
   ): Promise<{ recoveredCount: number }> {
-    const res = await this.db.query<PostgresTaskRow>(
-      `UPDATE tasks
-       SET status = 'RETRYING', lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL, attempt = attempt + 1, updated_at = NOW()
-       WHERE run_id = $1
-         AND status IN ('ASSIGNED', 'RUNNING', 'TESTING', 'REVIEW')
-         AND lease_expires_at IS NOT NULL
-         AND lease_expires_at < NOW()
-         AND attempt + 1 < max_attempts
-       RETURNING *`,
+    // Atomic CTE query capturing OLD task state prior to clearing fencing tokens and updating status
+    const res = await this.db.query<any>(
+      `WITH expired_candidates AS (
+         SELECT id, run_id, status, lease_owner, lease_token, attempt, max_attempts
+         FROM tasks
+         WHERE run_id = $1
+           AND status IN ('ASSIGNED', 'RUNNING', 'TESTING', 'REVIEW')
+           AND lease_expires_at IS NOT NULL
+           AND lease_expires_at < NOW()
+       ),
+       updated_retries AS (
+         UPDATE tasks t
+         SET status = 'RETRYING', lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL, attempt = t.attempt + 1, updated_at = NOW()
+         FROM expired_candidates ec
+         WHERE t.id = ec.id AND ec.attempt + 1 < ec.max_attempts
+         RETURNING t.id, ec.status as old_status, ec.lease_owner as old_worker, ec.lease_token as old_token, ec.attempt as old_attempt, t.attempt as new_attempt
+       ),
+       updated_failures AS (
+         UPDATE tasks t
+         SET status = 'FAILED', lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL, updated_at = NOW()
+         FROM expired_candidates ec
+         WHERE t.id = ec.id AND ec.attempt + 1 >= ec.max_attempts
+         RETURNING t.id, ec.status as old_status, ec.lease_owner as old_worker, ec.lease_token as old_token, ec.attempt as old_attempt
+       )
+       SELECT id, old_status, old_worker, old_token, old_attempt, new_attempt, 'RETRYING' as new_status FROM updated_retries
+       UNION ALL
+       SELECT id, old_status, old_worker, old_token, old_attempt, old_attempt as new_attempt, 'FAILED' as new_status FROM updated_failures`,
       [runId],
     );
 
-    const count = (res.rows ? res.rows.length : 0) || (res as any).rowCount || 0;
+    const rows = res.rows || [];
+    let recoveredCount = 0;
 
-    if (res.rows && res.rows.length > 0) {
-      for (const row of res.rows) {
-        await this.appendEvent({
-          type: "task.recovered",
-          runId,
-          taskId: row.id,
-          traceId: `trace-${runId}`,
-          timestamp: new Date(),
-          payload: {
-            fromStatus: row.status,
-            toStatus: "RETRYING",
-            oldWorkerId: row.lease_owner,
-            reason: "LEASE_EXPIRED",
-            attempt: row.attempt,
-          },
-        });
-      }
+    for (const r of rows) {
+      if (r.new_status === "RETRYING") recoveredCount++;
+
+      await this.appendEvent({
+        type: r.new_status === "RETRYING" ? "task.recovered" : "task.failed",
+        runId,
+        taskId: r.id,
+        traceId: `trace-${runId}`,
+        timestamp: new Date(),
+        payload: {
+          fromStatus: r.old_status,
+          toStatus: r.new_status,
+          oldWorkerId: r.old_worker,
+          oldLeaseToken: r.old_token,
+          reason: "LEASE_EXPIRED",
+          previousAttempt: r.old_attempt,
+          nextAttempt: r.new_attempt,
+        },
+      });
     }
 
-    // Transition tasks that exceeded max_attempts to FAILED
-    await this.db.query(
-      `UPDATE tasks
-       SET status = 'FAILED', lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL, updated_at = NOW()
-       WHERE run_id = $1
-         AND status IN ('ASSIGNED', 'RUNNING', 'TESTING', 'REVIEW')
-         AND lease_expires_at IS NOT NULL
-         AND lease_expires_at < NOW()
-         AND attempt + 1 >= max_attempts`,
-      [runId],
-    );
-
-    return { recoveredCount: count };
+    return { recoveredCount };
   }
 
   async saveAntExecution(execution: AntExecution): Promise<void> {
@@ -493,10 +502,13 @@ export class PostgresStateRepository implements StateRepository {
     estimatedCostUsd: number,
     estimatedTokens: number,
   ): Promise<{ reserved: boolean; reservationId?: string }> {
+    // Acquire FOR UPDATE lock on the run row to enforce atomic budget critical section
+    await this.db.query(`SELECT id FROM runs WHERE id = $1 FOR UPDATE`, [runId]);
+
     const limits = await this.getBudgetLimits(runId);
     const usage = await this.getBudgetUsage(runId);
 
-    // Lock and sum active reservations in budget_reservations table to prevent concurrent budget overspend
+    // Sum active unexpired reservations in budget_reservations table
     const activeRes = await this.db.query(
       `SELECT COALESCE(SUM(reserved_cost_usd), 0) as reserved_cost, COALESCE(SUM(reserved_tokens), 0) as reserved_tokens
        FROM budget_reservations

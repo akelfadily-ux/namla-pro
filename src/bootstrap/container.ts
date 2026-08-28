@@ -1,6 +1,7 @@
 import { StateRepository, ModelAdapter, ToolAdapter } from "../domain/contracts";
 import { UnitOfWork } from "../domain/unit-of-work";
 import { InMemoryUnitOfWork } from "../infrastructure/persistence/inMemoryUnitOfWork";
+import { PostgresUnitOfWork, PgPoolLike } from "../infrastructure/persistence/postgresUnitOfWork";
 import { PolicyEngine } from "../application/policy-engine";
 import { BudgetController } from "../application/budget-controller";
 import { ToolGateway } from "../application/tool-gateway";
@@ -12,7 +13,7 @@ import { NamlaLoop, TaskExecutor } from "../application/namla-loop";
 
 export interface ContainerConfig {
   stateRepository: StateRepository;
-  unitOfWork?: UnitOfWork;
+  unitOfWork: UnitOfWork;
   toolAdapters: readonly ToolAdapter[];
   modelAdapters: readonly ModelAdapter[];
   gates: readonly Gate[];
@@ -33,7 +34,7 @@ export class Container {
 
   constructor(config: ContainerConfig) {
     this.state = config.stateRepository;
-    this.unitOfWork = config.unitOfWork ?? new InMemoryUnitOfWork(this.state);
+    this.unitOfWork = config.unitOfWork;
     this.policy = new PolicyEngine();
     this.budgets = new BudgetController();
     this.tools = new ToolGateway(config.toolAdapters, this.state, this.policy);
@@ -46,5 +47,18 @@ export class Container {
       this.gateEngine,
       config.supervisor,
     );
+  }
+
+  static createTestContainer(config: Omit<ContainerConfig, "unitOfWork"> & { unitOfWork?: UnitOfWork }): Container {
+    const unitOfWork = config.unitOfWork ?? new InMemoryUnitOfWork(config.stateRepository);
+    return new Container({ ...config, unitOfWork });
+  }
+
+  static createPostgresContainer(
+    pool: PgPoolLike,
+    config: Omit<ContainerConfig, "unitOfWork">,
+  ): Container {
+    const unitOfWork = new PostgresUnitOfWork(pool);
+    return new Container({ ...config, unitOfWork });
   }
 }

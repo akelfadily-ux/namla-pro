@@ -238,6 +238,7 @@ export class NamlaLoop {
   private async handleFailure(
     task: TaskRecord,
     reason: string,
+    authority?: TaskExecutionAuthority,
   ): Promise<void> {
     const shouldRetry = task.attempt + 1 < task.maxAttempts;
 
@@ -251,25 +252,52 @@ export class NamlaLoop {
     });
 
     if (shouldRetry) {
-      await this.state.transitionTask(
-        task.id,
-        task.status,
-        TaskStatus.Retrying,
-        {
-          attempt: task.attempt + 1,
-          updatedAt: new Date(),
-        },
-      );
+      if (authority && this.state.transitionTaskFenced) {
+        await this.state.transitionTaskFenced(
+          task.id,
+          task.status,
+          TaskStatus.Retrying,
+          authority.workerId,
+          authority.leaseToken,
+          {
+            attempt: task.attempt + 1,
+            updatedAt: new Date(),
+          },
+        );
+      } else {
+        await this.state.transitionTask(
+          task.id,
+          task.status,
+          TaskStatus.Retrying,
+          {
+            attempt: task.attempt + 1,
+            updatedAt: new Date(),
+          },
+        );
+      }
       return;
     }
 
-    await this.state.transitionTask(
-      task.id,
-      task.status,
-      TaskStatus.Failed,
-      {
-        updatedAt: new Date(),
-      },
-    );
+    if (authority && this.state.transitionTaskFenced) {
+      await this.state.transitionTaskFenced(
+        task.id,
+        task.status,
+        TaskStatus.Failed,
+        authority.workerId,
+        authority.leaseToken,
+        {
+          updatedAt: new Date(),
+        },
+      );
+    } else {
+      await this.state.transitionTask(
+        task.id,
+        task.status,
+        TaskStatus.Failed,
+        {
+          updatedAt: new Date(),
+        },
+      );
+    }
   }
 }

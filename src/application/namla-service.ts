@@ -113,22 +113,12 @@ export class NamlaService {
       }
       const leaseToken = leasedTask.leaseToken;
 
-      // Start periodic heartbeat renewal during execution
-      const timer = setInterval(async () => {
-        try {
-          await this.container.state.renewTaskLease(claimed.id, workerId, leaseToken);
-        } catch {
-          /* heartbeat failure isolated */
-        }
-      }, 30_000);
-
       try {
         await this.container.namlaLoop.executeTask(claimed.id, {
           workerId,
           leaseToken,
         });
       } finally {
-        clearInterval(timer);
         await this.container.state.releaseTaskLease(claimed.id, workerId, leaseToken);
       }
     }

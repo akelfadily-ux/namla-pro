@@ -159,7 +159,7 @@ test("Golden E2E Software Task Execution", async () => {
     }),
   };
 
-  const container = new Container({
+  const container = Container.createTestContainer({
     stateRepository: stateRepo,
     toolAdapters: [testTool],
     modelAdapters: [modelAdapter],

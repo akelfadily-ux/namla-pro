@@ -92,8 +92,8 @@ export class ModelGateway {
           response.usage.estimatedCostUsd,
           response.usage.inputTokens + response.usage.outputTokens,
         );
-      } catch {
-        /* ignore */
+      } catch (error) {
+        throw new Error(`ACCOUNTING CRITICAL FAULT: Failed to reconcile budget reservation ${reservation.reservationId}: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
 

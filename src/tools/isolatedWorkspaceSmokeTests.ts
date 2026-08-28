@@ -203,7 +203,7 @@ test("Real Isolated Workspace Golden Runtime E2E", async () => {
       },
     };
 
-    const container = new Container({
+    const container = Container.createTestContainer({
       stateRepository: stateRepo,
       toolAdapters: [fileWriterTool],
       modelAdapters: [modelAdapter],
