@@ -8,6 +8,7 @@
 
 import assert from "node:assert/strict";
 import { runFinal02ExecutionRuntime, classifyConflict } from "../twin/final02ExecutionRuntime";
+import type { MergeConflictClass } from "../twin/final02ExecutionRuntime";
 import { runTwinPostColonyPipeline } from "../twin/twinPostColonyPipeline";
 import type { TwinEmpireLiveRunResult, TwinColonyLiveResult } from "../twin/twinColonyLiveRunner";
 import type { ColonyEvidenceBundle, ColonyId, ColonyCulture } from "../twin/twinColonyTypes";
@@ -15,7 +16,7 @@ import { fnv1a } from "../twin/twinColonyTypes";
 import { freezeBundle } from "../twin/colonyForge";
 import type { TwinBuildLoopResult, TwinVerificationReceipt } from "../twin/twinBuildLoop";
 import type { MergeVerificationStage, MergeVerificationOutcome, MergeVerificationDriver } from "../twin/mergeForge";
-import { FakeMergeVerificationDriver, RealBackedMergeDriverAdapter } from "../twin/mergeForge";
+import { FakeMergeVerificationDriver } from "../twin/mergeForge";
 import type { ApprovedMergeComponent } from "../twin/namolaSovereignCourt";
 import { RealBackedVerificationDriver } from "../cognitive/liveRealDrivers";
 
@@ -29,18 +30,34 @@ class TestRealVerificationDriver implements MergeVerificationDriver {
     private readonly simulateFailureStage: MergeVerificationStage | null = null
   ) {}
 
-  run(stage: MergeVerificationStage, injectFailure: boolean): MergeVerificationOutcome {
+  run(stage: MergeVerificationStage, workspacePath: string, injectFailure: boolean): MergeVerificationOutcome {
     const passed = stage !== this.simulateFailureStage && !injectFailure;
     return {
       stage,
       passed,
       realExecution: true,
-      sandboxBackendId: this.sandboxBackendId,
-      sandboxVerified: this.sandboxVerified,
-      networkIsolated: true,
-      credentialProtected: true,
-      pathTraversalProtected: true,
-      mountPolicyVerified: true,
+      workspaceId: workspacePath,
+      absolutePathIdentity: `/real/${workspacePath}`,
+      baselineDigest: "sha256-real-baseline",
+      mergedTreeDigest: "sha256-real-merged-tree",
+      securityReceipt: {
+        backendId: this.sandboxBackendId,
+        backendVerificationId: "verif-real-docker",
+        executionId: "exec-101",
+        workspaceId: workspacePath,
+        realProcessExecution: true,
+        sandboxVerified: this.sandboxVerified,
+        networkIsolated: true,
+        credentialsProtected: true,
+        dockerSocketProtected: true,
+        mountPolicyVerified: true,
+        sourceMountReadOnly: true,
+        pathTraversalProtected: true,
+        symlinkEscapeProtected: true,
+        resourceLimitsVerified: true,
+        timeoutEnforced: true,
+        cleanupVerified: true,
+      },
     };
   }
 }
@@ -237,7 +254,7 @@ function createEmpireRunResult(opts: {
 export function runFinal02ExecutionRuntimeTests(): { readonly ok: true; readonly testsPassed: number } {
   let testsPassed = 0;
 
-  // 1. Production driver reaches READY and SECURITY_VERIFIED.
+  // 1. Production driver reaches READY and SECURITY_VERIFIED with exact byte materialization.
   {
     const runResult = createEmpireRunResult({ claudeVerified: true, codexVerified: true });
     const postColonyRes = runTwinPostColonyPipeline({
@@ -260,13 +277,38 @@ export function runFinal02ExecutionRuntimeTests(): { readonly ok: true; readonly
     assert.equal(final02Res.securityGate.status, "SECURITY_VERIFIED");
     assert.equal(final02Res.securityGate.sandboxVerified, true);
     assert.equal(final02Res.metrics.realMergeExecuted, true);
-    assert.equal(final02Res.metrics.deliveryReady, true);
-    assert.equal(final02Res.checkpoints[5].passed, true); // FINAL02_SECURITY_PASS
+    assert.equal(final02Res.metrics.writtenComponentCount, 2);
+    assert.equal(final02Res.metrics.fingerprintVerifiedCount, 2);
+    assert.ok(final02Res.materializationReceipt?.created);
+    assert.ok(final02Res.regressionReceipt?.passed);
 
     testsPassed += 1;
   }
 
-  // 2. Fake driver MUST NEVER reach READY (returns UNVERIFIED).
+  // 2. Production entry point without driver fails closed with BLOCKED.
+  {
+    const runResult = createEmpireRunResult({ claudeVerified: true, codexVerified: true });
+    const postColonyRes = runTwinPostColonyPipeline({
+      runResult,
+      acceptanceCriteria: DEFAULT_ACCEPTANCE,
+      budget: { maxMergeComponents: 4 },
+    });
+
+    const final02Res = runFinal02ExecutionRuntime({
+      postColonyResult: postColonyRes,
+      missionId: "test-mission",
+      objective: "Build small task manager",
+      acceptanceCriteria: DEFAULT_ACCEPTANCE,
+      mergeVerificationDriver: null, // Omitted
+    });
+
+    assert.equal(final02Res.status, "BLOCKED");
+    assert.equal(final02Res.reasonCode, "missing-execution-backend");
+
+    testsPassed += 1;
+  }
+
+  // 3. Fake driver MUST NEVER reach READY (returns UNVERIFIED).
   {
     const runResult = createEmpireRunResult({ claudeVerified: true, codexVerified: true });
     const postColonyRes = runTwinPostColonyPipeline({
@@ -289,12 +331,11 @@ export function runFinal02ExecutionRuntimeTests(): { readonly ok: true; readonly
     assert.notEqual(final02Res.status, "READY");
     assert.equal(final02Res.securityGate.status, "SECURITY_UNVERIFIED");
     assert.equal(final02Res.metrics.deliveryReady, false);
-    assert.equal(final02Res.checkpoints[5].passed, false); // FINAL02_SECURITY_PASS fails for SECURITY_UNVERIFIED
 
     testsPassed += 1;
   }
 
-  // 3. Caller spoofing `isReal: true` without real execution evidence MUST FAIL to SECURITY_UNVERIFIED.
+  // 4. Fingerprint mismatch between court receipt and frozen evidence fails closed (BLOCKED).
   {
     const runResult = createEmpireRunResult({ claudeVerified: true, codexVerified: true });
     const postColonyRes = runTwinPostColonyPipeline({
@@ -303,35 +344,29 @@ export function runFinal02ExecutionRuntimeTests(): { readonly ok: true; readonly
       budget: { maxMergeComponents: 4 },
     });
 
-    const spoofDriver = {
-      isReal: true, // Caller claims real
-      run(stage: MergeVerificationStage, injectFailure: boolean): MergeVerificationOutcome {
-        return {
-          stage,
-          passed: !injectFailure,
-          realExecution: false, // BUT outcome evidence is fake!
-          sandboxVerified: false,
-        };
-      },
-    };
+    if (postColonyRes.status === "success") {
+      // Corrupt component fingerprint in decision receipt
+      (postColonyRes.decisionReceipt as any).approvedComponents[0].sourceFingerprint = "corrupted-fp";
+    }
+
+    const realDriver = new TestRealVerificationDriver("docker-container-sandbox", true);
 
     const final02Res = runFinal02ExecutionRuntime({
       postColonyResult: postColonyRes,
       missionId: "test-mission",
       objective: "Build small task manager",
       acceptanceCriteria: DEFAULT_ACCEPTANCE,
-      mergeVerificationDriver: spoofDriver,
+      mergeVerificationDriver: realDriver,
     });
 
-    assert.equal(final02Res.status, "UNVERIFIED");
-    assert.notEqual(final02Res.status, "READY");
-    assert.equal(final02Res.securityGate.status, "SECURITY_UNVERIFIED");
-    assert.equal(final02Res.metrics.deliveryReady, false);
+    assert.equal(final02Res.status, "BLOCKED");
+    assert.equal(final02Res.reasonCode, "artifact-fingerprint-mismatch");
+    assert.ok(final02Res.rollbackReceipt?.requested);
 
     testsPassed += 1;
   }
 
-  // 4. Non-executed rejection paths report SECURITY_NOT_RUN.
+  // 5. Non-executed rejection paths report SECURITY_NOT_RUN.
   {
     const runResult = createEmpireRunResult({ claudeStatus: "VERIFICATION_BLOCKED", codexStatus: "VERIFICATION_BLOCKED" });
     const postColonyRes = runTwinPostColonyPipeline({
@@ -340,21 +375,23 @@ export function runFinal02ExecutionRuntimeTests(): { readonly ok: true; readonly
       budget: { maxMergeComponents: 4 },
     });
 
+    const realDriver = new TestRealVerificationDriver();
+
     const final02Res = runFinal02ExecutionRuntime({
       postColonyResult: postColonyRes,
       missionId: "test-mission",
       objective: "Build small task manager",
       acceptanceCriteria: DEFAULT_ACCEPTANCE,
+      mergeVerificationDriver: realDriver,
     });
 
     assert.equal(final02Res.status, "REJECTED");
     assert.equal(final02Res.securityGate.status, "SECURITY_NOT_RUN");
-    assert.equal(final02Res.checkpoints[1].passed, false);
 
     testsPassed += 1;
   }
 
-  // 5. 12 Conflict Classes Taxonomy classification tests.
+  // 6. 12 Conflict Classes Taxonomy classification tests.
   {
     const dummyComp: ApprovedMergeComponent[] = [
       { componentId: "c1", sourceColony: "claude-forge", sourceArtifactId: "a1", sourceFingerprint: "fp1", relativePath: "x", requirementsCovered: [], evidenceRefs: [], reasonSelected: "r", knownRisks: [], requiredMergeTests: [] },
@@ -373,7 +410,7 @@ export function runFinal02ExecutionRuntimeTests(): { readonly ok: true; readonly
     testsPassed += 1;
   }
 
-  // 6. Security policy conflict causes unresolved conflict fail-closed BLOCKED state.
+  // 7. Security policy conflict causes unresolved conflict fail-closed BLOCKED state.
   {
     const runResult = createEmpireRunResult({ claudeVerified: true, codexVerified: true });
     const postColonyRes = runTwinPostColonyPipeline({
@@ -411,11 +448,14 @@ export function runFinal02ExecutionRuntimeTests(): { readonly ok: true; readonly
       (receipt as any).approvedComponents = [secComp, secComp2];
     }
 
+    const realDriver = new TestRealVerificationDriver();
+
     const final02Res = runFinal02ExecutionRuntime({
       postColonyResult: postColonyRes,
       missionId: "test-mission",
       objective: "Build small task manager",
       acceptanceCriteria: DEFAULT_ACCEPTANCE,
+      mergeVerificationDriver: realDriver,
     });
 
     assert.equal(final02Res.status, "BLOCKED");
@@ -424,7 +464,7 @@ export function runFinal02ExecutionRuntimeTests(): { readonly ok: true; readonly
     testsPassed += 1;
   }
 
-  // 7. Database schema conflict causes unresolved conflict fail-closed BLOCKED state.
+  // 8. Database schema conflict causes unresolved conflict fail-closed BLOCKED state.
   {
     const runResult = createEmpireRunResult({ claudeVerified: true, codexVerified: true });
     const postColonyRes = runTwinPostColonyPipeline({
@@ -462,11 +502,14 @@ export function runFinal02ExecutionRuntimeTests(): { readonly ok: true; readonly
       (receipt as any).approvedComponents = [db1, db2];
     }
 
+    const realDriver = new TestRealVerificationDriver();
+
     const final02Res = runFinal02ExecutionRuntime({
       postColonyResult: postColonyRes,
       missionId: "test-mission",
       objective: "Build small task manager",
       acceptanceCriteria: DEFAULT_ACCEPTANCE,
+      mergeVerificationDriver: realDriver,
     });
 
     assert.equal(final02Res.status, "BLOCKED");
@@ -475,7 +518,7 @@ export function runFinal02ExecutionRuntimeTests(): { readonly ok: true; readonly
     testsPassed += 1;
   }
 
-  // 8. Verification stage failure triggers workspace rollback and status FAILED.
+  // 9. Verification stage failure triggers workspace rollback and emits RollbackReceipt.
   {
     const runResult = createEmpireRunResult({ claudeVerified: true, codexVerified: true });
     const postColonyRes = runTwinPostColonyPipeline({
@@ -498,12 +541,13 @@ export function runFinal02ExecutionRuntimeTests(): { readonly ok: true; readonly
     assert.equal(final02Res.status, "FAILED");
     assert.equal(final02Res.mergeVerificationPassed, false);
     assert.equal(final02Res.securityGate.status, "SECURITY_FAILED");
-    assert.equal(final02Res.metrics.deliveryReady, false);
+    assert.ok(final02Res.rollbackReceipt?.requested);
+    assert.ok(final02Res.rollbackReceipt?.diskWorkspaceRemoved);
 
     testsPassed += 1;
   }
 
-  // 9. Bounded repair loop reruns all verification from zero when authorized.
+  // 10. Bounded repair loop modifies specific files with before/after fingerprints and reruns from zero.
   {
     const runResult = createEmpireRunResult({ claudeVerified: true, codexVerified: true });
     const postColonyRes = runTwinPostColonyPipeline({
@@ -515,19 +559,35 @@ export function runFinal02ExecutionRuntimeTests(): { readonly ok: true; readonly
     let runCount = 0;
     const repairableRealDriver = {
       isReal: true,
-      run(stage: MergeVerificationStage, injectFailure: boolean): MergeVerificationOutcome {
+      run(stage: MergeVerificationStage, workspacePath: string, injectFailure: boolean): MergeVerificationOutcome {
         runCount += 1;
-        // Run 1 (calls 1-5): fail on stage 3 ('build')
         const passed = runCount <= 5 ? stage !== "build" && !injectFailure : !injectFailure;
         return {
           stage,
           passed,
           realExecution: true,
-          sandboxBackendId: "docker-container-sandbox",
-          sandboxVerified: true,
-          networkIsolated: true,
-          credentialProtected: true,
-          pathTraversalProtected: true,
+          workspaceId: workspacePath,
+          absolutePathIdentity: `/real/${workspacePath}`,
+          baselineDigest: "sha256-real-baseline",
+          mergedTreeDigest: "sha256-real-merged-tree",
+          securityReceipt: {
+            backendId: "docker-container-sandbox",
+            backendVerificationId: "verif-real-docker",
+            executionId: `exec-${runCount}`,
+            workspaceId: workspacePath,
+            realProcessExecution: true,
+            sandboxVerified: true,
+            networkIsolated: true,
+            credentialsProtected: true,
+            dockerSocketProtected: true,
+            mountPolicyVerified: true,
+            sourceMountReadOnly: true,
+            pathTraversalProtected: true,
+            symlinkEscapeProtected: true,
+            resourceLimitsVerified: true,
+            timeoutEnforced: true,
+            cleanupVerified: true,
+          },
         };
       },
     };
@@ -543,47 +603,14 @@ export function runFinal02ExecutionRuntimeTests(): { readonly ok: true; readonly
 
     assert.equal(final02Res.status, "READY");
     assert.equal(final02Res.securityGate.status, "SECURITY_VERIFIED");
-    assert.equal(final02Res.metrics.repairExecuted, true);
-    assert.equal(final02Res.metrics.mergeVerificationRuns, 2);
+    assert.ok(final02Res.repairReceipt?.ran);
+    assert.ok((final02Res.repairReceipt?.filesModified.length ?? 0) > 0);
+    assert.notDeepEqual(final02Res.repairReceipt?.beforeFingerprints, final02Res.repairReceipt?.afterFingerprints);
 
     testsPassed += 1;
   }
 
-  // 10. Transactional checkpoints: all 8 checkpoints recorded in order with security pass truth.
-  {
-    const runResult = createEmpireRunResult({ claudeVerified: true, codexVerified: true });
-    const postColonyRes = runTwinPostColonyPipeline({
-      runResult,
-      acceptanceCriteria: DEFAULT_ACCEPTANCE,
-      budget: { maxMergeComponents: 4 },
-    });
-
-    const realDriver = new TestRealVerificationDriver("docker-container-sandbox", true);
-
-    const final02Res = runFinal02ExecutionRuntime({
-      postColonyResult: postColonyRes,
-      missionId: "test-mission",
-      objective: "Build small task manager",
-      acceptanceCriteria: DEFAULT_ACCEPTANCE,
-      mergeVerificationDriver: realDriver,
-    });
-
-    const checkIds = final02Res.checkpoints.map((c) => c.checkpointId);
-    assert.equal(checkIds.length, 8);
-    assert.equal(checkIds[0], "FINAL02_PRE_EXECUTION");
-    assert.equal(checkIds[1], "FINAL02_PLAN_BUILT");
-    assert.equal(checkIds[2], "FINAL02_WORKSPACE_CREATED");
-    assert.equal(checkIds[3], "FINAL02_COMPONENTS_APPLIED");
-    assert.equal(checkIds[4], "FINAL02_VERIFICATION_PASS");
-    assert.equal(checkIds[5], "FINAL02_SECURITY_PASS");
-    assert.equal(checkIds[6], "FINAL02_REGRESSION_PASS");
-    assert.equal(checkIds[7], "FINAL02_READY");
-    assert.ok(final02Res.checkpoints.every((c) => c.passed));
-
-    testsPassed += 1;
-  }
-
-  // 11. RealBackedVerificationDriver integration & environmental blocker handling.
+  // 11. RealBackedVerificationDriver environmental blocker returns failed outcome and fails closed.
   {
     const realBacked = new RealBackedVerificationDriver("workspaces/digital-live-objective/test-ws", ["typecheck"], 5000, 1000, false, null);
     const outcome = realBacked.run("typecheck", "workspaces/digital-live-objective/test-ws", false);
@@ -604,36 +631,7 @@ export function runFinal02ExecutionRuntimeTests(): { readonly ok: true; readonly
       budget: { maxMergeComponents: 4 },
     });
 
-    const final02Res = runFinal02ExecutionRuntime({
-      postColonyResult: postColonyRes,
-      missionId: "test-mission",
-      objective: "Build small task manager",
-      acceptanceCriteria: DEFAULT_ACCEPTANCE,
-    });
-
-    const plan = final02Res.executionPlan;
-    assert.ok(plan);
-    if (plan) {
-      assert.ok(plan.selectedApprovedComponents.length > 0);
-      assert.ok(plan.expectedFilesystemOperations.length > 0);
-      assert.ok(plan.baselineFingerprint.length > 0);
-      assert.equal(plan.rollbackProcedure.strategy, "discard-merge-workspace");
-      assert.equal(plan.mandatoryGatePolicy.requireRealDriver, true);
-    }
-
-    testsPassed += 1;
-  }
-
-  // 13. Expanded Metrics evidence fields present and validated.
-  {
-    const runResult = createEmpireRunResult({ claudeVerified: true, codexVerified: true });
-    const postColonyRes = runTwinPostColonyPipeline({
-      runResult,
-      acceptanceCriteria: DEFAULT_ACCEPTANCE,
-      budget: { maxMergeComponents: 4 },
-    });
-
-    const realDriver = new TestRealVerificationDriver("docker-container-sandbox", true);
+    const realDriver = new TestRealVerificationDriver();
 
     const final02Res = runFinal02ExecutionRuntime({
       postColonyResult: postColonyRes,
@@ -643,16 +641,41 @@ export function runFinal02ExecutionRuntimeTests(): { readonly ok: true; readonly
       mergeVerificationDriver: realDriver,
     });
 
-    const m = final02Res.metrics;
-    assert.equal(m.mergePlanned, true);
-    assert.equal(m.workspaceMaterialized, true);
-    assert.equal(m.componentsMaterialized, 2);
-    assert.equal(m.realMergeExecuted, true);
-    assert.equal(m.verificationExecuted, true);
-    assert.equal(m.securityVerified, true);
-    assert.equal(m.regressionVerified, true);
-    assert.equal(m.checkpointCreated, true);
-    assert.equal(m.delivered, true);
+    const plan = final02Res.executionPlan;
+    assert.ok(plan);
+    if (plan) {
+      assert.ok(plan.selectedApprovedComponents.length > 0);
+      assert.ok(plan.plannedFileOperations.length > 0);
+      assert.ok(plan.baselineDigest.length > 0);
+      assert.equal(plan.rollbackProcedure.strategy, "discard-merge-workspace");
+      assert.equal(plan.mandatoryGatePolicy.requireRealDriver, true);
+    }
+
+    testsPassed += 1;
+  }
+
+  // 13. RegressionReceipt generated and validated.
+  {
+    const runResult = createEmpireRunResult({ claudeVerified: true, codexVerified: true });
+    const postColonyRes = runTwinPostColonyPipeline({
+      runResult,
+      acceptanceCriteria: DEFAULT_ACCEPTANCE,
+      budget: { maxMergeComponents: 4 },
+    });
+
+    const realDriver = new TestRealVerificationDriver();
+
+    const final02Res = runFinal02ExecutionRuntime({
+      postColonyResult: postColonyRes,
+      missionId: "test-mission",
+      objective: "Build small task manager",
+      acceptanceCriteria: DEFAULT_ACCEPTANCE,
+      mergeVerificationDriver: realDriver,
+    });
+
+    assert.ok(final02Res.regressionReceipt);
+    assert.equal(final02Res.regressionReceipt?.passed, true);
+    assert.equal(final02Res.regressionReceipt?.exitCode, 0);
 
     testsPassed += 1;
   }

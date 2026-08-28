@@ -28,9 +28,9 @@ const SMOKE_WORKSPACE_PATTERN = /^workspaces\/provider-smoke\/(claude|codex)\/[a
 const ACADEMY_PILOT_PATTERN = /^workspaces\/academy-pilot\/[a-z0-9-]{1,64}$/;
 const DIGITAL_LIVE_OBJECTIVE_PATTERN = /^workspaces\/digital-live-objective\/[a-z0-9-]{1,64}$/;
 const NAMLA_CIVILIZATION_PATTERN = /^workspaces\/namla-civilization\/[a-z0-9-]{1,64}$/;
-// A twin colony root, optionally with ONE numbered repair area so a resumed
+// A twin colony or merge forge root, optionally with ONE numbered repair area so a resumed
 // colony writes beside — never over — its earlier output.
-const NAMOLA_TWIN_PATTERN = /^workspaces\/namola-twin\/[a-z0-9-]{1,64}\/(claude-forge|codex-crucible)(\/repair-[1-9][0-9]{0,2})?$/;
+const NAMOLA_TWIN_PATTERN = /^workspaces\/namola-twin\/[a-z0-9-]{1,64}\/(claude-forge|codex-crucible|merge-forge)(\/repair-[1-9][0-9]{0,2})?$/;
 
 export interface SmokeWorkspaceHandle {
   readonly workspaceId: string;

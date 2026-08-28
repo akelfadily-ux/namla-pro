@@ -56,6 +56,7 @@ export interface TwinPostColonyPipelineInput {
 export interface TwinPostColonyPipelineSuccess {
   readonly status: "success";
   readonly stage: "complete";
+  readonly runResult: TwinEmpireLiveRunResult;
   readonly claudeVerified: boolean;
   readonly codexVerified: boolean;
   readonly witnessReport: WitnessIntegrityReport;
@@ -244,6 +245,7 @@ export function runTwinPostColonyPipeline(
   return Object.freeze({
     status: "success",
     stage: "complete",
+    runResult,
     claudeVerified,
     codexVerified,
     witnessReport,
