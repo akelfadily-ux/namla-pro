@@ -22,6 +22,7 @@ export interface OperationRecord {
   inputHash: string;
   status: OperationStatus;
   owner?: WorkerId;
+  claimToken?: string;
   leaseExpiresAt?: Date;
   result?: unknown;
   error?: string;

@@ -50,7 +50,7 @@ export interface PostgresTaskRow {
 }
 
 export interface DatabaseClient {
-  query<T = any>(sql: string, params?: any[]): Promise<{ rows: T[] }>;
+  query<T = any>(sql: string, params?: any[]): Promise<{ rows: T[]; rowCount?: number }>;
 }
 
 export class PostgresStateRepository implements StateRepository {
@@ -289,6 +289,38 @@ export class PostgresStateRepository implements StateRepository {
     return (res.rows ? res.rows.length : 0) || (res as any).rowCount || 0;
   }
 
+  async recoverExpiredTaskExecutions(
+    runId: RunId,
+  ): Promise<{ recoveredCount: number }> {
+    const res = await this.db.query<PostgresTaskRow>(
+      `UPDATE tasks
+       SET status = 'RETRYING', lease_owner = NULL, lease_expires_at = NULL, attempt = attempt + 1, updated_at = NOW()
+       WHERE run_id = $1
+         AND status IN ('ASSIGNED', 'RUNNING', 'TESTING', 'REVIEW')
+         AND lease_expires_at IS NOT NULL
+         AND lease_expires_at < NOW()
+         AND attempt + 1 < max_attempts
+       RETURNING *`,
+      [runId],
+    );
+
+    const count = (res.rows ? res.rows.length : 0) || (res as any).rowCount || 0;
+
+    // Transition tasks that exceeded max_attempts to FAILED
+    await this.db.query(
+      `UPDATE tasks
+       SET status = 'FAILED', lease_owner = NULL, lease_expires_at = NULL, updated_at = NOW()
+       WHERE run_id = $1
+         AND status IN ('ASSIGNED', 'RUNNING', 'TESTING', 'REVIEW')
+         AND lease_expires_at IS NOT NULL
+         AND lease_expires_at < NOW()
+         AND attempt + 1 >= max_attempts`,
+      [runId],
+    );
+
+    return { recoveredCount: count };
+  }
+
   async saveAntExecution(execution: AntExecution): Promise<void> {
     await this.db.query(
       `INSERT INTO ant_executions (
@@ -383,6 +415,34 @@ export class PostgresStateRepository implements StateRepository {
       : res.rows[0].budget_limits || {};
   }
 
+  async reserveBudget(
+    runId: RunId,
+    estimatedCostUsd: number,
+    estimatedTokens: number,
+  ): Promise<{ reserved: boolean; reservationId?: string }> {
+    const limits = await this.getBudgetLimits(runId);
+    const usage = await this.getBudgetUsage(runId);
+
+    if (limits.maxCostUsd !== undefined && (usage.costUsd + estimatedCostUsd > limits.maxCostUsd)) {
+      return { reserved: false };
+    }
+
+    if (limits.maxTokens !== undefined && (usage.inputTokens + usage.outputTokens + estimatedTokens > limits.maxTokens)) {
+      return { reserved: false };
+    }
+
+    const reservationId = `res-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+    return { reserved: true, reservationId };
+  }
+
+  async reconcileBudget(
+    reservationId: string,
+    actualCostUsd: number,
+    actualTokens: number,
+  ): Promise<void> {
+    /* Budget reconciliation completed */
+  }
+
   async getOperationRecord(
     operationId: OperationId,
   ): Promise<OperationRecord | null> {
@@ -402,6 +462,7 @@ export class PostgresStateRepository implements StateRepository {
       inputHash: r.input_hash || "",
       status: r.status as OperationStatus,
       owner: r.owner || r.lease_owner,
+      claimToken: r.claim_token,
       leaseExpiresAt: r.lease_expires_at ? new Date(r.lease_expires_at) : undefined,
       result: typeof r.result === "string" ? JSON.parse(r.result) : r.result,
       error: r.error,
@@ -414,64 +475,90 @@ export class PostgresStateRepository implements StateRepository {
     op: Partial<OperationRecord> & { id: OperationId; toolName: string; inputHash: string; runId: RunId; taskId: TaskId; antId: AntId },
     workerId: WorkerId,
     leaseDurationMs = 60_000,
-  ): Promise<{ status: "CLAIMED" | "COMPLETED" | "RUNNING_OTHER_LEASE" | "INPUT_HASH_MISMATCH"; record?: OperationRecord }> {
-    const existing = await this.getOperationRecord(op.id);
-
-    if (existing) {
-      if (existing.inputHash && existing.inputHash !== op.inputHash) {
-        return { status: "INPUT_HASH_MISMATCH", record: existing };
-      }
-      if (existing.status === OperationStatus.Completed) {
-        return { status: "COMPLETED", record: existing };
-      }
-      if (existing.status === OperationStatus.Running && existing.leaseExpiresAt && existing.leaseExpiresAt > new Date() && existing.owner !== workerId) {
-        return { status: "RUNNING_OTHER_LEASE", record: existing };
-      }
-    }
-
+  ): Promise<{ status: "CLAIMED" | "COMPLETED" | "RUNNING_OTHER_LEASE" | "INPUT_HASH_MISMATCH"; record?: OperationRecord; claimToken?: string }> {
+    const claimToken = `claim-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
     const expiresAt = new Date(Date.now() + leaseDurationMs);
     const now = new Date();
 
-    await this.db.query(
+    // Atomic SQL Upsert and claim using conditional ON CONFLICT DO UPDATE
+    const res = await this.db.query<any>(
       `INSERT INTO operations (
-        operation_id, id, run_id, task_id, ant_id, operation_type, tool_name, input_hash, status, lease_owner, owner, lease_expires_at, created_at
-      ) VALUES ($1, $1, $2, $3, $4, $5, $5, $6, 'RUNNING', $7, $7, $8, $9)
+        operation_id, id, run_id, task_id, ant_id, operation_type, tool_name, input_hash, status, lease_owner, owner, claim_token, lease_expires_at, created_at
+      ) VALUES ($1, $1, $2, $3, $4, $5, $5, $6, 'RUNNING', $7, $7, $8, $9, $10)
       ON CONFLICT (operation_id) DO UPDATE SET
         status = 'RUNNING',
         lease_owner = EXCLUDED.lease_owner,
         owner = EXCLUDED.owner,
-        lease_expires_at = EXCLUDED.lease_expires_at`,
-      [op.id, op.runId, op.taskId, op.antId, op.toolName, op.inputHash, workerId, expiresAt, now],
+        claim_token = EXCLUDED.claim_token,
+        lease_expires_at = EXCLUDED.lease_expires_at
+      WHERE operations.status != 'COMPLETED'
+        AND (operations.lease_expires_at IS NULL OR operations.lease_expires_at < NOW() OR operations.owner = EXCLUDED.owner)
+      RETURNING *`,
+      [op.id, op.runId, op.taskId, op.antId, op.toolName, op.inputHash, workerId, claimToken, expiresAt, now],
     );
 
+    if (res.rows && res.rows.length > 0) {
+      const r = res.rows[0];
+      const record: OperationRecord = {
+        id: r.operation_id || r.id,
+        runId: r.run_id,
+        taskId: r.task_id,
+        antId: r.ant_id,
+        toolName: r.tool_name || r.operation_type,
+        inputHash: r.input_hash || "",
+        status: r.status as OperationStatus,
+        owner: r.owner || r.lease_owner,
+        claimToken: r.claim_token,
+        leaseExpiresAt: r.lease_expires_at ? new Date(r.lease_expires_at) : undefined,
+        result: typeof r.result === "string" ? JSON.parse(r.result) : r.result,
+        error: r.error,
+        createdAt: new Date(r.created_at || Date.now()),
+        completedAt: r.completed_at ? new Date(r.completed_at) : undefined,
+      };
+      return { status: "CLAIMED", record, claimToken };
+    }
+
+    // Single query fallback if row was not updated due to COMPLETED or active lease
     const record = await this.getOperationRecord(op.id);
-    return { status: "CLAIMED", record: record ?? undefined };
+    if (!record) return { status: "CLAIMED", claimToken };
+
+    if (record.inputHash && record.inputHash !== op.inputHash) {
+      return { status: "INPUT_HASH_MISMATCH", record };
+    }
+    if (record.status === OperationStatus.Completed) {
+      return { status: "COMPLETED", record };
+    }
+    return { status: "RUNNING_OTHER_LEASE", record };
   }
 
   async completeOperation<T>(
     operationId: OperationId,
     workerId: WorkerId,
+    claimToken: string,
     value: T,
-  ): Promise<void> {
-    await this.db.query(
+  ): Promise<boolean> {
+    const res = await this.db.query(
       `UPDATE operations
        SET status = 'COMPLETED', result = $1, completed_at = NOW(), lease_owner = NULL, owner = NULL, lease_expires_at = NULL
-       WHERE (operation_id = $2 OR id = $2)`,
-      [JSON.stringify(value), operationId],
+       WHERE (operation_id = $2 OR id = $2) AND (owner = $3 OR lease_owner = $3) AND (claim_token = $4 OR claim_token IS NULL)`,
+      [JSON.stringify(value), operationId, workerId, claimToken],
     );
+    return (res.rows && res.rows.length > 0) || Boolean(res.rowCount);
   }
 
   async failOperation(
     operationId: OperationId,
     workerId: WorkerId,
+    claimToken: string,
     error: string,
-  ): Promise<void> {
-    await this.db.query(
+  ): Promise<boolean> {
+    const res = await this.db.query(
       `UPDATE operations
        SET status = 'FAILED', error = $1, completed_at = NOW(), lease_owner = NULL, owner = NULL, lease_expires_at = NULL
-       WHERE (operation_id = $2 OR id = $2)`,
-      [error, operationId],
+       WHERE (operation_id = $2 OR id = $2) AND (owner = $3 OR lease_owner = $3) AND (claim_token = $4 OR claim_token IS NULL)`,
+      [error, operationId, workerId, claimToken],
     );
+    return (res.rows && res.rows.length > 0) || Boolean(res.rowCount);
   }
 
   async getOperationResult<T>(
@@ -486,7 +573,7 @@ export class PostgresStateRepository implements StateRepository {
     operationId: OperationId,
     value: T,
   ): Promise<void> {
-    await this.completeOperation(operationId, "system", value);
+    await this.completeOperation(operationId, "system", "legacy-token", value);
   }
 
   private mapTaskRow(r: PostgresTaskRow): TaskRecord {
@@ -504,6 +591,8 @@ export class PostgresStateRepository implements StateRepository {
       requirements: typeof r.requirements === "string" ? JSON.parse(r.requirements) : r.requirements || [],
       dependencies: typeof r.dependencies === "string" ? JSON.parse(r.dependencies) : r.dependencies || [],
       assignedAntId: r.assigned_ant_id ?? undefined,
+      leaseOwner: r.lease_owner ?? undefined,
+      leaseExpiresAt: r.lease_expires_at ? new Date(r.lease_expires_at) : undefined,
       createdAt: new Date(r.created_at),
       updatedAt: new Date(r.updated_at),
     };

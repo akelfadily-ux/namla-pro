@@ -1,3 +1,4 @@
+import { relative, isAbsolute } from "path";
 import { PermissionDeniedError } from "../domain/errors";
 
 export interface PermissionRequest {
@@ -35,11 +36,13 @@ export class PolicyEngine {
         if (pattern === "*" || pattern === "**") return true;
         if (pattern.endsWith("/**")) {
           const basePath = pattern.slice(0, -3);
-          return reqRes.startsWith(basePath);
+          const rel = relative(basePath, reqRes);
+          return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
         }
         if (pattern.endsWith("/*")) {
           const basePath = pattern.slice(0, -2);
-          return reqRes.startsWith(basePath);
+          const rel = relative(basePath, reqRes);
+          return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
         }
         return reqRes === pattern;
       }

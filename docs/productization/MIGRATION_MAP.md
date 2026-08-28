@@ -13,5 +13,8 @@
 | `src/review/proposalReviewer.ts` | `src/application/gate-engine.ts` | DONE | Gate evaluation engine |
 | `src/colonyMission/reviewLoop.ts` | `src/application/namla-loop.ts` | DONE | Standard execution -> test -> review -> approve workflow loop with evidence persistence |
 | `src/bootstrap/c2WriteAuthorityBootstrap.ts` | `src/bootstrap/container.ts` | DONE | Single composition root / DI container |
-| `src/core/colonyState.ts` | `src/infrastructure/persistence/postgresStateRepository.ts` | DONE | Durable state repository with SQL CAS transitions & atomic worker leases |
+| `src/core/colonyState.ts` | `src/infrastructure/persistence/postgresStateRepository.ts` | DONE | Durable state repository with SQL CAS transitions, atomic worker leases & operation fingerprinting |
+| - | `src/domain/unit-of-work.ts` | DONE | UnitOfWork interface for transactional operations |
+| - | `src/application/operation-fingerprint.ts` | DONE | Recursive deterministic input canonicalization and SHA-256 operation fingerprinting |
+| - | `src/tools/goldenRuntimeE2ETests.ts` | DONE | Deterministic Golden Runtime E2E test suite in real isolated workspace |
 | - | `src/application/namla-service.ts` | DONE | Thin public application service for run creation and processing |

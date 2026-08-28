@@ -29,18 +29,20 @@ class MockStateRepository {
     return { status: "CLAIMED", record };
   }
 
-  async completeOperation(opId: string, workerId: string, result: any): Promise<void> {
+  async completeOperation(opId: string, workerId: string, claimToken: string, result: any): Promise<boolean> {
     const op = this.operations.get(opId) || { id: opId };
     op.status = "COMPLETED";
     op.result = result;
     this.operations.set(opId, op);
+    return true;
   }
 
-  async failOperation(opId: string, workerId: string, error: string): Promise<void> {
+  async failOperation(opId: string, workerId: string, claimToken: string, error: string): Promise<boolean> {
     const op = this.operations.get(opId) || { id: opId };
     op.status = "FAILED";
     op.error = error;
     this.operations.set(opId, op);
+    return true;
   }
 
   async getOperationRecord(opId: string): Promise<any> {
@@ -53,7 +55,7 @@ class MockStateRepository {
   }
 
   async saveOperationResult<T>(opId: string, val: T): Promise<void> {
-    this.completeOperation(opId, "system", val);
+    this.completeOperation(opId, "system", "legacy-token", val);
   }
 
   async getTask(taskId: string): Promise<any> {

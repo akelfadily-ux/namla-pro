@@ -71,6 +71,10 @@ export interface StateRepository {
     runId: RunId,
   ): Promise<number>;
 
+  recoverExpiredTaskExecutions(
+    runId: RunId,
+  ): Promise<{ recoveredCount: number }>;
+
   saveAntExecution(execution: AntExecution): Promise<void>;
 
   saveArtifact(artifact: Artifact): Promise<void>;
@@ -80,6 +84,18 @@ export interface StateRepository {
   getBudgetUsage(runId: RunId): Promise<BudgetUsage>;
 
   getBudgetLimits(runId: RunId): Promise<BudgetLimits>;
+
+  reserveBudget(
+    runId: RunId,
+    estimatedCostUsd: number,
+    estimatedTokens: number,
+  ): Promise<{ reserved: boolean; reservationId?: string }>;
+
+  reconcileBudget(
+    reservationId: string,
+    actualCostUsd: number,
+    actualTokens: number,
+  ): Promise<void>;
 
   getOperationRecord(
     operationId: OperationId,
@@ -94,14 +110,16 @@ export interface StateRepository {
   completeOperation<T>(
     operationId: OperationId,
     workerId: WorkerId,
+    claimToken: string,
     value: T,
-  ): Promise<void>;
+  ): Promise<boolean>;
 
   failOperation(
     operationId: OperationId,
     workerId: WorkerId,
+    claimToken: string,
     error: string,
-  ): Promise<void>;
+  ): Promise<boolean>;
 
   getOperationResult<T>(
     operationId: OperationId,

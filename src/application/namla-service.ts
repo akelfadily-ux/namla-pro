@@ -91,6 +91,7 @@ export class NamlaService {
 
   async processRun(runId: string, workerId = "worker-1"): Promise<void> {
     await this.container.state.recoverExpiredLeases(runId);
+    await this.container.state.recoverExpiredTaskExecutions(runId);
     const runnable = await this.container.scheduler.getRunnable(runId, workerId);
 
     for (const task of runnable) {

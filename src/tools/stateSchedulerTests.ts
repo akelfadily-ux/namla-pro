@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 
 import { PostgresStateRepository } from "../infrastructure/persistence/postgresStateRepository";
 import { Scheduler } from "../application/scheduler";
-import { AntRole, TaskStatus } from "../domain/types";
+import { AntRole, RunStatus, TaskStatus } from "../domain/types";
 import { StateConflictError } from "../domain/errors";
 
 class MockDatabase {
@@ -13,8 +13,23 @@ class MockDatabase {
   public events: any[] = [];
   public operations = new Map<string, any>();
 
-  async query<T = any>(sql: string, params: any[] = []): Promise<{ rows: T[] }> {
+  public runs = new Map<string, any>();
+
+  async query<T = any>(sql: string, params: any[] = []): Promise<{ rows: T[]; rowCount?: number }> {
     const s = sql.replace(/\s+/g, " ").trim().toUpperCase();
+
+    if (s.startsWith("INSERT INTO RUNS")) {
+      const [id, status, goal, repo, limits, created_at, updated_at] = params;
+      const row = { id, status, goal, repository_path: repo, budget_limits: limits, created_at, updated_at };
+      this.runs.set(id, row);
+      return { rows: [row as any], rowCount: 1 };
+    }
+
+    if (s.startsWith("SELECT * FROM RUNS WHERE ID =")) {
+      const id = params[0];
+      const r = this.runs.get(id);
+      return { rows: r ? [r] : [] };
+    }
 
     if (s.startsWith("SELECT * FROM TASKS WHERE ID =")) {
       const id = params[0];
@@ -79,17 +94,26 @@ class MockDatabase {
       return { rows: rows as any };
     }
 
-    if (s.startsWith("SELECT RESULT FROM OPERATIONS WHERE OPERATION_ID =")) {
+    if (s.startsWith("SELECT * FROM OPERATIONS WHERE OPERATION_ID =")) {
       const opId = params[0];
       const op = this.operations.get(opId);
       return { rows: op ? [op] : [] };
     }
 
     if (s.startsWith("INSERT INTO OPERATIONS")) {
-      const [opId, res] = params;
-      const row = { operation_id: opId, result: res };
+      const [opId, run_id, task_id, ant_id, tool_name, input_hash, owner, expiresAt, now] = params;
+      const row = { id: opId, operation_id: opId, run_id, task_id, ant_id, tool_name, input_hash, status: "RUNNING", owner, created_at: now };
       this.operations.set(opId, row);
       return { rows: [row as any] };
+    }
+
+    if (s.startsWith("UPDATE OPERATIONS SET STATUS = 'COMPLETED'")) {
+      const [resStr, opId] = params;
+      const op = this.operations.get(opId) || { id: opId, operation_id: opId };
+      op.status = "COMPLETED";
+      op.result = JSON.parse(resStr);
+      this.operations.set(opId, op);
+      return { rows: [op as any] };
     }
 
     return { rows: [] };
@@ -134,6 +158,15 @@ test("PostgresStateRepository & Scheduler atomic state logic", async (t) => {
     const scheduler = new Scheduler(repo);
 
     const now = new Date();
+    await repo.createRun({
+      id: "run-1",
+      status: RunStatus.Created,
+      goal: "Test Scheduler",
+      budgetLimits: {},
+      createdAt: now,
+      updatedAt: now,
+    });
+
     await repo.createTask({
       id: "task-dep",
       runId: "run-1",

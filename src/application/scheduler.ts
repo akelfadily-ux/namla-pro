@@ -8,6 +8,11 @@ export class Scheduler {
     runId: string,
     workerId?: string,
   ): Promise<TaskRecord[]> {
+    const run = await this.state.getRun(runId);
+    if (!run || run.status === "CANCELLED" || run.status === "FAILED" || run.status === "COMPLETED" || run.status === "PAUSED") {
+      return [];
+    }
+
     const candidates = await this.state.listRunnableTasks(runId);
 
     const runnable: TaskRecord[] = [];
