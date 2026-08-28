@@ -1,5 +1,6 @@
 import { StateRepository, ModelAdapter, ToolAdapter } from "../domain/contracts";
-import { UnitOfWork, PostgresUnitOfWork } from "../domain/unit-of-work";
+import { UnitOfWork } from "../domain/unit-of-work";
+import { PostgresUnitOfWork } from "../infrastructure/persistence/postgresUnitOfWork";
 import { PolicyEngine } from "../application/policy-engine";
 import { BudgetController } from "../application/budget-controller";
 import { ToolGateway } from "../application/tool-gateway";

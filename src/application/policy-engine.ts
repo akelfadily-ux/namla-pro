@@ -17,7 +17,7 @@ export function canonicalizePath(targetPath: string): string {
     try {
       return realpathSync(absolutePath);
     } catch {
-      return absolutePath;
+      throw new PermissionDeniedError(`Canonicalization failed for path: ${targetPath}`);
     }
   }
 
@@ -36,7 +36,7 @@ export function canonicalizePath(targetPath: string): string {
         const realParent = realpathSync(current);
         return resolve(realParent, ...tail);
       } catch {
-        return absolutePath;
+        throw new PermissionDeniedError(`Canonicalization failed for path ancestor: ${current}`);
       }
     }
   }

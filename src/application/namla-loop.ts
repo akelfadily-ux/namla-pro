@@ -6,6 +6,11 @@ import { Supervisor } from "./supervisor";
 export interface TaskExecutor {
   execute(
     task: TaskRecord,
+    context?: {
+      signal?: AbortSignal;
+      workerId?: string;
+      leaseToken?: string;
+    },
   ): Promise<{
     artifacts: any[];
     workspacePath: string;
@@ -66,7 +71,15 @@ export class NamlaLoop {
     }
 
     try {
-      const execution = await this.executor.execute(task);
+      if (abortController.signal.aborted) {
+        throw new Error(`Worker lease lost before execution start for task ${task.id}`);
+      }
+
+      const execution = await this.executor.execute(task, {
+        signal: abortController.signal,
+        workerId,
+        leaseToken,
+      });
 
       // Persist AntExecution record
       await this.state.saveAntExecution({
@@ -98,11 +111,19 @@ export class NamlaLoop {
         }
       }
 
-      task = await this.state.transitionTask(
-        task.id,
-        TaskStatus.Running,
-        TaskStatus.Testing,
-      );
+      task = workerId && leaseToken && this.state.transitionTaskFenced
+        ? await this.state.transitionTaskFenced(
+            task.id,
+            TaskStatus.Running,
+            TaskStatus.Testing,
+            workerId,
+            leaseToken,
+          )
+        : await this.state.transitionTask(
+            task.id,
+            TaskStatus.Running,
+            TaskStatus.Testing,
+          );
 
       const gateContext: GateContext = {
         task,

@@ -196,7 +196,7 @@ export interface ToolAdapter<I = unknown, O = unknown> {
   getPermissionRequests?(
     input: I,
     context: ToolExecutionContext,
-  ): readonly import("../application/policy-engine").PermissionRequest[];
+  ): readonly import("./types").PermissionRequest[];
 
   execute(
     input: I,

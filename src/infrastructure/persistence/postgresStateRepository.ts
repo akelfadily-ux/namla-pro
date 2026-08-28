@@ -311,7 +311,7 @@ export class PostgresStateRepository implements StateRepository {
     const res = await this.db.query(
       `UPDATE tasks
        SET lease_expires_at = $1
-       WHERE id = $2 AND lease_owner = $3 AND (lease_token = $4 OR lease_token IS NULL)`,
+       WHERE id = $2 AND lease_owner = $3 AND lease_token = $4 AND lease_expires_at > NOW()`,
       [expiresAt, taskId, workerId, leaseToken],
     );
 
@@ -326,7 +326,7 @@ export class PostgresStateRepository implements StateRepository {
     await this.db.query(
       `UPDATE tasks
        SET lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL
-       WHERE id = $1 AND lease_owner = $2 AND (lease_token = $3 OR lease_token IS NULL)`,
+       WHERE id = $1 AND lease_owner = $2 AND lease_token = $3`,
       [taskId, workerId, leaseToken],
     );
   }
@@ -606,9 +606,11 @@ export class PostgresStateRepository implements StateRepository {
       return { status: "CLAIMED", record, claimToken };
     }
 
-    // Single query fallback if row was not updated due to COMPLETED or active lease
+    // Fail closed if state record cannot be retrieved or claimed
     const record = await this.getOperationRecord(op.id);
-    if (!record) return { status: "CLAIMED", claimToken };
+    if (!record) {
+      throw new Error(`STATE INVARIANT FAILURE: Operation ${op.id} claim produced no record and cannot be retrieved`);
+    }
 
     if (record.inputHash && record.inputHash !== op.inputHash) {
       return { status: "INPUT_HASH_MISMATCH", record };

@@ -145,6 +145,11 @@ export interface AntExecution {
   status: TaskStatus;
 }
 
+export interface PermissionRequest {
+  capability: string;
+  resource?: string;
+}
+
 export interface Artifact {
   id: ArtifactId;
 

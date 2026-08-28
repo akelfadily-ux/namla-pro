@@ -108,7 +108,10 @@ export class NamlaService {
         TaskStatus.Assigned,
       );
 
-      const leaseToken = leasedTask.leaseToken || "lease-token";
+      if (!leasedTask.leaseToken) {
+        throw new Error(`Invariant violation: claimed task ${leasedTask.id} has no fencing token`);
+      }
+      const leaseToken = leasedTask.leaseToken;
 
       // Start periodic heartbeat renewal during execution
       const timer = setInterval(async () => {
