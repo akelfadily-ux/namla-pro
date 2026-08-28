@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { Container } from "../bootstrap/container";
 import { NamlaService } from "../application/namla-service";
 import { PostgresStateRepository } from "../infrastructure/persistence/postgresStateRepository";
-import { AntRole, TaskStatus } from "../domain/types";
+import { AntRole, RunStatus, TaskStatus } from "../domain/types";
 import { ToolAdapter, ModelAdapter } from "../domain/contracts";
 import { Gate } from "../application/gate-engine";
 
@@ -30,6 +30,15 @@ class MemoryDatabase {
       return { rows: r ? [r] : [] };
     }
 
+    if (s.startsWith("UPDATE RUNS SET STATUS =")) {
+      const [nextStatus, now, id, expectedStatus] = params;
+      const r = this.runs.get(id);
+      if (!r || r.status !== expectedStatus) return { rows: [], rowCount: 0 };
+      r.status = nextStatus;
+      r.updated_at = now;
+      return { rows: [r as any], rowCount: 1 };
+    }
+
     if (s.startsWith("SELECT * FROM TASKS WHERE ID =")) {
       const id = params[0];
       const task = this.tasks.get(id);
@@ -53,10 +62,11 @@ class MemoryDatabase {
     }
 
     if (s.startsWith("UPDATE TASKS SET LEASE_OWNER = $1")) {
-      const [workerId, expiresAt, taskId] = params;
+      const [workerId, leaseToken, expiresAt, taskId] = params;
       const task = this.tasks.get(taskId);
       if (!task) return { rows: [], rowCount: 0 };
       task.lease_owner = workerId;
+      task.lease_token = leaseToken;
       task.lease_expires_at = expiresAt;
       return { rows: [task], rowCount: 1 };
     }
@@ -167,6 +177,10 @@ test("Golden E2E Software Task Execution", async () => {
 
   assert.match(summary.id, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
   assert.equal(summary.status, "CREATED");
+
+  // Transition Run status to PLANNING -> RUNNING for scheduler processing
+  await stateRepo.transitionRun(summary.id, RunStatus.Created, RunStatus.Planning);
+  await stateRepo.transitionRun(summary.id, RunStatus.Planning, RunStatus.Running);
 
   // 2. Process Run (Namla Loop: EXECUTE -> TEST -> VERIFY -> REVIEW -> APPROVE)
   await service.processRun(summary.id, "worker-1");

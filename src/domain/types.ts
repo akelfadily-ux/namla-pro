@@ -120,6 +120,7 @@ export interface TaskRecord {
 
   assignedAntId?: AntId;
   leaseOwner?: WorkerId;
+  leaseToken?: string;
   leaseExpiresAt?: Date;
 
   createdAt: Date;

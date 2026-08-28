@@ -1,4 +1,5 @@
 import { StateRepository, ModelAdapter, ToolAdapter } from "../domain/contracts";
+import { UnitOfWork, PostgresUnitOfWork } from "../domain/unit-of-work";
 import { PolicyEngine } from "../application/policy-engine";
 import { BudgetController } from "../application/budget-controller";
 import { ToolGateway } from "../application/tool-gateway";
@@ -10,6 +11,7 @@ import { NamlaLoop, TaskExecutor } from "../application/namla-loop";
 
 export interface ContainerConfig {
   stateRepository: StateRepository;
+  unitOfWork?: UnitOfWork;
   toolAdapters: readonly ToolAdapter[];
   modelAdapters: readonly ModelAdapter[];
   gates: readonly Gate[];
@@ -19,6 +21,7 @@ export interface ContainerConfig {
 
 export class Container {
   public readonly state: StateRepository;
+  public readonly unitOfWork: UnitOfWork;
   public readonly policy: PolicyEngine;
   public readonly budgets: BudgetController;
   public readonly tools: ToolGateway;
@@ -29,6 +32,7 @@ export class Container {
 
   constructor(config: ContainerConfig) {
     this.state = config.stateRepository;
+    this.unitOfWork = config.unitOfWork ?? new PostgresUnitOfWork(this.state);
     this.policy = new PolicyEngine();
     this.budgets = new BudgetController();
     this.tools = new ToolGateway(config.toolAdapters, this.state, this.policy);

@@ -33,6 +33,12 @@ export class ModelGateway {
 
     this.budgets.assertWithinLimits(limits, usage);
 
+    // Reserve budget atomically prior to provider call
+    const reservation = await this.state.reserveBudget(runId, 0.01, 100);
+    if (!reservation.reserved) {
+      throw new Error("Budget limit exceeded during atomic reservation");
+    }
+
     const adapter = this.adapters.get(provider);
 
     if (!adapter) {
@@ -40,17 +46,53 @@ export class ModelGateway {
     }
 
     const now = new Date();
-    await this.state.appendEvent({
-      type: "model.started",
-      runId,
-      traceId: `trace-${runId}`,
-      timestamp: now,
-      payload: { provider, model: request.model },
-    });
-
+    // Telemetry failure MUST NOT convert provider success into failure
     try {
-      const response = await adapter.generate(request);
+      await this.state.appendEvent({
+        type: "model.started",
+        runId,
+        traceId: `trace-${runId}`,
+        timestamp: now,
+        payload: { provider, model: request.model },
+      });
+    } catch {
+      /* telemetry failure isolated */
+    }
 
+    let response: ModelResponse<T>;
+    try {
+      response = await adapter.generate(request);
+    } catch (error) {
+      const errMsg = error instanceof Error ? error.message : "Model generation failed";
+      try {
+        await this.state.appendEvent({
+          type: "model.failed",
+          runId,
+          traceId: `trace-${runId}`,
+          timestamp: new Date(),
+          payload: { provider, model: request.model, error: errMsg },
+        });
+      } catch {
+        /* telemetry failure isolated */
+      }
+      throw error;
+    }
+
+    // Reconcile actual budget usage
+    if (reservation.reservationId) {
+      try {
+        await this.state.reconcileBudget(
+          reservation.reservationId,
+          response.usage.estimatedCostUsd,
+          response.usage.inputTokens + response.usage.outputTokens,
+        );
+      } catch {
+        /* ignore */
+      }
+    }
+
+    // Telemetry failure MUST NOT convert provider success into failure
+    try {
       await this.state.appendEvent({
         type: "model.completed",
         runId,
@@ -64,18 +106,10 @@ export class ModelGateway {
           costUsd: response.usage.estimatedCostUsd,
         },
       });
-
-      return response;
-    } catch (error) {
-      const errMsg = error instanceof Error ? error.message : "Model generation failed";
-      await this.state.appendEvent({
-        type: "model.failed",
-        runId,
-        traceId: `trace-${runId}`,
-        timestamp: new Date(),
-        payload: { provider, model: request.model, error: errMsg },
-      });
-      throw error;
+    } catch {
+      /* telemetry failure isolated */
     }
+
+    return response;
   }
 }

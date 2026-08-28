@@ -16,6 +16,7 @@ import {
   WorkerId,
 } from "../../domain/types";
 import { StateRepository, EventRecord } from "../../domain/contracts";
+import { randomUUID } from "crypto";
 import { assertRunTransition, assertTaskTransition } from "../../domain/lifecycle";
 import { StateConflictError } from "../../domain/errors";
 
@@ -231,17 +232,19 @@ export class PostgresStateRepository implements StateRepository {
     workerId: WorkerId,
     leaseDurationMs = 120_000,
   ): Promise<TaskRecord | null> {
+    const leaseToken = randomUUID();
     const expiresAt = new Date(Date.now() + leaseDurationMs);
     const res = await this.db.query<PostgresTaskRow>(
       `UPDATE tasks
        SET
          lease_owner = $1,
-         lease_expires_at = $2
-       WHERE id = $3
+         lease_token = $2,
+         lease_expires_at = $3
+       WHERE id = $4
          AND status IN ('CREATED', 'RETRYING')
          AND (lease_expires_at IS NULL OR lease_expires_at < NOW())
        RETURNING *`,
-      [workerId, expiresAt, taskId],
+      [workerId, leaseToken, expiresAt, taskId],
     );
 
     if (res.rows.length === 0) return null;
@@ -476,11 +479,11 @@ export class PostgresStateRepository implements StateRepository {
     workerId: WorkerId,
     leaseDurationMs = 60_000,
   ): Promise<{ status: "CLAIMED" | "COMPLETED" | "RUNNING_OTHER_LEASE" | "INPUT_HASH_MISMATCH"; record?: OperationRecord; claimToken?: string }> {
-    const claimToken = `claim-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+    const claimToken = randomUUID();
     const expiresAt = new Date(Date.now() + leaseDurationMs);
     const now = new Date();
 
-    // Atomic SQL Upsert and claim using conditional ON CONFLICT DO UPDATE
+    // Atomic SQL Upsert and claim using conditional ON CONFLICT DO UPDATE without same-worker re-claim
     const res = await this.db.query<any>(
       `INSERT INTO operations (
         operation_id, id, run_id, task_id, ant_id, operation_type, tool_name, input_hash, status, lease_owner, owner, claim_token, lease_expires_at, created_at
@@ -492,7 +495,7 @@ export class PostgresStateRepository implements StateRepository {
         claim_token = EXCLUDED.claim_token,
         lease_expires_at = EXCLUDED.lease_expires_at
       WHERE operations.status != 'COMPLETED'
-        AND (operations.lease_expires_at IS NULL OR operations.lease_expires_at < NOW() OR operations.owner = EXCLUDED.owner)
+        AND (operations.lease_expires_at IS NULL OR operations.lease_expires_at < NOW())
       RETURNING *`,
       [op.id, op.runId, op.taskId, op.antId, op.toolName, op.inputHash, workerId, claimToken, expiresAt, now],
     );

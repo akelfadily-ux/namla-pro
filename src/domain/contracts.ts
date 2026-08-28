@@ -182,6 +182,11 @@ export interface ToolAdapter<I = unknown, O = unknown> {
 
   validateInput(input: unknown): I;
 
+  getPermissionRequests?(
+    input: I,
+    context: ToolExecutionContext,
+  ): readonly import("../application/policy-engine").PermissionRequest[];
+
   execute(
     input: I,
     context: ToolExecutionContext,

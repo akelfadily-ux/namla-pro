@@ -61,11 +61,55 @@ class MockPgClient {
       return { rows: existing, rowCount: 1 };
     }
 
+    if (normalized.startsWith("SELECT * FROM OPERATIONS WHERE OPERATION_ID =")) {
+      const id = params[0];
+      const row = this.rowsMap.get(`op:${id}`);
+      return { rows: row ?? [] };
+    }
+
+    if (normalized.startsWith("INSERT INTO OPERATIONS")) {
+      const [opId, run_id, task_id, ant_id, type, tool_name, input_hash, workerId, claimToken, expiresAt, now] = params;
+      const row = { id: opId, operation_id: opId, run_id, task_id, ant_id, tool_name, input_hash, status: "RUNNING", owner: workerId, claim_token: claimToken, lease_expires_at: expiresAt, created_at: now };
+      this.rowsMap.set(`op:${opId}`, [row]);
+      return { rows: [row as any], rowCount: 1 };
+    }
+
+    if (normalized.startsWith("UPDATE OPERATIONS SET STATUS = 'COMPLETED'")) {
+      const [resStr, opId] = params;
+      const existing = this.rowsMap.get(`op:${opId}`);
+      if (!existing) return { rows: [], rowCount: 0 };
+      existing[0].status = "COMPLETED";
+      existing[0].result = JSON.parse(resStr);
+      return { rows: existing, rowCount: 1 };
+    }
+
     return { rows: [], rowCount: 0 };
   }
 }
 
 test("PostgresStateRepository integration semantics", async (t) => {
+  await t.test("atomic operation claim and fencing tokens", async () => {
+    const db = new MockPgClient();
+    const repo = new PostgresStateRepository(db);
+
+    const op = {
+      id: "op-fence-1",
+      toolName: "filesystem.write",
+      inputHash: "hash123",
+      runId: "run-100",
+      taskId: "task-1",
+      antId: "ant-1",
+    };
+
+    const claim1 = await repo.claimOperation(op, "worker-1");
+    assert.equal(claim1.status, "CLAIMED");
+    assert.ok(claim1.claimToken);
+
+    // Complete with matching token
+    const completed = await repo.completeOperation("op-fence-1", "worker-1", claim1.claimToken!, { result: "ok" });
+    assert.equal(completed, true);
+  });
+
   await t.test("persists Run and enforces CAS transitions", async () => {
     const db = new MockPgClient();
     const repo = new PostgresStateRepository(db);

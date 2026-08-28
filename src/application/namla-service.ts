@@ -70,17 +70,18 @@ export class NamlaService {
       updatedAt: now,
     };
 
-    // Transactional order: Persist Run FIRST before child tasks & events
-    await this.container.state.createRun(runRecord);
-    await this.container.state.createTask(initialTask);
-
-    await this.container.state.appendEvent({
-      type: "run.created",
-      runId,
-      taskId: initialTaskId,
-      traceId: `trace-${runId}`,
-      timestamp: now,
-      payload: { goal: input.goal, budget: input.budget },
+    // Execute run, initial task, and event creation atomically inside UnitOfWork transaction
+    await this.container.unitOfWork.transaction(async (txState) => {
+      await txState.createRun(runRecord);
+      await txState.createTask(initialTask);
+      await txState.appendEvent({
+        type: "run.created",
+        runId,
+        taskId: initialTaskId,
+        traceId: `trace-${runId}`,
+        timestamp: now,
+        payload: { goal: input.goal, budget: input.budget },
+      });
     });
 
     return {
@@ -90,8 +91,9 @@ export class NamlaService {
   }
 
   async processRun(runId: string, workerId = "worker-1"): Promise<void> {
-    await this.container.state.recoverExpiredLeases(runId);
+    // Correct Order: Recover expired executions FIRST before clearing stale lease times
     await this.container.state.recoverExpiredTaskExecutions(runId);
+    await this.container.state.recoverExpiredLeases(runId);
     const runnable = await this.container.scheduler.getRunnable(runId, workerId);
 
     for (const task of runnable) {

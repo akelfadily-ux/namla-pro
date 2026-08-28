@@ -7,7 +7,7 @@ import { tmpdir } from "os";
 import { Container } from "../bootstrap/container";
 import { NamlaService } from "../application/namla-service";
 import { PostgresStateRepository } from "../infrastructure/persistence/postgresStateRepository";
-import { TaskStatus } from "../domain/types";
+import { RunStatus, TaskStatus } from "../domain/types";
 import { ToolAdapter, ModelAdapter } from "../domain/contracts";
 import { Gate } from "../application/gate-engine";
 
@@ -33,6 +33,15 @@ class DeterministicPgDatabase {
       return { rows: r ? [r] : [] };
     }
 
+    if (s.startsWith("UPDATE RUNS SET STATUS =")) {
+      const [nextStatus, now, id, expectedStatus] = params;
+      const r = this.runs.get(id);
+      if (!r || r.status !== expectedStatus) return { rows: [], rowCount: 0 };
+      r.status = nextStatus;
+      r.updated_at = now;
+      return { rows: [r as any], rowCount: 1 };
+    }
+
     if (s.startsWith("SELECT * FROM TASKS WHERE ID =")) {
       const id = params[0];
       const task = this.tasks.get(id);
@@ -55,10 +64,11 @@ class DeterministicPgDatabase {
     }
 
     if (s.startsWith("UPDATE TASKS SET LEASE_OWNER = $1")) {
-      const [workerId, expiresAt, taskId] = params;
+      const [workerId, leaseToken, expiresAt, taskId] = params;
       const task = this.tasks.get(taskId);
       if (!task) return { rows: [], rowCount: 0 };
       task.lease_owner = workerId;
+      task.lease_token = leaseToken;
       task.lease_expires_at = expiresAt;
       return { rows: [task], rowCount: 1 };
     }
@@ -216,6 +226,10 @@ test("Deterministic Golden Runtime E2E Suite", async () => {
       repositoryPath: tmpWorkspace,
       budget: { maxCostUsd: 2.0 },
     });
+
+    // Transition Run status from CREATED to RUNNING
+    await stateRepo.transitionRun(summary.id, RunStatus.Created, RunStatus.Planning);
+    await stateRepo.transitionRun(summary.id, RunStatus.Planning, RunStatus.Running);
 
     // 2. Invoke ModelGateway through container
     const modelResponse = await container.models.generate(summary.id, "openai", {

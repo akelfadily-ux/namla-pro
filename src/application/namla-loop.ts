@@ -27,14 +27,46 @@ export class NamlaLoop {
       throw new Error(`Task not found: ${taskId}`);
     }
 
-    task = await this.state.transitionTask(
-      task.id,
-      TaskStatus.Assigned,
-      TaskStatus.Running,
-    );
+    if (task.status === TaskStatus.Assigned) {
+      task = await this.state.transitionTask(
+        task.id,
+        TaskStatus.Assigned,
+        TaskStatus.Running,
+      );
+    }
 
     try {
       const execution = await this.executor.execute(task);
+
+      // Persist AntExecution record
+      await this.state.saveAntExecution({
+        antId: task.assignedAntId || "ant-worker",
+        runId: task.runId,
+        taskId: task.id,
+        role: task.role,
+        attempt: task.attempt,
+        startedAt: new Date(),
+        finishedAt: new Date(),
+        status: TaskStatus.Testing,
+      });
+
+      // Persist produced Artifacts
+      if (execution.artifacts && Array.isArray(execution.artifacts)) {
+        for (const art of execution.artifacts) {
+          await this.state.saveArtifact({
+            id: art.id || `art-${Date.now()}`,
+            runId: task.runId,
+            taskId: task.id,
+            antId: task.assignedAntId,
+            type: art.type || "code",
+            name: art.name || "unnamed-artifact",
+            path: art.path,
+            uri: art.uri,
+            metadata: art.metadata || {},
+            createdAt: art.createdAt || new Date(),
+          });
+        }
+      }
 
       task = await this.state.transitionTask(
         task.id,

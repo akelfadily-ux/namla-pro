@@ -36,12 +36,15 @@ export class ToolGateway {
       throw new ToolExecutionError(`Unknown tool: ${toolName}`, false);
     }
 
-    this.policy.authorize(
-      { permissions: context.permissions },
-      { capability: `tool:${toolName}` },
-    );
-
     const input = adapter.validateInput(rawInput);
+
+    const reqs = typeof adapter.getPermissionRequests === "function"
+      ? adapter.getPermissionRequests(input, context)
+      : [{ capability: `tool:${toolName}` }];
+
+    for (const req of reqs) {
+      this.policy.authorize({ permissions: context.permissions }, req);
+    }
     const inputHash = fingerprintOperation({
       runId: context.runId,
       taskId: context.taskId,
