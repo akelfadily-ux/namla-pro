@@ -26,7 +26,7 @@
  */
 
 import { spawnSync } from "child_process";
-import { statSync } from "fs";
+import { mkdirSync, rmSync, statSync, writeFileSync } from "fs";
 import { resolve } from "path";
 import { resolveTrustedExecutable, revalidateResolvedExecutable, type TrustedExecutableId } from "./trustedExecutableRegistry";
 import { buildSandboxReceipt, describeMountPolicy, detectContainerRuntime, isIssuedPermit, validateSandboxPolicySpec, NO_ISOLATION_CLAIMS, type ContainerSandboxBackend, type SandboxCapabilityReport, type SandboxExecutionPermit, type SandboxExecutionReceipt, type SandboxReasonCode, type SandboxIsolationClaims } from "./sandboxPolicy";
@@ -50,6 +50,89 @@ import { validateMountSourceSet, revalidateMountSource, type CanonicalMountSourc
 export const IMAGE_REPOSITORY = "namla-sandbox" as const;
 export const IMAGE_TAG = "v1" as const;
 export const IMAGE_DIGEST = "" as const;
+
+// -------------------------------------------- WINDOWS RUNTIME TRUST PIN ---
+
+/**
+ * Approved Windows container-runtime executables, by exact content.
+ *
+ * WHY THIS EXISTS. `decideExecutionAuthorization` grants execution only on
+ * `posix-owner-verified` provenance. On win32 that can never hold: ownership is
+ * synthesised there (uid 0, gid 0, mode 0o666), so applying POSIX logic would be
+ * fabricated evidence. The only accepted substitute is an identity supplied from
+ * OUTSIDE the candidate, and without one the verified sandbox is unreachable on
+ * Windows however correctly Docker is installed.
+ *
+ * WHY A DIGEST AND NOT A PATH. The install root is user-writable, so location
+ * proves nothing about bytes. The digest is the security identity; `version` is
+ * informational and is never compared.
+ *
+ * WHY THE DIGEST ALSO SELECTS THE CANDIDATE. That directory holds two entries
+ * named for docker: the signed 43 MB `docker.exe`, and a 1359-byte
+ * `#!/usr/bin/env sh` WSL shim that delegates to a binary inside WSL which this
+ * process never resolves and cannot measure. An unpinned PATH walk reaches the
+ * SHIM first. Pinning the signed binary's digest is what makes the resolver
+ * select it, so the trust chain terminates in reviewed bytes rather than in a
+ * script that hands off to something unmeasured.
+ *
+ * TRUST FLOW: this repository-owned list -> `expectedSha256` -> byte comparison
+ * against the actual file -> `executionAuthorized`. There is deliberately no
+ * environment, CLI, mission or provider path into this value, and nothing copies
+ * a measured digest back into it. An unlisted digest fails closed.
+ *
+ * UPDATING: new Docker bytes produce a mismatch and the sandbox stays
+ * unavailable until a human reviews the new binary and adds its digest.
+ */
+export interface ApprovedRuntimeExecutable {
+  /** Lowercase 64-hex sha256 of the exact executed file. The security identity. */
+  readonly sha256: string;
+  /** Informational only. Never compared, never a trust input. */
+  readonly version: string;
+}
+
+export const WINDOWS_APPROVED_RUNTIME_EXECUTABLES: Readonly<Record<"docker" | "podman", readonly ApprovedRuntimeExecutable[]>> = Object.freeze({
+  docker: Object.freeze([
+    // Docker Desktop 4.87.0 / CLI 29.7.2. Authenticode Valid, signer "Docker Inc"
+    // (EV, DigiCert Trusted G4), human-reviewed and approved 2026-08-24.
+    Object.freeze({ sha256: "00ffff945b67c65aae98dd980621a80ee135ed4e0931b33ca03687caee019713", version: "29.7.2" }),
+  ]),
+  // No podman digest has been reviewed. An empty list authorizes nothing.
+  podman: Object.freeze([] as readonly ApprovedRuntimeExecutable[]),
+});
+
+/**
+ * The approved digests for this runtime on THIS platform.
+ *
+ * Non-win32 returns an empty list, so every POSIX resolution keeps its exact
+ * pre-existing shape: owner provenance remains the authority there and no pin is
+ * introduced.
+ */
+export function approvedRuntimeExecutableDigests(runtimeId: Extract<TrustedExecutableId, "docker" | "podman">, platform: NodeJS.Platform = process.platform): readonly string[] {
+  if (platform !== "win32") return [];
+  return (WINDOWS_APPROVED_RUNTIME_EXECUTABLES[runtimeId] ?? []).map((e) => e.sha256.toLowerCase());
+}
+
+/**
+ * Resolve the container runtime under the approved identity pin.
+ *
+ * With no approved digest for this platform the call is byte-identical to what
+ * it was before the pin existed. With approved digests, each is tried in turn:
+ * the pin both proves identity and SELECTS the matching candidate, so a host
+ * carrying several files named for docker resolves to the approved one. When
+ * none match, the refusal from the first approved digest is returned so the
+ * caller sees a real `hash-mismatch` rather than a synthesised reason.
+ */
+export function resolveRuntimeExecutableUnderPin(runtimeId: Extract<TrustedExecutableId, "docker" | "podman">, workspaceRoots: readonly string[]): ReturnType<typeof resolveTrustedExecutable> {
+  const pins = approvedRuntimeExecutableDigests(runtimeId);
+  if (pins.length === 0) return resolveTrustedExecutable(runtimeId, { workspaceRoots });
+  let last = resolveTrustedExecutable(runtimeId, { workspaceRoots, expectedSha256: pins[0] });
+  if (last.ok) return last;
+  for (const pin of pins.slice(1)) {
+    const next = resolveTrustedExecutable(runtimeId, { workspaceRoots, expectedSha256: pin });
+    if (next.ok) return next;
+  }
+  return last;
+}
 
 /** Fixed reference: digest form when pinned, otherwise the local tag. */
 export function approvedImageReference(): string {
@@ -256,6 +339,10 @@ export function freshVerificationReport(cached: SandboxCapabilityReport | null, 
 export const CONTAINER_WORKSPACE_MOUNT = "/workspace" as const;
 export const CONTAINER_SOURCE_MOUNT = "/src-readonly" as const;
 export const CONTAINER_PROBE_MOUNT = "/namla-probe" as const;
+/** Namla-owned fixture that makes the read-only source mount provable (R0J). */
+export const SOURCE_FIXTURE_DIR = "namla-readonly-source" as const;
+export const SOURCE_FIXTURE_NAME = "namla-readonly-fixture.txt" as const;
+export const SOURCE_FIXTURE_CONTENT = "namla-readonly-source-fixture-v1" as const;
 
 // ------------------------------------------------------- TRUSTED IDENTITY ---
 
@@ -313,6 +400,78 @@ export function resolveTrustedWorkspaceIdentity(workspaceHostPath: string, platf
   } catch {
     return { ok: false, identity: null, reasonCode: "sandbox-user-not-isolated" };
   }
+}
+
+/**
+ * The identity the CONTAINER will run as. Distinct from host ownership, and
+ * deliberately a separate function so neither can be reported as the other.
+ *
+ * TWO DIFFERENT QUESTIONS. `resolveTrustedWorkspaceIdentity` answers "who owns
+ * the host workspace", and on win32 it still truthfully answers "cannot be
+ * proven" - Windows `statSync` reports uid 0 / gid 0 / mode 0666 for a user
+ * directory, for %TEMP%, and for C:Windows alike, so it distinguishes nothing.
+ * This function answers a different question: "which non-root user should the
+ * container execute as so it can write its own workspace".
+ *
+ * WHY POSIX NEEDS THE OWNER AND WINDOWS DOES NOT. On POSIX the bind mount keeps
+ * its host permissions, so a mode-0700 workspace is writable only by its owner;
+ * matching the container to that owner is what lets a NON-ROOT process write it
+ * without `chmod 0777`. Docker Desktop's Windows mount translation presents the
+ * share to the container as uid 0 / gid 0 / mode 0777 regardless of NTFS ACLs -
+ * measured directly - so a non-root container can already write it and there is
+ * no host owner to match. The POSIX derivation solves a problem that does not
+ * arise there.
+ *
+ * WHAT THIS IS NOT. It is NOT a proof that the Windows workspace is exclusively
+ * controlled. No such proof exists here, and none exists on POSIX either:
+ * `validateIdentity` checks only that the identity is a non-root integer pair,
+ * never that the directory rejects other principals. Host exclusivity is an
+ * explicit residual limitation SHARED BY BOTH PLATFORMS, not a Windows-only gap,
+ * and nothing in this file may be read as establishing it.
+ *
+ * The identity comes from approved image policy (`IMAGE_DEFAULT_IDENTITY`) and
+ * is put through the same `validateIdentity` gate as every other entry point, so
+ * a root, malformed or negative policy value BLOCKS verification. It is never
+ * read from the environment, a CLI flag, mission text, provider output, the
+ * workspace, or any mutable runtime config.
+ */
+export function resolveContainerExecutionIdentity(workspaceHostPath: string, platform: NodeJS.Platform = process.platform): IdentityResolution {
+  if (platform === "win32") return validateIdentity(IMAGE_DEFAULT_IDENTITY.uid, IMAGE_DEFAULT_IDENTITY.gid);
+  return resolveTrustedWorkspaceIdentity(workspaceHostPath, platform);
+}
+
+/**
+ * The platform's EMPTY env-file.
+ *
+ * WHAT THE FLAG IS FOR. `--env-file <empty>` states, in the fixed argv itself,
+ * that this run injects no environment of its own. It is a declarative guard
+ * beside `--hostname`, under "no host metadata leakage". It does NOT neutralise
+ * the image's own ENV - the approved image still declares PATH, NODE_VERSION and
+ * YARN_VERSION, measured directly - and it is NOT what proves the absence of
+ * secrets: that claim comes from the probe's `secretsAbsent` finding, and
+ * `classifyProbe` refuses with `sandbox-secret-inheritance-detected` if any
+ * forbidden name is present. Removing the flag would therefore not have been
+ * caught by a container that merely starts, which is why it was repaired rather
+ * than dropped.
+ *
+ * WHY THE PATH MUST BE PLATFORM-DERIVED. `/dev/null` is not a path on Windows.
+ * Docker rejected the entire run with exit 125 and
+ * "open /dev/null: The system cannot find the path specified", before any
+ * container existed. Measured through `spawnSync` with `shell: false`, exactly
+ * as production spawns it: `/dev/null` exits 125, `NUL` exits 0, and `NUL`
+ * yields an environment byte-identical to passing no env-file at all - so it is
+ * genuinely empty, not merely accepted.
+ *
+ * (A shell can hide this. Run through Git Bash, MSYS rewrites `/dev/null` to a
+ * Windows path and the same command appears to succeed. Production does not use
+ * a shell, so the honest control is the one without one.)
+ *
+ * The value is derived from the platform ALONE. There is no environment, CLI,
+ * mission, provider or configuration path to it, and no caller may supply an
+ * env-file path: the argv template is fixed and closed.
+ */
+export function emptyEnvFilePath(platform: NodeJS.Platform = process.platform): string {
+  return platform === "win32" ? "NUL" : "/dev/null";
 }
 
 // ------------------------------------------------------- NETWORK ENFORCEMENT ---
@@ -447,7 +606,7 @@ export function buildContainerRunArgs(spec: ContainerRunSpec): string[] {
     "--hostname",
     "namla-sandbox",
     "--env-file",
-    "/dev/null",
+    emptyEnvFilePath(),
   ];
 
   // Network: the enforced mode, verbatim. Today the union has exactly one
@@ -490,12 +649,17 @@ export const FORBIDDEN_DOCKER_FLAGS: readonly string[] = ["--privileged", "--net
 
 export interface ProbeFindings {
   readonly uidNonRoot?: boolean;
-  readonly hostRootHidden?: boolean;
+  readonly sensitiveHostMarkersAbsent?: boolean;
+  readonly mountTargets?: readonly string[];
+  readonly unexpectedApplicationMounts?: readonly string[];
   readonly dockerSocketAbsent?: boolean;
   readonly secretsAbsent?: boolean;
   readonly pidNamespaceIsolated?: boolean;
   readonly rootFilesystemReadOnly?: boolean;
   readonly writeOutsideWorkspaceFails?: boolean;
+  readonly sourceMountPresent?: boolean;
+  readonly sourceMountReadable?: boolean;
+  readonly sourceMountWriteDenied?: boolean;
   readonly sourceMountReadOnly?: boolean;
   readonly workspaceWritable?: boolean;
   readonly memoryLimitBytes?: number | null;
@@ -512,11 +676,26 @@ export interface ProbeFindings {
 export function classifyProbe(f: ProbeFindings): SandboxReasonCode {
   if (f.uidNonRoot !== true) return "sandbox-user-not-isolated";
   if (f.dockerSocketAbsent !== true) return "sandbox-docker-socket-detected";
-  if (f.hostRootHidden !== true) return "sandbox-host-mount-detected";
+  // TWO independent facts, because neither is sufficient alone. The six-marker
+  // denylist proves only that those six paths were absent. The mount-table
+  // ENUMERATION proves the observed target set is a subset of what Namla
+  // approved plus what the container runtime creates, so an unpredicted bind
+  // target is caught without anyone having had to predict it. An unreadable
+  // mount table yields a sentinel entry and therefore refuses, never passes.
+  if (f.sensitiveHostMarkersAbsent !== true) return "sandbox-host-mount-detected";
+  if (!Array.isArray(f.unexpectedApplicationMounts) || f.unexpectedApplicationMounts.length > 0) return "sandbox-host-mount-detected";
   if (f.secretsAbsent !== true) return "sandbox-secret-inheritance-detected";
   if (f.pidNamespaceIsolated !== true) return "sandbox-host-mount-detected";
   if (f.rootFilesystemReadOnly !== true) return "sandbox-root-filesystem-writable";
   if (f.writeOutsideWorkspaceFails !== true) return "sandbox-root-filesystem-writable";
+  // NON-VACUOUS (R0J). The gate is unchanged - it always demanded
+  // `sourceMountReadOnly`. The DEFECT was in how the probe computed that value:
+  // `existsSync(mount) ? writeMustFail(...) : true` manufactured TRUE from an
+  // ABSENT mount, and `verifyIsolation` never mounted one. The repair is at the
+  // source, in `evaluateSourceMount`, which now requires present AND readable
+  // AND write-denied; `verifyIsolation` supplies a real fixture so the
+  // observation is actually made. The three underlying facts travel in the
+  // payload as evidence and are asserted directly by the probe tests.
   if (f.sourceMountReadOnly !== true) return "sandbox-host-mount-detected";
   if (f.networkDenied !== true) return "sandbox-network-not-denied";
   if (typeof f.memoryLimitBytes !== "number" || f.memoryLimitBytes <= 0) return "sandbox-memory-limit-unverified";
@@ -542,7 +721,11 @@ export function claimsFromProbe(f: ProbeFindings): SandboxIsolationClaims {
   return {
     // --- proven INSIDE the container by the probe -------------------------
     dedicatedUser: true, // uidNonRoot
-    noHostFilesystemMounts: true, // hostRootHidden
+    // COMPOSITE: runtime mount-table enumeration plus the sensitive-marker
+    // denylist, together with host-side canonical validation of every mount
+    // SOURCE. Docker Desktop does not expose the Windows source path inside the
+    // container, so neither half establishes this alone.
+    onlyApprovedHostMounts: true, // unexpectedApplicationMounts empty + sensitiveHostMarkersAbsent
     boundedWorkspaceMountOnly: true, // writeOutsideWorkspaceFails + workspaceWritable
     readOnlySourceMountSupported: true, // sourceMountReadOnly
     cpuLimitEnforced: true, // cpuLimitConfigured (cgroup v2)
@@ -943,7 +1126,7 @@ export class DockerContainerSandboxBackend implements ContainerSandboxBackend {
    * is gone" is a truthful no.
    */
   private currentImageIdentity(): ImageIdentityResolution {
-    const resolved = resolveTrustedExecutable(this.runtimeExecutableId, { workspaceRoots: untrustedExecutableRoots(this.options) });
+    const resolved = resolveRuntimeExecutableUnderPin(this.runtimeExecutableId, untrustedExecutableRoots(this.options));
     if (!resolved.ok || !resolved.value.executionAuthorized) return { ok: false, identity: null, reasonCode: "sandbox-runtime-unavailable" };
     return this.resolveImageIdentity(resolved.value.command);
   }
@@ -996,7 +1179,7 @@ export class DockerContainerSandboxBackend implements ContainerSandboxBackend {
     // The roots come from construction (`authorizedMountRoots`,
     // `trustedBuildRoot`), NOT from a permit, policy, mission or provider: a
     // caller who supplies its own exclusion list has excluded nothing.
-    const resolved = resolveTrustedExecutable(this.runtimeExecutableId, { workspaceRoots: untrustedExecutableRoots(this.options) });
+    const resolved = resolveRuntimeExecutableUnderPin(this.runtimeExecutableId, untrustedExecutableRoots(this.options));
     if (!resolved.ok) return unverified("sandbox-runtime-unavailable", "runtime not resolvable");
     // §38: DISCOVERED is not AUTHORIZED. Where the platform cannot prove
     // ownership and no trusted identity pin is configured, the runtime is
@@ -1023,9 +1206,22 @@ export class DockerContainerSandboxBackend implements ContainerSandboxBackend {
     // identity is read. The probe workspace is authorized against itself (it was
     // created by this trusted entry point); the probe script directory against
     // the trusted build root. A refusal names the mount fault, never the path.
+    // R0J: a REAL read-only source mount, so the readonly-source guarantee is
+    // PROVEN rather than assumed. Namla-owned, deterministic, created beside the
+    // probe workspace inside the SAME authorized root, validated by the existing
+    // mount machinery, and removed in the finally below. No mission, provider,
+    // environment or CLI input reaches it.
+    const sourceFixtureDir = resolve(probeWorkspace, SOURCE_FIXTURE_DIR);
+    try {
+      mkdirSync(sourceFixtureDir, { recursive: true });
+      writeFileSync(resolve(sourceFixtureDir, SOURCE_FIXTURE_NAME), SOURCE_FIXTURE_CONTENT, "utf8");
+    } catch {
+      return unverified("sandbox-probe-failed", "read-only source fixture could not be created");
+    }
+    try {
     const mounts = validateMountSourceSet({
       workspace: probeWorkspace,
-      readOnlySource: null,
+      readOnlySource: sourceFixtureDir,
       probe: probeDir,
       workspaceRoots: verificationWorkspaceRoots(this.options, probeWorkspace),
       probeRoots: probeMountRoots(this.options),
@@ -1036,14 +1232,14 @@ export class DockerContainerSandboxBackend implements ContainerSandboxBackend {
     // caller, and is read from the CANONICAL object that will actually be
     // mounted. If ownership cannot be proven, refuse rather than fall back to a
     // fixed uid that may not match the mount.
-    const identity = resolveTrustedWorkspaceIdentity(mounts.sources.workspace);
-    if (!identity.ok) return unverified(identity.reasonCode, "workspace ownership could not be proven");
+    const identity = resolveContainerExecutionIdentity(mounts.sources.workspace);
+    if (!identity.ok) return unverified(identity.reasonCode, "container execution identity could not be established");
 
     const containerName = `namla-verify-${process.pid}-${this.verifySequence++}`;
     const args = buildContainerRunArgs({
       userIdentity: identity.identity,
       workspaceHostPath: mounts.sources.workspace,
-      sourceHostPath: null,
+      sourceHostPath: mounts.sources.readOnlySource,
       probeHostPath: mounts.sources.probe,
       cpuLimit: 1,
       memoryLimitMb: 512,
@@ -1138,6 +1334,15 @@ export class DockerContainerSandboxBackend implements ContainerSandboxBackend {
     };
     this.lastVerification = verified;
     return verified;
+    } finally {
+      // The fixture is a verification artefact, not state. It is removed on every
+      // exit path, including every early refusal above.
+      try {
+        rmSync(sourceFixtureDir, { recursive: true, force: true });
+      } catch {
+        /* best effort: a leftover fixture inside the caller's scratch workspace is not state */
+      }
+    }
   }
 
   private verifySequence = 0;
@@ -1207,7 +1412,7 @@ export class DockerContainerSandboxBackend implements ContainerSandboxBackend {
     if (!network.ok) return blocked(network.reasonCode);
 
     // §38: same trusted context as verifyIsolation, for the same reason.
-    const resolved = resolveTrustedExecutable(this.runtimeExecutableId, { workspaceRoots: untrustedExecutableRoots(this.options) });
+    const resolved = resolveRuntimeExecutableUnderPin(this.runtimeExecutableId, untrustedExecutableRoots(this.options));
     if (!resolved.ok) return blocked("sandbox-runtime-unavailable");
     if (!resolved.value.executionAuthorized) return blocked("sandbox-runtime-unavailable");
 
@@ -1227,7 +1432,7 @@ export class DockerContainerSandboxBackend implements ContainerSandboxBackend {
 
     // Identity is derived from the CANONICAL workspace, not the caller's string,
     // so ownership is read from the same object that will actually be mounted.
-    const runIdentity = resolveTrustedWorkspaceIdentity(mounts.sources.workspace);
+    const runIdentity = resolveContainerExecutionIdentity(mounts.sources.workspace);
     if (!runIdentity.ok) return blocked(runIdentity.reasonCode);
 
     const containerName = `namla-run-${process.pid}-${this.verifySequence++}`;

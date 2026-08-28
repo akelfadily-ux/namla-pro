@@ -85,7 +85,7 @@ function spec(overrides: Partial<ContainerRunSpec> = {}): ContainerRunSpec {
 
 /** A probe result where every isolation property holds. */
 function goodFindings(): ProbeFindings {
-  return { uidNonRoot: true, hostRootHidden: true, dockerSocketAbsent: true, secretsAbsent: true, pidNamespaceIsolated: true, rootFilesystemReadOnly: true, writeOutsideWorkspaceFails: true, sourceMountReadOnly: true, workspaceWritable: true, memoryLimitBytes: 536870912, cpuLimitConfigured: true, pidLimit: 64, networkDenied: true };
+  return { uidNonRoot: true, sensitiveHostMarkersAbsent: true, unexpectedApplicationMounts: [], dockerSocketAbsent: true, secretsAbsent: true, pidNamespaceIsolated: true, rootFilesystemReadOnly: true, writeOutsideWorkspaceFails: true, sourceMountReadOnly: true, workspaceWritable: true, memoryLimitBytes: 536870912, cpuLimitConfigured: true, pidLimit: 64, networkDenied: true };
 }
 
 // ------------------------------------------------------- ARGUMENT TEMPLATE ---
@@ -192,7 +192,7 @@ test("a fully isolated probe result verifies; every single unmet property does n
   const cases: Array<[Partial<ProbeFindings>, string]> = [
     [{ uidNonRoot: false }, "sandbox-user-not-isolated"],
     [{ dockerSocketAbsent: false }, "sandbox-docker-socket-detected"],
-    [{ hostRootHidden: false }, "sandbox-host-mount-detected"],
+    [{ sensitiveHostMarkersAbsent: false }, "sandbox-host-mount-detected"],
     [{ secretsAbsent: false }, "sandbox-secret-inheritance-detected"],
     [{ rootFilesystemReadOnly: false }, "sandbox-root-filesystem-writable"],
     [{ writeOutsideWorkspaceFails: false }, "sandbox-root-filesystem-writable"],
@@ -260,7 +260,7 @@ test("the probe runs on this host and reports findings without leaking values", 
   const r = runIsolationProbe();
   const json = JSON.stringify(r);
   assert.equal(typeof r.uid, "number");
-  assert.equal(typeof r.hostRootHidden, "boolean");
+  assert.equal(typeof r.sensitiveHostMarkersAbsent, "boolean");
   assert.equal(typeof r.visibleProcessCount, "number");
   // Env NAMES may appear; VALUES must not.
   for (const name of r.forbiddenEnvNames) {
@@ -275,7 +275,7 @@ test("outside a container the probe does NOT report a verified state", () => {
   // On a developer host the root filesystem is writable and the host is
   // visible, so classification must refuse. This guards against a probe that
   // trivially returns success.
-  const findings: ProbeFindings = { uidNonRoot: r.uidNonRoot, hostRootHidden: r.hostRootHidden, dockerSocketAbsent: r.dockerSocketAbsent, secretsAbsent: r.secretsAbsent, pidNamespaceIsolated: r.pidNamespaceIsolated, rootFilesystemReadOnly: r.rootFilesystemReadOnly, writeOutsideWorkspaceFails: r.writeOutsideWorkspaceFails, sourceMountReadOnly: r.sourceMountReadOnly, workspaceWritable: r.workspaceWritable, memoryLimitBytes: r.memoryLimitBytes, cpuLimitConfigured: r.cpuLimitConfigured, pidLimit: r.pidLimit, networkDenied: r.networkDenied };
+  const findings: ProbeFindings = { uidNonRoot: r.uidNonRoot, sensitiveHostMarkersAbsent: r.sensitiveHostMarkersAbsent, unexpectedApplicationMounts: r.unexpectedApplicationMounts, dockerSocketAbsent: r.dockerSocketAbsent, secretsAbsent: r.secretsAbsent, pidNamespaceIsolated: r.pidNamespaceIsolated, rootFilesystemReadOnly: r.rootFilesystemReadOnly, writeOutsideWorkspaceFails: r.writeOutsideWorkspaceFails, sourceMountReadOnly: r.sourceMountReadOnly, workspaceWritable: r.workspaceWritable, memoryLimitBytes: r.memoryLimitBytes, cpuLimitConfigured: r.cpuLimitConfigured, pidLimit: r.pidLimit, networkDenied: r.networkDenied };
   assert.notEqual(classifyProbe(findings), "ok", "an un-contained host must never classify as isolated");
 });
 
@@ -441,7 +441,7 @@ test("the probe still refuses uidNonRoot=false", () => {
 });
 
 test("claims stay ALL false until every probe property passes", () => {
-  const keys: Array<keyof ProbeFindings> = ["uidNonRoot", "hostRootHidden", "dockerSocketAbsent", "secretsAbsent", "pidNamespaceIsolated", "rootFilesystemReadOnly", "writeOutsideWorkspaceFails", "sourceMountReadOnly", "workspaceWritable", "cpuLimitConfigured", "networkDenied"];
+  const keys: Array<keyof ProbeFindings> = ["uidNonRoot", "sensitiveHostMarkersAbsent", "dockerSocketAbsent", "secretsAbsent", "pidNamespaceIsolated", "rootFilesystemReadOnly", "writeOutsideWorkspaceFails", "sourceMountReadOnly", "workspaceWritable", "cpuLimitConfigured", "networkDenied"];
   for (const k of keys) {
     const f = { ...goodFindings(), [k]: false } as ProbeFindings;
     assert.deepEqual(claimsFromProbe(f), NO_ISOLATION_CLAIMS, `${String(k)}=false must yield NO claims`);

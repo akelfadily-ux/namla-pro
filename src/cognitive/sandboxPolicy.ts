@@ -198,7 +198,17 @@ export const DEFAULT_SANDBOX_POLICY: SandboxPolicySpec = {
 /** The isolation claims a backend asserts. Every one must hold to be verified. */
 export interface SandboxIsolationClaims {
   readonly dedicatedUser: boolean;
-  readonly noHostFilesystemMounts: boolean;
+  /**
+   * Only the APPROVED host mounts are present.
+   *
+   * Renamed from `noHostFilesystemMounts`, which was FALSE BY DESIGN: the
+   * sandbox deliberately bind-mounts /workspace, /namla-probe and /src-readonly
+   * from the host, so "no host filesystem mounts" could never be true and must
+   * not stand as a verified claim. The invariant the design actually intends,
+   * and which is true, is that no UNAPPROVED host filesystem is exposed to
+   * sandboxed code.
+   */
+  readonly onlyApprovedHostMounts: boolean;
   readonly boundedWorkspaceMountOnly: boolean;
   readonly readOnlySourceMountSupported: boolean;
   readonly cpuLimitEnforced: boolean;
@@ -221,7 +231,7 @@ export interface SandboxIsolationClaims {
 /** Nothing is claimed. The honest default when no verified backend exists. */
 export const NO_ISOLATION_CLAIMS: SandboxIsolationClaims = {
   dedicatedUser: false,
-  noHostFilesystemMounts: false,
+  onlyApprovedHostMounts: false,
   boundedWorkspaceMountOnly: false,
   readOnlySourceMountSupported: false,
   cpuLimitEnforced: false,
@@ -393,7 +403,7 @@ export interface ContainerSandboxBackend extends SandboxBackend {
  * execution. Reaching `available-and-verified` requires a real verification run
  * that this codebase does not perform.
  */
-export function detectContainerRuntime(options: { readonly probe?: boolean; readonly untrustedRoots?: readonly string[] } = {}): SandboxCapabilityReport {
+export function detectContainerRuntime(options: { readonly probe?: boolean; readonly untrustedRoots?: readonly string[]; readonly searchPath?: string } = {}): SandboxCapabilityReport {
   for (const id of ["docker", "podman"] as const) {
     // §38: the trust context is passed explicitly. Detection previously called
     // `resolveTrustedExecutable(id, { probeVersion })` with no roots at all, so
@@ -402,20 +412,24 @@ export function detectContainerRuntime(options: { readonly probe?: boolean; read
     // like it had. Probing is still permitted here, but only AFTER the resolver
     // has established provenance and identity — a `--version` can no longer be
     // what decides whether a candidate was trustworthy.
-    const resolved = resolveTrustedExecutable(id, { probeVersion: options.probe === true, workspaceRoots: options.untrustedRoots ?? [] });
-    if (!resolved.ok) continue;
-    return {
-      backendId: id,
-      capabilityState: "available-unverified",
-      available: true,
-      verified: false,
-      detectionMethod: "executable-probe",
-      // A version token only - never a host path.
-      detectionDetail: resolved.value.version.length > 0 ? resolved.value.version : "detected",
-      // NOTHING is claimed: a detected binary proves no isolation property.
-      claims: NO_ISOLATION_CLAIMS,
-      safeReasonCode: "sandbox-capability-unverified",
-    };
+    const context = { workspaceRoots: options.untrustedRoots ?? [], ...(options.searchPath === undefined ? {} : { searchPath: options.searchPath }) };
+    const resolved = resolveTrustedExecutable(id, { probeVersion: options.probe === true, ...context });
+    if (resolved.ok) return detectedRuntime(id, resolved.value.version.length > 0 ? resolved.value.version : "detected");
+
+    // TRUTHFULNESS: a refused version PROBE is a statement about EXECUTION
+    // AUTHORITY, not about existence. Falling straight through to the absent
+    // branch reported "no container runtime found" on a host where Docker was
+    // installed, running, and resolvable - a false statement about the machine,
+    // and one the P0 runner (which never probes) already contradicted. Ask again
+    // WITHOUT probing before concluding absence.
+    //
+    // This corrects OBSERVATION ONLY. The state returned is still
+    // `available-unverified`, which no caller may execute in: authorization is
+    // re-decided by the resolver and isolation by `verifyIsolation()`.
+    if (options.probe === true) {
+      const unprobed = resolveTrustedExecutable(id, { probeVersion: false, ...context });
+      if (unprobed.ok) return detectedRuntime(id, unprobed.value.executionAuthorized ? "detected" : unprobed.value.authorizationReason);
+    }
   }
   return {
     backendId: "none",
@@ -426,6 +440,26 @@ export function detectContainerRuntime(options: { readonly probe?: boolean; read
     detectionDetail: "no container runtime found",
     claims: NO_ISOLATION_CLAIMS,
     safeReasonCode: "sandbox-runtime-unavailable",
+  };
+}
+
+/**
+ * A runtime candidate was found. NOTHING is claimed about isolation, and this
+ * state can never satisfy a caller that needs a verified sandbox.
+ *
+ * `detail` carries either a bounded version token or the resolver's own
+ * closed-vocabulary authorization reason - never a host path.
+ */
+function detectedRuntime(id: "docker" | "podman", detail: string): SandboxCapabilityReport {
+  return {
+    backendId: id,
+    capabilityState: "available-unverified",
+    available: true,
+    verified: false,
+    detectionMethod: "executable-probe",
+    detectionDetail: detail,
+    claims: NO_ISOLATION_CLAIMS,
+    safeReasonCode: "sandbox-capability-unverified",
   };
 }
 
