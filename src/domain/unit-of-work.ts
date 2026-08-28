@@ -36,6 +36,9 @@ export class PostgresUnitOfWork implements UnitOfWork {
         throw error;
       }
     }
-    return fn(this.repository);
+    if (this.repository) {
+      return fn(this.repository);
+    }
+    throw new Error("UnitOfWork requires a valid PostgreSQL database connection/pool to execute transactions");
   }
 }

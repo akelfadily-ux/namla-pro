@@ -48,6 +48,15 @@ export interface StateRepository {
     patch?: Partial<TaskRecord>,
   ): Promise<TaskRecord>;
 
+  transitionTaskFenced(
+    taskId: TaskId,
+    expectedStatus: TaskStatus,
+    nextStatus: TaskStatus,
+    workerId: WorkerId,
+    leaseToken: string,
+    patch?: Partial<TaskRecord>,
+  ): Promise<TaskRecord>;
+
   listRunnableTasks(runId: RunId): Promise<TaskRecord[]>;
 
   claimTaskLease(

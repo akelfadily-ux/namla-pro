@@ -215,6 +215,56 @@ export class PostgresStateRepository implements StateRepository {
     return this.mapTaskRow(res.rows[0]);
   }
 
+  async transitionTaskFenced(
+    taskId: TaskId,
+    expectedStatus: TaskStatus,
+    nextStatus: TaskStatus,
+    workerId: WorkerId,
+    leaseToken: string,
+    patch?: Partial<TaskRecord>,
+  ): Promise<TaskRecord> {
+    assertTaskTransition(expectedStatus, nextStatus);
+
+    const now = new Date();
+    const updatedTitle = patch?.title;
+    const updatedDesc = patch?.description;
+    const updatedAttempt = patch?.attempt;
+    const updatedAnt = patch?.assignedAntId;
+
+    const res = await this.db.query<PostgresTaskRow>(
+      `UPDATE tasks
+       SET
+         status = $1,
+         updated_at = $2,
+         title = COALESCE($3, title),
+         description = COALESCE($4, description),
+         attempt = COALESCE($5, attempt),
+         assigned_ant_id = COALESCE($6, assigned_ant_id)
+       WHERE id = $7 AND status = $8 AND lease_owner = $9 AND lease_token = $10 AND lease_expires_at > NOW()
+       RETURNING *`,
+      [
+        nextStatus,
+        now,
+        updatedTitle ?? null,
+        updatedDesc ?? null,
+        updatedAttempt ?? null,
+        updatedAnt ?? null,
+        taskId,
+        expectedStatus,
+        workerId,
+        leaseToken,
+      ],
+    );
+
+    if (res.rows.length === 0) {
+      throw new StateConflictError(
+        `Fenced transition failed for task ${taskId}: worker ${workerId} with lease token ${leaseToken} does not hold active ownership`,
+      );
+    }
+
+    return this.mapTaskRow(res.rows[0]);
+  }
+
   async listRunnableTasks(runId: RunId): Promise<TaskRecord[]> {
     const res = await this.db.query<PostgresTaskRow>(
       `SELECT * FROM tasks
@@ -428,11 +478,25 @@ export class PostgresStateRepository implements StateRepository {
     const limits = await this.getBudgetLimits(runId);
     const usage = await this.getBudgetUsage(runId);
 
-    if (limits.maxCostUsd !== undefined && (usage.costUsd + estimatedCostUsd > limits.maxCostUsd)) {
+    // Lock and sum active reservations in budget_reservations table to prevent concurrent budget overspend
+    const activeRes = await this.db.query(
+      `SELECT COALESCE(SUM(reserved_cost_usd), 0) as reserved_cost, COALESCE(SUM(reserved_tokens), 0) as reserved_tokens
+       FROM budget_reservations
+       WHERE run_id = $1 AND status = 'RESERVED'`,
+      [runId],
+    );
+
+    const pendingCost = Number(activeRes.rows[0]?.reserved_cost || 0);
+    const pendingTokens = Number(activeRes.rows[0]?.reserved_tokens || 0);
+
+    const totalCost = usage.costUsd + pendingCost + estimatedCostUsd;
+    const totalTokens = usage.inputTokens + usage.outputTokens + pendingTokens + estimatedTokens;
+
+    if (limits.maxCostUsd !== undefined && totalCost > limits.maxCostUsd) {
       return { reserved: false };
     }
 
-    if (limits.maxTokens !== undefined && (usage.inputTokens + usage.outputTokens + estimatedTokens > limits.maxTokens)) {
+    if (limits.maxTokens !== undefined && totalTokens > limits.maxTokens) {
       return { reserved: false };
     }
 
@@ -600,7 +664,7 @@ export class PostgresStateRepository implements StateRepository {
     await this.completeOperation(operationId, "system", "legacy-token", value);
   }
 
-  private mapTaskRow(r: PostgresTaskRow): TaskRecord {
+  private mapTaskRow(r: PostgresTaskRow & { lease_token?: string }): TaskRecord {
     return {
       id: r.id,
       runId: r.run_id,
@@ -616,6 +680,7 @@ export class PostgresStateRepository implements StateRepository {
       dependencies: typeof r.dependencies === "string" ? JSON.parse(r.dependencies) : r.dependencies || [],
       assignedAntId: r.assigned_ant_id ?? undefined,
       leaseOwner: r.lease_owner ?? undefined,
+      leaseToken: r.lease_token ?? undefined,
       leaseExpiresAt: r.lease_expires_at ? new Date(r.lease_expires_at) : undefined,
       createdAt: new Date(r.created_at),
       updatedAt: new Date(r.updated_at),

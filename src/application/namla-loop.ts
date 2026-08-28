@@ -20,19 +20,49 @@ export class NamlaLoop {
     private readonly supervisor: Supervisor,
   ) {}
 
-  async executeTask(taskId: string): Promise<void> {
+  async executeTask(
+    taskId: string,
+    workerId?: string,
+    leaseToken?: string,
+  ): Promise<void> {
     let task = await this.state.getTask(taskId);
 
     if (!task) {
       throw new Error(`Task not found: ${taskId}`);
     }
 
+    // Heartbeat setup if worker lease details provided
+    let heartbeatTimer: NodeJS.Timeout | undefined;
+    const abortController = new AbortController();
+
+    if (workerId && leaseToken) {
+      heartbeatTimer = setInterval(async () => {
+        try {
+          const renewed = await this.state.renewTaskLease(taskId, workerId, leaseToken, 30_000);
+          if (!renewed) {
+            abortController.abort(new Error(`Lease renewal lost for task ${taskId}`));
+            if (heartbeatTimer) clearInterval(heartbeatTimer);
+          }
+        } catch {
+          // Ignore transient errors
+        }
+      }, 10_000);
+    }
+
     if (task.status === TaskStatus.Assigned) {
-      task = await this.state.transitionTask(
-        task.id,
-        TaskStatus.Assigned,
-        TaskStatus.Running,
-      );
+      task = leaseToken && workerId && this.state.transitionTaskFenced
+        ? await this.state.transitionTaskFenced(
+            task.id,
+            TaskStatus.Assigned,
+            TaskStatus.Running,
+            workerId,
+            leaseToken,
+          )
+        : await this.state.transitionTask(
+            task.id,
+            TaskStatus.Assigned,
+            TaskStatus.Running,
+          );
     }
 
     try {
@@ -182,6 +212,8 @@ export class NamlaLoop {
       }
 
       throw error;
+    } finally {
+      if (heartbeatTimer) clearInterval(heartbeatTimer);
     }
   }
 
