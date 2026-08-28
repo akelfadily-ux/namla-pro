@@ -24,9 +24,10 @@ class MockStateRepository {
         return { status: "COMPLETED", record: existing };
       }
     }
-    const record = { ...op, status: "RUNNING", owner: workerId };
+    const claimToken = "claim-test-token";
+    const record = { ...op, status: "RUNNING", owner: workerId, claimToken };
     this.operations.set(op.id, record);
-    return { status: "CLAIMED", record };
+    return { status: "CLAIMED", record, claimToken };
   }
 
   async completeOperation(opId: string, workerId: string, claimToken: string, result: any): Promise<boolean> {

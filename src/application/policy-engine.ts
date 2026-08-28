@@ -1,4 +1,5 @@
-import { relative, isAbsolute } from "path";
+import { relative, isAbsolute, resolve } from "path";
+import { realpathSync, existsSync } from "fs";
 import { PermissionDeniedError } from "../domain/errors";
 
 export interface PermissionRequest {
@@ -34,14 +35,17 @@ export class PolicyEngine {
       if (reqRes && perm.startsWith(`${reqCap}:`)) {
         const pattern = perm.slice(reqCap.length + 1);
         if (pattern === "*" || pattern === "**") return true;
-        if (pattern.endsWith("/**")) {
-          const basePath = pattern.slice(0, -3);
-          const rel = relative(basePath, reqRes);
-          return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
-        }
-        if (pattern.endsWith("/*")) {
-          const basePath = pattern.slice(0, -2);
-          const rel = relative(basePath, reqRes);
+        if (pattern.endsWith("/**") || pattern.endsWith("/*")) {
+          const basePath = pattern.endsWith("/**") ? pattern.slice(0, -3) : pattern.slice(0, -2);
+          let realBase = basePath;
+          let realReq = reqRes;
+          try {
+            if (existsSync(basePath)) realBase = realpathSync(basePath);
+            if (existsSync(reqRes)) realReq = realpathSync(reqRes);
+          } catch {
+            /* compare lexically if unresolvable */
+          }
+          const rel = relative(realBase, realReq);
           return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
         }
         return reqRes === pattern;

@@ -96,7 +96,13 @@ export class ToolGateway {
       );
     }
 
-    const claimToken = (claim as any).claimToken || "claim-token";
+    const claimToken = claim.claimToken;
+    if (!claimToken) {
+      throw new ToolExecutionError(
+        `Internal invariant error: Operation ${context.operationId} claimed without valid claim token`,
+        false,
+      );
+    }
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
 

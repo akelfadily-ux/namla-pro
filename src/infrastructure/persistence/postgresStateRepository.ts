@@ -254,14 +254,15 @@ export class PostgresStateRepository implements StateRepository {
   async renewTaskLease(
     taskId: TaskId,
     workerId: WorkerId,
+    leaseToken: string,
     leaseDurationMs = 120_000,
   ): Promise<boolean> {
     const expiresAt = new Date(Date.now() + leaseDurationMs);
     const res = await this.db.query(
       `UPDATE tasks
        SET lease_expires_at = $1
-       WHERE id = $2 AND lease_owner = $3`,
-      [expiresAt, taskId, workerId],
+       WHERE id = $2 AND lease_owner = $3 AND (lease_token = $4 OR lease_token IS NULL)`,
+      [expiresAt, taskId, workerId, leaseToken],
     );
 
     return (res.rows && res.rows.length > 0) || Boolean((res as any).rowCount);
@@ -270,12 +271,13 @@ export class PostgresStateRepository implements StateRepository {
   async releaseTaskLease(
     taskId: TaskId,
     workerId: WorkerId,
+    leaseToken: string,
   ): Promise<void> {
     await this.db.query(
       `UPDATE tasks
-       SET lease_owner = NULL, lease_expires_at = NULL
-       WHERE id = $1 AND lease_owner = $2`,
-      [taskId, workerId],
+       SET lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL
+       WHERE id = $1 AND lease_owner = $2 AND (lease_token = $3 OR lease_token IS NULL)`,
+      [taskId, workerId, leaseToken],
     );
   }
 
@@ -434,7 +436,17 @@ export class PostgresStateRepository implements StateRepository {
       return { reserved: false };
     }
 
-    const reservationId = `res-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+    const reservationId = randomUUID();
+    const now = new Date();
+
+    // Persist budget reservation record
+    await this.db.query(
+      `INSERT INTO budget_reservations (
+        id, run_id, kind, reserved_cost_usd, reserved_tokens, status, created_at
+      ) VALUES ($1, $2, 'MODEL', $3, $4, 'RESERVED', $5)`,
+      [reservationId, runId, estimatedCostUsd, estimatedTokens, now],
+    );
+
     return { reserved: true, reservationId };
   }
 
@@ -443,7 +455,12 @@ export class PostgresStateRepository implements StateRepository {
     actualCostUsd: number,
     actualTokens: number,
   ): Promise<void> {
-    /* Budget reconciliation completed */
+    await this.db.query(
+      `UPDATE budget_reservations
+       SET status = 'RECONCILED', actual_cost_usd = $1, actual_tokens = $2, reconciled_at = NOW()
+       WHERE id = $3`,
+      [actualCostUsd, actualTokens, reservationId],
+    );
   }
 
   async getOperationRecord(
@@ -483,7 +500,7 @@ export class PostgresStateRepository implements StateRepository {
     const expiresAt = new Date(Date.now() + leaseDurationMs);
     const now = new Date();
 
-    // Atomic SQL Upsert and claim using conditional ON CONFLICT DO UPDATE without same-worker re-claim
+    // Atomic SQL Upsert and claim using conditional ON CONFLICT DO UPDATE with identity matching
     const res = await this.db.query<any>(
       `INSERT INTO operations (
         operation_id, id, run_id, task_id, ant_id, operation_type, tool_name, input_hash, status, lease_owner, owner, claim_token, lease_expires_at, created_at
@@ -496,6 +513,10 @@ export class PostgresStateRepository implements StateRepository {
         lease_expires_at = EXCLUDED.lease_expires_at
       WHERE operations.status != 'COMPLETED'
         AND (operations.lease_expires_at IS NULL OR operations.lease_expires_at < NOW())
+        AND operations.run_id = EXCLUDED.run_id
+        AND operations.task_id = EXCLUDED.task_id
+        AND operations.tool_name = EXCLUDED.tool_name
+        AND operations.input_hash = EXCLUDED.input_hash
       RETURNING *`,
       [op.id, op.runId, op.taskId, op.antId, op.toolName, op.inputHash, workerId, claimToken, expiresAt, now],
     );
@@ -543,7 +564,7 @@ export class PostgresStateRepository implements StateRepository {
     const res = await this.db.query(
       `UPDATE operations
        SET status = 'COMPLETED', result = $1, completed_at = NOW(), lease_owner = NULL, owner = NULL, lease_expires_at = NULL
-       WHERE (operation_id = $2 OR id = $2) AND (owner = $3 OR lease_owner = $3) AND (claim_token = $4 OR claim_token IS NULL)`,
+       WHERE (operation_id = $2 OR id = $2) AND (owner = $3 OR lease_owner = $3) AND claim_token = $4 AND status = 'RUNNING'`,
       [JSON.stringify(value), operationId, workerId, claimToken],
     );
     return (res.rows && res.rows.length > 0) || Boolean(res.rowCount);
@@ -558,7 +579,7 @@ export class PostgresStateRepository implements StateRepository {
     const res = await this.db.query(
       `UPDATE operations
        SET status = 'FAILED', error = $1, completed_at = NOW(), lease_owner = NULL, owner = NULL, lease_expires_at = NULL
-       WHERE (operation_id = $2 OR id = $2) AND (owner = $3 OR lease_owner = $3) AND (claim_token = $4 OR claim_token IS NULL)`,
+       WHERE (operation_id = $2 OR id = $2) AND (owner = $3 OR lease_owner = $3) AND claim_token = $4 AND status = 'RUNNING'`,
       [error, operationId, workerId, claimToken],
     );
     return (res.rows && res.rows.length > 0) || Boolean(res.rowCount);

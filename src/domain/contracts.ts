@@ -59,12 +59,14 @@ export interface StateRepository {
   renewTaskLease(
     taskId: TaskId,
     workerId: WorkerId,
+    leaseToken: string,
     leaseDurationMs?: number,
   ): Promise<boolean>;
 
   releaseTaskLease(
     taskId: TaskId,
     workerId: WorkerId,
+    leaseToken: string,
   ): Promise<void>;
 
   recoverExpiredLeases(
@@ -105,7 +107,7 @@ export interface StateRepository {
     operation: Partial<OperationRecord> & { id: OperationId; toolName: string; inputHash: string; runId: RunId; taskId: TaskId; antId: AntId },
     workerId: WorkerId,
     leaseDurationMs?: number,
-  ): Promise<{ status: "CLAIMED" | "COMPLETED" | "RUNNING_OTHER_LEASE" | "INPUT_HASH_MISMATCH"; record?: OperationRecord }>;
+  ): Promise<{ status: "CLAIMED" | "COMPLETED" | "RUNNING_OTHER_LEASE" | "INPUT_HASH_MISMATCH"; record?: OperationRecord; claimToken?: string }>;
 
   completeOperation<T>(
     operationId: OperationId,

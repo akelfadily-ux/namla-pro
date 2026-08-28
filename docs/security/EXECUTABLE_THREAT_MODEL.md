@@ -38,3 +38,14 @@ The NAMLA PRO Executable Security Subsystem cleanly separates five distinct oper
 - **Workspace Exclusion**: Any directory marked under `workspaceRoots` is immediately rejected (`workspace-local-executable-refused`).
 - **Identity Pinning Requirement**: When `requireIdentityPin: true` is configured or explicit `expectedSha256` pins are enforced by trusted infrastructure, unpinned candidates created by same-UID workloads outside workspaceRoots are refused with `executable-identity-unpinned` or `hash-mismatch`.
 - **Long-Term Invariant**: Generated project content must never be capable of installing or selecting the executable that NAMLA uses as a privileged provider/tool merely because both happen to run under the same operating-system user.
+
+## Human-Only Git Safety Policy
+
+### Critical Prohibition
+JULES and automated agents are strictly forbidden from performing repository-level integration operations:
+- `git pull`, `git pull --rebase`
+- `git merge`, `git rebase`, `git cherry-pick`, `git am`
+- PR auto-merging, squash-and-merge, or updating protected branches (`main`, `master`).
+
+### Human-Only Authority
+Only the human repository owner may perform pull, merge, rebase, or integration into main/protected branches. Automated agents work exclusively on dedicated feature branches, producing code changes, tests, and evidence for manual human review and integration.
