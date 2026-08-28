@@ -1,0 +1,14 @@
+{
+  "readOnlyVerified": true,
+  "headCommit": "c5074f376d2de05b452b7cbb16b90032febede38",
+  "branchName": "final-02-production-integration-runtime",
+  "mutationsPerformed": {
+    "gitPull": false,
+    "gitMerge": false,
+    "gitRebase": false,
+    "gitCommit": false,
+    "gitPush": false,
+    "prCreated": false
+  },
+  "gitStatusSummary": "On branch final-02-production-integration-runtime\nChanges to be committed:\n  (use \"git restore --staged <file>...\" to unstage)\n\tdeleted:    FINAL02_CLEAN_HANDOFF.zip\n\tnew file:   FINAL02_P0_4_ARCHITECTURE.md\n\tnew file:   FINAL02_P0_4_BASELINE_PARITY.json\n\tnew file:   FINAL02_P0_4_CLEAN_HANDOFF.zip\n\tnew file:   FINAL02_P0_4_GIT_READONLY_STATE.json\n\tnew file:   FINAL02_P0_4_HARDENED.patch\n\tnew file:   FINAL02_P0_4_REMAINING_BLOCKERS.md\n\tnew file:   FINAL02_P0_4_VALIDATION_EVIDENCE.json\n\tmodified:   src/tools/final02ExecutionRuntimeTests.ts\n\tnew file:   src/tools/generateP04ValidationEvidence.ts\n\tnew file:   src/tools/testFixtures/final02SandboxSigner.ts\n\tnew file:   src/twin/final02/baselineMaterializer.ts\n\tnew file:   src/twin/final02/conflictEngine.ts\n\tnew file:   src/twin/final02/contracts.ts\n\tnew file:   src/twin/final02/executionPlanBuilder.ts\n\tnew file:   src/twin/final02/final02Coordinator.ts\n\tnew file:   src/twin/final02/frozenArtifactResolver.ts\n\tnew file:   src/twin/final02/materializer.ts\n\tnew file:   src/twin/final02/regressionRunner.ts\n\tnew file:   src/twin/final02/repairEngine.ts\n\tnew file:   src/twin/final02/sandboxReceiptVerifier.ts\n\tnew file:   src/twin/final02/treeDigest.ts\n\tnew file:   src/twin/final02/verificationRunner.ts\n\tnew file:   src/twin/final02/workspaceManager.ts\n\tmodified:   src/twin/final02ExecutionRuntime.ts\n\tmodified:   src/twin/mergeForge.ts\n\nChanges not staged for commit:\n  (use \"git add <file>...\" to update what will be committed)\n  (use \"git restore <file>...\" to discard changes in working directory)\n\tmodified:   FINAL02_P0_4_VALIDATION_EVIDENCE.json\n\n"
+}

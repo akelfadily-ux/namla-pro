@@ -1,5 +1,11 @@
 # NAMLA PRO V2
 
+> **STATUS — ARCHITECTURE READY · NEXT GATE: REPOSITORY RESCUE CENSUS**
+>
+> This package defines the target architecture that NAMLA PRO will migrate toward.
+> It does **not** claim that V2 already exists in the repository.
+> Production-code deletion is not authorized. The first implementation milestone is the **Repository Rescue Census**.
+
 **NAMLA PRO V2 is a governed multi-agent software-engineering runtime.** A mission is converted into a frozen contract, dispatched to two isolated colonies, compared, integrated, verified against the contract, and packaged for delivery. Every important transition passes through the same bounded verification protocol: **NAMLA LOOP**. Real effects are never granted by agents or prompts; they are admitted only through one **Trusted Kernel**.
 
 ## How NAMLA PRO works — 30-second architecture map

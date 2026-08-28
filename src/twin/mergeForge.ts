@@ -23,28 +23,12 @@ import { validateColonyRelPath } from "./colonyWorkspace";
 import type { ApprovedMergeComponent } from "./namolaSovereignCourt";
 import { ensureTwinColonyWorkspace, writeLiveObjectiveFile } from "../cognitive/smokeWorkspace";
 import type { VerificationDriver, VerificationOutcome } from "../digital/digitalVerification";
+import type { SandboxSecurityReceipt } from "./final02/contracts";
+
+export type { SandboxSecurityReceipt };
 
 export type MergeVerificationStage = "typecheck" | "tests" | "build" | "security-review" | "acceptance-verification";
 export const MERGE_STAGES: readonly MergeVerificationStage[] = ["typecheck", "tests", "build", "security-review", "acceptance-verification"];
-
-export interface SandboxSecurityReceipt {
-  readonly backendId: string;
-  readonly backendVerificationId: string;
-  readonly executionId: string;
-  readonly workspaceId: string;
-  readonly realProcessExecution: boolean;
-  readonly sandboxVerified: boolean;
-  readonly networkIsolated: boolean;
-  readonly credentialsProtected: boolean;
-  readonly dockerSocketProtected: boolean;
-  readonly mountPolicyVerified: boolean;
-  readonly sourceMountReadOnly: boolean;
-  readonly pathTraversalProtected: boolean;
-  readonly symlinkEscapeProtected: boolean;
-  readonly resourceLimitsVerified: boolean;
-  readonly timeoutEnforced: boolean;
-  readonly cleanupVerified: boolean;
-}
 
 export interface MergeVerificationOutcome {
   readonly stage: MergeVerificationStage;
@@ -57,9 +41,17 @@ export interface MergeVerificationOutcome {
   readonly securityReceipt?: SandboxSecurityReceipt;
 }
 
+export interface MergeVerificationDriverInput {
+  readonly stage: MergeVerificationStage;
+  readonly workspaceId: string;
+  readonly absoluteWorkspacePath: string;
+  readonly expectedMergedTreeDigest: string;
+  readonly injectFailure?: boolean;
+}
+
 export interface MergeVerificationDriver {
   readonly isReal: boolean;
-  run(stage: MergeVerificationStage, workspacePath: string, injectFailure: boolean): MergeVerificationOutcome;
+  run(input: MergeVerificationDriverInput): MergeVerificationOutcome;
 }
 
 /** Deterministic fake merge-verification driver — runs nothing real. */
@@ -69,21 +61,31 @@ export class FakeMergeVerificationDriver implements MergeVerificationDriver {
   get runCount(): number {
     return this.runs;
   }
-  run(stage: MergeVerificationStage, workspacePath: string, injectFailure: boolean): MergeVerificationOutcome {
+  run(input: MergeVerificationDriverInput): MergeVerificationOutcome {
     this.runs += 1;
+    const stage = input.stage;
+    const workspacePath = input.workspaceId;
+    const absPath = input.absoluteWorkspacePath;
+    const digest = input.expectedMergedTreeDigest;
+    const injectFailure = input.injectFailure === true;
+
     return {
       stage,
       passed: !injectFailure,
       realExecution: false,
       workspaceId: workspacePath,
-      absolutePathIdentity: `/simulated/${workspacePath}`,
+      absolutePathIdentity: absPath,
       baselineDigest: "sha256-simulated-baseline",
-      mergedTreeDigest: "sha256-simulated-merged-tree",
+      mergedTreeDigest: digest,
       securityReceipt: {
         backendId: "fake-simulated-driver",
+        keyId: "fake-key-01",
         backendVerificationId: "verif-fake",
         executionId: `exec-${this.runs}`,
         workspaceId: workspacePath,
+        absoluteWorkspacePath: absPath,
+        mergedTreeDigest: digest,
+        signature: "sig-simulated-fake-signature",
         realProcessExecution: false,
         sandboxVerified: false,
         networkIsolated: true,
@@ -438,7 +440,13 @@ export class ZeroTrustMergeForge {
     if (this.files.size === 0 || this.rolledBack) return { refused: true, reasonCode: "empty-merge-workspace" };
 
     const mergedTreeDigest = this.computeMergedTreeDigest();
-    const outcomes = MERGE_STAGES.map((s) => this.driver.run(s, this.mergeWorkspacePath, s === injectFailureStage));
+    const outcomes = MERGE_STAGES.map((s) => this.driver.run({
+      stage: s,
+      workspaceId: this.mergeWorkspacePath,
+      absoluteWorkspacePath: this.diskHandle?.absolutePath ?? `/simulated/${this.mergeWorkspacePath}`,
+      expectedMergedTreeDigest: mergedTreeDigest,
+      injectFailure: s === injectFailureStage,
+    }));
     const passed = outcomes.every((o) => o.passed);
 
     // Bind outcomes with mergedTreeDigest and workspaceId
@@ -484,34 +492,7 @@ export class ZeroTrustMergeForge {
     const beforeFps: string[] = [];
     const afterFps: string[] = [];
 
-    // Modify file on disk to fix integration issue
-    for (const [p, content] of this.files.entries()) {
-      const beforeFp = fnv1a(`${p}|${content}`);
-      const repairedContent = content + "\n// repaired integration defect";
-      const afterFp = fnv1a(`${p}|${repairedContent}`);
-
-      this.files.set(p, repairedContent);
-      if (this.diskHandle) {
-        writeLiveObjectiveFile(this.diskHandle, p, repairedContent, 50000, { allowOverwrite: true });
-      }
-
-      modifiedFiles.push(p);
-      beforeFps.push(beforeFp);
-      afterFps.push(afterFp);
-    }
-
-    this.repairReceipt = {
-      repairId: `repair-${fnv1a(incident.incidentId)}`,
-      authorized: true,
-      ran: true,
-      resolvedIncidentId: incident.incidentId,
-      realExecution: this.driver.isReal,
-      filesModified: modifiedFiles,
-      beforeFingerprints: beforeFps,
-      afterFingerprints: afterFps,
-    };
-
-    this.runVerification(null);
-    return this.repairReceipt;
+    // Refuse fake comment repair; truthful unavailable repair
+    return { refused: true, reasonCode: "REPAIR_UNAVAILABLE" };
   }
 }
