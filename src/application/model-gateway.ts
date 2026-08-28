@@ -70,6 +70,16 @@ export class ModelGateway {
       response = await adapter.generate(request);
     } catch (error) {
       const errMsg = error instanceof Error ? error.message : "Model generation failed";
+
+      // Release reservation on pre-dispatch / unbilled provider failure
+      if (reservation.reservationId && typeof this.state.releaseBudgetReservation === "function") {
+        try {
+          await this.state.releaseBudgetReservation(reservation.reservationId, errMsg);
+        } catch {
+          /* ignore release errors */
+        }
+      }
+
       try {
         await this.state.appendEvent({
           type: "model.failed",

@@ -80,9 +80,13 @@ export class NamlaLoop {
         leaseToken,
       });
 
+      if (abortController.signal.aborted) {
+        throw new Error(`Worker lease lost during execution for task ${task.id}`);
+      }
+
       // Persist AntExecution record
       await this.state.saveAntExecution({
-        antId: task.assignedAntId || "ant-worker",
+        antId: task.assignedAntId || (task.role ? `ant-${String(task.role).toLowerCase()}` : "ant-worker"),
         runId: task.runId,
         taskId: task.id,
         role: task.role,
@@ -146,7 +150,7 @@ export class NamlaLoop {
           payload: { results: gateResults, reason: failedGate?.reason },
         });
 
-        await this.handleFailure(task, failedGate?.reason || "Automated gate rejected task");
+        await this.handleFailure(task, failedGate?.reason || "Automated gate rejected task", authority);
         return;
       }
 
@@ -192,7 +196,7 @@ export class NamlaLoop {
           payload: { reason: decision.reason, risks: decision.risks, requiredFixes: decision.requiredFixes },
         });
 
-        await this.handleFailure(task, decision.reason);
+        await this.handleFailure(task, decision.reason, authority);
         return;
       }
 
@@ -226,6 +230,7 @@ export class NamlaLoop {
           error instanceof Error
             ? error.message
             : "Unknown execution failure",
+          authority,
         );
       }
 
@@ -238,7 +243,7 @@ export class NamlaLoop {
   private async handleFailure(
     task: TaskRecord,
     reason: string,
-    authority?: TaskExecutionAuthority,
+    authority: TaskExecutionAuthority,
   ): Promise<void> {
     const shouldRetry = task.attempt + 1 < task.maxAttempts;
 
@@ -252,7 +257,7 @@ export class NamlaLoop {
     });
 
     if (shouldRetry) {
-      if (authority && this.state.transitionTaskFenced) {
+      if (this.state.transitionTaskFenced) {
         await this.state.transitionTaskFenced(
           task.id,
           task.status,
@@ -278,7 +283,7 @@ export class NamlaLoop {
       return;
     }
 
-    if (authority && this.state.transitionTaskFenced) {
+    if (this.state.transitionTaskFenced) {
       await this.state.transitionTaskFenced(
         task.id,
         task.status,

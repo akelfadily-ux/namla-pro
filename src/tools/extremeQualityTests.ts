@@ -265,6 +265,12 @@ test("Extreme Quality Suite — PolicyEngine Resource Scoping and Path Security"
     policy.authorize(antPolicy, { capability: "filesystem.write", resource: forbiddenFile });
   }, PermissionDeniedError, "Path outside scoped directory is denied");
 
+  // Human-only Git operation policy test
+  const gitPolicy = { permissions: ["git:*"] };
+  assert.throws(() => {
+    policy.authorize(gitPolicy, { capability: "git", resource: "git merge origin/main" });
+  }, PermissionDeniedError, "Agent git merge operation is denied by human-only Git policy");
+
   // Adversarial symlink escape test: symlink inside allowed pointing to outside
   const linkPath = path.join(allowedSubdir, "escape-link");
   try {

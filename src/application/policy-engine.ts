@@ -56,6 +56,12 @@ export class PolicyEngine {
     const matched = policy.permissions.some((perm) => {
       if (perm === reqCap) return true;
 
+      // Human-only Git policy rule: block agent invocations of git pull, merge, rebase, cherry-pick, am
+      const FORBIDDEN_GIT_OPS = ["git pull", "git merge", "git rebase", "git cherry-pick", "git am"];
+      if (reqRes && FORBIDDEN_GIT_OPS.some((op) => reqRes.includes(op))) {
+        return false;
+      }
+
       // Handle wildcard prefixes, e.g. "tool:shell:*" matching "tool:shell:test"
       if (perm.endsWith("*")) {
         const prefix = perm.slice(0, -1);

@@ -557,6 +557,18 @@ export class PostgresStateRepository implements StateRepository {
     );
   }
 
+  async releaseBudgetReservation(
+    reservationId: string,
+    reason = "RELEASED",
+  ): Promise<void> {
+    await this.db.query(
+      `UPDATE budget_reservations
+       SET status = 'RELEASED', actual_cost_usd = 0, actual_tokens = 0, reconciled_at = NOW()
+       WHERE id = $1 AND status = 'RESERVED'`,
+      [reservationId],
+    );
+  }
+
   async getOperationRecord(
     operationId: OperationId,
   ): Promise<OperationRecord | null> {

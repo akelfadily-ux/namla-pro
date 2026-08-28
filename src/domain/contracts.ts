@@ -108,6 +108,11 @@ export interface StateRepository {
     actualTokens: number,
   ): Promise<void>;
 
+  releaseBudgetReservation(
+    reservationId: string,
+    reason?: string,
+  ): Promise<void>;
+
   getOperationRecord(
     operationId: OperationId,
   ): Promise<OperationRecord | null>;
