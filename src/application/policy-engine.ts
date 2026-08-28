@@ -11,6 +11,39 @@ export interface AntPolicy {
   permissions: readonly string[];
 }
 
+export function canonicalizePath(targetPath: string): string {
+  const absolutePath = resolve(targetPath);
+  if (existsSync(absolutePath)) {
+    try {
+      return realpathSync(absolutePath);
+    } catch {
+      return absolutePath;
+    }
+  }
+
+  // Find closest existing ancestor directory for non-existent target files
+  let current = absolutePath;
+  const tail: string[] = [];
+
+  while (current && current !== resolve(current, "..")) {
+    const parent = resolve(current, "..");
+    const name = relative(parent, current);
+    tail.unshift(name);
+    current = parent;
+
+    if (existsSync(current)) {
+      try {
+        const realParent = realpathSync(current);
+        return resolve(realParent, ...tail);
+      } catch {
+        return absolutePath;
+      }
+    }
+  }
+
+  return absolutePath;
+}
+
 export class PolicyEngine {
   authorize(
     policy: AntPolicy,
@@ -37,14 +70,9 @@ export class PolicyEngine {
         if (pattern === "*" || pattern === "**") return true;
         if (pattern.endsWith("/**") || pattern.endsWith("/*")) {
           const basePath = pattern.endsWith("/**") ? pattern.slice(0, -3) : pattern.slice(0, -2);
-          let realBase = basePath;
-          let realReq = reqRes;
-          try {
-            if (existsSync(basePath)) realBase = realpathSync(basePath);
-            if (existsSync(reqRes)) realReq = realpathSync(reqRes);
-          } catch {
-            /* compare lexically if unresolvable */
-          }
+          const realBase = canonicalizePath(basePath);
+          const realReq = canonicalizePath(reqRes);
+
           const rel = relative(realBase, realReq);
           return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
         }
