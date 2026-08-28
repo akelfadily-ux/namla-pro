@@ -1,20 +1,20 @@
-# FINAL-02 P0-4 ARCHITECTURE DOCUMENTATION
+# FINAL-02 P0-5 ARCHITECTURE DOCUMENTATION
 
 ## Overview
 FINAL-02 Production Integration & Execution Runtime provides zero-trust, fail-closed component merging and verification across 13 single-responsibility modules under `src/twin/final02/`.
 
 ## Modules Summary
-1. `contracts.ts`: Immutable data structures and receipts.
+1. `contracts.ts`: Immutable data structures, receipts, and ApprovedFileOperation unions.
 2. `frozenArtifactResolver.ts`: FNV1a + SHA-256 verification against frozen FINAL-01 bundles.
-3. `baselineMaterializer.ts`: Read-only Git blob materialization (`50cd4ef8`).
+3. `baselineMaterializer.ts`: Read-only Git blob materialization (`50cd4ef8`) restoring 0o755 modes.
 4. `treeDigest.ts`: Recursive full-tree SHA-256 disk digest.
 5. `executionPlanBuilder.ts`: Authoritative operation intent (ADD, MODIFY, DELETE, RENAME).
 6. `conflictEngine.ts`: Hardened 12-class content-aware classifier & deterministic resolvers.
-7. `workspaceManager.ts`: Physical disposable workspace lifecycle and disk rollback.
+7. `workspaceManager.ts`: Disposable workspace lifecycle and disk rollback (`createFresh()`).
 8. `materializer.ts`: Precondition-checked file operation writer.
-9. `sandboxReceiptVerifier.ts`: Cryptographic Ed25519 verifier via `TrustedSandboxKeyRegistry` without private signing keys.
+9. `sandboxReceiptVerifier.ts`: Cryptographic Ed25519 verifier via `TrustedSandboxKeyRegistry` without private keys in production code.
 10. `verificationRunner.ts`: Mandatory 5-stage zero-trust verification binder.
-11. `regressionRunner.ts`: Real subprocess runner producing `CommandExecutionReceipt`s without bypasses.
+11. `regressionRunner.ts`: Real subprocess runner with sanitized environment stripping secrets.
 12. `repairEngine.ts`: Pluggable `RepairStrategy` contract; fails closed with `REPAIR_UNAVAILABLE`.
 13. `final02Coordinator.ts`: Pure orchestrator enforcing strict READY invariant.
 

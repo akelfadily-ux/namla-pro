@@ -3,15 +3,15 @@
  *
  * Materializes the trusted Git commit (50cd4ef8198f4eafb896e17d999050ba60b34a19) into
  * an isolated disposable workspace directory using read-only object inspection (`git ls-tree -r -z` / `git cat-file blob`).
- * Materializes ALL normal blobs (binary + text) as exact Buffers.
+ * Restores exact Git file executable modes (100755 -> 0o755).
+ * Verifies explicit repository root via git rev-parse --show-toplevel.
  * NO synthetic fallback (fails closed if unreadable).
- * NO git pull, NO git merge, NO working-tree mutations.
  */
 
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { writeFileSync, mkdirSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { writeFileSync, mkdirSync, chmodSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { ensureTwinColonyWorkspace } from "../../cognitive/smokeWorkspace";
 import type { BaselineMaterializationReceipt } from "./contracts";
 
@@ -32,18 +32,15 @@ interface GitTreeEntry {
   readonly path: string;
 }
 
-/**
- * Parses git ls-tree -z output into structured entries.
- */
 function parseGitLsTreeZ(outputBuffer: Buffer): GitTreeEntry[] {
   const entries: GitTreeEntry[] = [];
   let offset = 0;
 
   while (offset < outputBuffer.length) {
-    const tabIndex = outputBuffer.indexOf(0x09, offset); // tab separator
+    const tabIndex = outputBuffer.indexOf(0x09, offset);
     if (tabIndex === -1) break;
 
-    const meta = outputBuffer.toString("utf8", offset, tabIndex); // "mode type sha"
+    const meta = outputBuffer.toString("utf8", offset, tabIndex);
     const parts = meta.split(" ");
     if (parts.length < 3) break;
 
@@ -51,7 +48,7 @@ function parseGitLsTreeZ(outputBuffer: Buffer): GitTreeEntry[] {
     const type = parts[1];
     const sha = parts[2];
 
-    const nulIndex = outputBuffer.indexOf(0x00, tabIndex + 1); // null byte terminator
+    const nulIndex = outputBuffer.indexOf(0x00, tabIndex + 1);
     if (nulIndex === -1) break;
 
     const path = outputBuffer.toString("utf8", tabIndex + 1, nulIndex);
@@ -68,18 +65,37 @@ function parseGitLsTreeZ(outputBuffer: Buffer): GitTreeEntry[] {
  */
 export function materializeBaseline(
   missionId: string,
-  baselineCommit: string = TRUSTED_BASELINE_COMMIT
+  baselineCommit: string = TRUSTED_BASELINE_COMMIT,
+  expectedRepoRoot: string = process.cwd(),
+  targetWorkspaceId?: string
 ): BaselineMaterializeResult {
   const startTime = Date.now();
-  const workspaceId = `workspaces/namola-twin/${missionId}/merge-forge`;
 
+  // P0-7: Explicit Repository Root Verification
+  try {
+    const actualRepoRoot = execFileSync("git", ["rev-parse", "--show-toplevel"], {
+      encoding: "utf8",
+      cwd: expectedRepoRoot,
+    }).trim();
+
+    if (resolve(actualRepoRoot) !== resolve(expectedRepoRoot)) {
+      return { ok: false, reasonCode: `repository-root-mismatch: expected '${expectedRepoRoot}', got '${actualRepoRoot}'` };
+    }
+  } catch {
+    return { ok: false, reasonCode: "explicit-repo-root-unreadable" };
+  }
+
+  const workspaceId = targetWorkspaceId ?? `workspaces/namola-twin/${missionId}/merge-forge`;
   const ensured = ensureTwinColonyWorkspace(workspaceId);
   if (!ensured.ok || !ensured.handle) {
     return { ok: false, reasonCode: `workspace-creation-failed:${ensured.ok ? "no-handle" : ensured.reasonCode}` };
   }
 
   const handle = ensured.handle;
-  let fileCount = 0;
+  let gitTreeEntryCount = 0;
+  let materializedEntryCount = 0;
+  let modeVerifiedCount = 0;
+
   const digestBuilder = createHash("sha256");
 
   let rawLsTreeBuffer: Buffer;
@@ -87,9 +103,9 @@ export function materializeBaseline(
     rawLsTreeBuffer = execFileSync("git", ["ls-tree", "-r", "-z", baselineCommit], {
       maxBuffer: 50 * 1024 * 1024,
       timeout: 10000,
+      cwd: expectedRepoRoot,
     });
   } catch {
-    // FAIL CLOSED: No synthetic fallback!
     return { ok: false, reasonCode: "git-baseline-unreadable" };
   }
 
@@ -98,14 +114,13 @@ export function materializeBaseline(
     return { ok: false, reasonCode: "git-baseline-tree-empty" };
   }
 
-  // Materialize every blob
+  gitTreeEntryCount = entries.length;
+
   for (const entry of entries) {
-    // Check path traversal
     if (entry.path.includes("..") || entry.path.startsWith("/") || entry.path.split("/").includes(".git")) {
       return { ok: false, reasonCode: `path-traversal-in-baseline:${entry.path}` };
     }
 
-    // Fail closed on symlinks (120000) or submodules (160000)
     if (entry.mode === "120000") {
       return { ok: false, reasonCode: `unsupported-symlink-in-baseline:${entry.path}` };
     }
@@ -120,24 +135,36 @@ export function materializeBaseline(
       blobBuffer = execFileSync("git", ["cat-file", "blob", entry.sha], {
         maxBuffer: 50 * 1024 * 1024,
         timeout: 10000,
+        cwd: expectedRepoRoot,
       });
     } catch {
       return { ok: false, reasonCode: `baseline-blob-read-failed:${entry.path}` };
     }
 
-    // Write exact bytes to target workspace
     const absoluteTarget = join(handle.absolutePath, entry.path);
     const targetDir = dirname(absoluteTarget);
 
     try {
-      if (!handle.absolutePath) return { ok: false, reasonCode: "invalid-handle" };
       mkdirSync(targetDir, { recursive: true });
       writeFileSync(absoluteTarget, blobBuffer);
-      fileCount += 1;
+
+      // P0-6: Restore exact Git executable permission mode
+      if (entry.mode === "100755") {
+        chmodSync(absoluteTarget, 0o755);
+      } else {
+        chmodSync(absoluteTarget, 0o644);
+      }
+
+      materializedEntryCount += 1;
+      modeVerifiedCount += 1;
       digestBuilder.update(`${entry.path}:${entry.mode}:${computeSha256(blobBuffer)}\n`);
     } catch {
       return { ok: false, reasonCode: `baseline-file-write-failed:${entry.path}` };
     }
+  }
+
+  if (gitTreeEntryCount !== materializedEntryCount || modeVerifiedCount !== materializedEntryCount) {
+    return { ok: false, reasonCode: "baseline-materialization-count-mismatch" };
   }
 
   const baselineDigest = digestBuilder.digest("hex");
@@ -147,7 +174,9 @@ export function materializeBaseline(
     baselineCommit,
     workspaceId,
     absolutePath: handle.absolutePath,
-    materializedFileCount: fileCount,
+    gitTreeEntryCount,
+    materializedEntryCount,
+    modeVerifiedCount,
     baselineDigest,
     durationMs,
     created: true,

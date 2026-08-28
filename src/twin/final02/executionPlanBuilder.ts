@@ -38,8 +38,8 @@ export function buildExecutionPlan(
     return {
       operationId: `op-${fnv1a(`${p.sourceColony}|${p.relativePath}|${kind}`)}`,
       kind,
-      relativePath: p.relativePath,
-      targetPath: `${workspacePath}/${p.relativePath}`,
+      sourceRelativePath: p.relativePath,
+      targetRelativePath: p.relativePath,
       sourceColonies: [p.sourceColony],
       sourceArtifactId: p.sourceArtifactId,
       sourceFingerprint: p.fnvFingerprint,
@@ -48,7 +48,7 @@ export function buildExecutionPlan(
   });
 
   const expectedOperations = plannedOps.map(
-    (op) => `${op.kind} ${op.relativePath} (from ${op.sourceColonies.join(",")}:${op.sourceArtifactId}) [sha256:${op.sha256Digest.slice(0, 8)}]`
+    (op) => `${op.kind} ${op.targetRelativePath} (from ${op.sourceColonies.join(",")}:${op.sourceArtifactId}) [sha256:${op.sha256Digest.slice(0, 8)}]`
   );
 
   return Object.freeze({

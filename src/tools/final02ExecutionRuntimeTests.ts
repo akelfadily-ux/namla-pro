@@ -187,7 +187,7 @@ function createTestBundle(opts: {
       failureCategory: finalStatus === "VERIFIED" ? null : "verification-failed",
       safeReasonCode: finalStatus === "VERIFIED" ? "verification-passed" : "verification-failed",
       outputLineCount: 5,
-      realProcessExecutions: 0,
+      realProcessExecutions: 1,
       sandboxBackendId: "fake-test-backend",
       sandboxVerified: false,
       order: 0,

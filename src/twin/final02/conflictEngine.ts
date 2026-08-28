@@ -175,10 +175,9 @@ export function classifyConflictFromInputs(
   const opKinds = inputs.map((i) => i.operationKind ?? "ADD");
   const hasDelete = opKinds.includes("DELETE");
   const hasModify = opKinds.includes("MODIFY");
-  const hasAdd = opKinds.includes("ADD");
 
   // 2. FILE_DELETE_MODIFY
-  if (hasDelete && (hasModify || hasAdd)) {
+  if (hasDelete && (hasModify || opKinds.includes("ADD"))) {
     return {
       conflictId,
       relativePath: relPath,
@@ -319,6 +318,23 @@ export function classifyConflictFromInputs(
       };
     }
 
+    const hasSemanticDiff = contents.some((c) => c.includes("class ") || c.includes("function ")) &&
+      contents.some((c) => c.includes("return ") || c.includes("throw "));
+    if (hasSemanticDiff && hasModify) {
+      // 11. SEMANTIC_CONFLICT
+      return {
+        conflictId,
+        relativePath: relPath,
+        conflictClass: "SEMANTIC_CONFLICT",
+        sourceColonies,
+        autoResolvable: false,
+        resolved: false,
+        resolutionStrategy: null,
+        resultFingerprint: null,
+        detail: "incompatible class or business logic modifications require semantic reconciliation",
+      };
+    }
+
     if (hasModify) {
       // 3. TEXTUAL_CONFLICT
       return {
@@ -335,7 +351,7 @@ export function classifyConflictFromInputs(
     }
   }
 
-  // P0-9: Fail closed with UNKNOWN_CONFLICT for unclassified semantics
+  // 12. UNKNOWN_CONFLICT (Fail closed)
   return {
     conflictId,
     relativePath: relPath,

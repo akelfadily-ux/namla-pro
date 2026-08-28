@@ -17,15 +17,51 @@ export type SecurityGateStatus = "SECURITY_VERIFIED" | "SECURITY_BLOCKED" | "SEC
 
 export type FileOperationKind = "ADD" | "MODIFY" | "DELETE" | "RENAME";
 
+export type ApprovedFileOperation =
+  | {
+      readonly kind: "ADD";
+      readonly targetRelativePath: string;
+      readonly sourceArtifactSha256: string;
+    }
+  | {
+      readonly kind: "MODIFY";
+      readonly targetRelativePath: string;
+      readonly expectedBaselineSha256: string;
+      readonly sourceArtifactSha256: string;
+    }
+  | {
+      readonly kind: "DELETE";
+      readonly targetRelativePath: string;
+      readonly expectedBaselineSha256: string;
+    }
+  | {
+      readonly kind: "RENAME";
+      readonly sourceRelativePath: string;
+      readonly targetRelativePath: string;
+      readonly expectedBaselineSha256: string;
+    };
+
 export interface PlannedFileOperation {
   readonly operationId: string;
   readonly kind: FileOperationKind;
-  readonly relativePath: string;
-  readonly targetPath: string;
+  readonly sourceRelativePath?: string;
+  readonly targetRelativePath: string;
+  readonly expectedBaselineSha256?: string;
   readonly sourceColonies: readonly ColonyId[];
   readonly sourceArtifactId: string;
   readonly sourceFingerprint: string;
   readonly sha256Digest: string;
+}
+
+export interface OperationExecutionReceipt {
+  readonly operationId: string;
+  readonly kind: FileOperationKind;
+  readonly sourceRelativePath?: string;
+  readonly targetRelativePath: string;
+  readonly preconditionVerified: boolean;
+  readonly executed: boolean;
+  readonly beforeSha256: string | null;
+  readonly afterSha256: string | null;
 }
 
 export type MergeConflictClass =
@@ -70,7 +106,9 @@ export interface BaselineMaterializationReceipt {
   readonly baselineCommit: string;
   readonly workspaceId: string;
   readonly absolutePath: string;
-  readonly materializedFileCount: number;
+  readonly gitTreeEntryCount: number;
+  readonly materializedEntryCount: number;
+  readonly modeVerifiedCount: number;
   readonly baselineDigest: string;
   readonly durationMs: number;
   readonly created: boolean;
@@ -84,6 +122,7 @@ export interface MergeMaterializationReceipt {
   readonly writtenCount: number;
   readonly plannedOperationsCount: number;
   readonly operationsExecutedCount: number;
+  readonly operationReceipts: readonly OperationExecutionReceipt[];
   readonly success: boolean;
 }
 

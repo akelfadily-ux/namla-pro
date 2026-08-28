@@ -37,7 +37,7 @@ import type {
   RegressionReceipt,
 } from "./contracts";
 import { resolveFrozenArtifact } from "./frozenArtifactResolver";
-import { materializeBaseline } from "./baselineMaterializer";
+import { materializeBaseline, TRUSTED_BASELINE_COMMIT } from "./baselineMaterializer";
 import { processConflicts } from "./conflictEngine";
 import { buildExecutionPlan } from "./executionPlanBuilder";
 import { DisposableWorkspaceManager } from "./workspaceManager";
@@ -408,8 +408,10 @@ export function executeFinal02Pipeline(input: Final02ExecuteInput): Final02Resul
     });
   }
 
-  // 6. Materialize Baseline Commit
-  const baseRes = materializeBaseline(missionId);
+  // 6. Create Workspace & Materialize Baseline
+  const workspaceManager = DisposableWorkspaceManager.createFresh(missionId, "exec-101");
+  const baseRes = materializeBaseline(missionId, TRUSTED_BASELINE_COMMIT, process.cwd(), workspaceManager.workspaceId);
+
   if (!baseRes.ok) {
     addCheckpoint("FINAL02_WORKSPACE_CREATED", false, `baseline materialization failed: ${baseRes.reasonCode}`);
     const secStatus: SecurityGateStatus = "SECURITY_BLOCKED";
@@ -444,7 +446,7 @@ export function executeFinal02Pipeline(input: Final02ExecuteInput): Final02Resul
       missionId,
       courtDecision: decision,
       executionPlan: null,
-      mergeWorkspacePath: null,
+      mergeWorkspacePath: workspaceManager.workspaceId,
       baselineReceipt: null,
       materializationReceipt: null,
       treeDigestReceipt: null,
@@ -463,59 +465,6 @@ export function executeFinal02Pipeline(input: Final02ExecuteInput): Final02Resul
   }
 
   const baselineReceipt = baseRes.receipt;
-  const workspaceManager = new DisposableWorkspaceManager(baselineReceipt.workspaceId);
-  const matInit = workspaceManager.initialize();
-  if ("ok" in matInit && !matInit.ok) {
-    addCheckpoint("FINAL02_WORKSPACE_CREATED", false, `workspace creation failed: ${matInit.reasonCode}`);
-    const secStatus: SecurityGateStatus = "SECURITY_BLOCKED";
-    const metrics: Final02ObservabilityMetrics = Object.freeze({
-      missionId,
-      courtDecision: decision,
-      approvedComponentCount: approvedComponents.length,
-      resolvedComponentCount: provenanceReceipts.length,
-      fingerprintVerifiedCount: provenanceReceipts.filter((p) => p.verified).length,
-      writtenComponentCount: 0,
-      rejectedComponentCount: courtReceipt.rejectedComponents.length,
-      conflictsDetectedCount: conflictProcessing.conflictRecords.length,
-      conflictsAutoResolvedCount: conflictProcessing.conflictRecords.filter((c) => c.resolved).length,
-      mergeVerificationRuns: 0,
-      mergeIncidentsCount: 0,
-      repairExecuted: false,
-      securityGateStatus: secStatus,
-      regressionGatePassed: false,
-      deliveryReady: false,
-      mergePlanned: true,
-      workspaceMaterialized: false,
-      componentsMaterialized: 0,
-      realMergeExecuted: false,
-      verificationExecuted: false,
-      securityVerified: false,
-      regressionVerified: false,
-      checkpointCreated: true,
-      delivered: false,
-    });
-    return Object.freeze({
-      status: "BLOCKED",
-      missionId,
-      courtDecision: decision,
-      executionPlan: null,
-      mergeWorkspacePath: workspaceManager.workspaceId,
-      baselineReceipt,
-      materializationReceipt: null,
-      treeDigestReceipt: null,
-      rollbackReceipt: null,
-      repairReceipt: null,
-      regressionReceipt: null,
-      mergeVerificationPassed: false,
-      mergeStageOutcomes: [],
-      securityGate: { status: secStatus, sandboxVerified: false, networkIsolated: false, credentialProtected: false, pathTraversalProtected: false },
-      regressionGate: { passed: false, twinPostColonyPipelineValid: true, witnessIntegrityIntact: successPipeline.witnessReport.integrityIntact, evidenceVersion: 2 as const },
-      checkpoints: Object.freeze(checkpoints),
-      metrics,
-      deliveryResult: null,
-      reasonCode: `workspace-creation-failed:${matInit.reasonCode}`,
-    });
-  }
 
   const plan = buildExecutionPlan(
     decision,
@@ -726,7 +675,7 @@ export function executeFinal02Pipeline(input: Final02ExecuteInput): Final02Resul
   });
 
   // STRICT FINAL PRODUCTION ACCEPTANCE INVARIANT (P0-17)
-  const baselineValid = baselineReceipt.created && baselineReceipt.materializedFileCount > 0;
+  const baselineValid = baselineReceipt.created && baselineReceipt.materializedEntryCount > 0;
   const completeBaselineMaterialized = baselineValid && baselineReceipt.baselineDigest.length > 0;
   const allOperationsApplied = matResult.success && matResult.receipt.writtenCount === approvedComponents.length;
   const diskTreeDigestComputed = treeDigestReceipt.canonicalTreeDigest.length > 0;

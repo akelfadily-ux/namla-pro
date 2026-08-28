@@ -271,7 +271,7 @@ export class ZeroTrustMergeForge {
     return this.materializationReceipt;
   }
 
-  /** Backward-compatible component admission helper for existing demos without explicit frozen bundle. */
+  /** Component admission helper. */
   receiveComponents(components: readonly ApprovedMergeComponent[]): { readonly accepted: number; readonly rejected: number } {
     let accepted = 0;
     if (!this.diskHandle) {

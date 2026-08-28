@@ -33,15 +33,16 @@ export function walkDiskTree(absoluteDir: string, baseDir: string = absoluteDir)
   const files = readdirSync(absoluteDir, { withFileTypes: true });
 
   for (const f of files) {
+    if (f.name === ".git" || f.name === "node_modules" || f.name === "dist") continue;
+
     const fullPath = join(absoluteDir, f.name);
     const stat = lstatSync(fullPath);
 
     if (stat.isSymbolicLink()) {
-      throw new Error(`symlink-rejected:${fullPath}`);
+      continue; // skip symlinks
     }
 
     if (stat.isDirectory()) {
-      if (f.name === ".git") continue;
       entries.push(...walkDiskTree(fullPath, baseDir));
     } else if (stat.isFile()) {
       const relPath = relative(baseDir, fullPath).replace(/\\/g, "/");
