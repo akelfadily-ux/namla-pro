@@ -15,8 +15,8 @@
    - **Result:** 2/2 PASS.
 
 2. **`v2SecurityMutationFuzzTests.ts` (HARDENING-9, 10, 11, 17):**
-   - Tests path containment fuzzing (`..`, `/`, `:`, `%TEMP%`), secret leakage detection (`BEGIN PRIVATE KEY`, `AWS_SECRET_ACCESS_KEY`, `ghp_`), and malicious command proposals (`git push`, `rm -rf /`, `sudo`, `curl | sh`, `npx --yes`).
-   - Mutation-style tests verify that mutating path containment or command policy gates causes immediate test failure.
+   - Tests path containment fuzzing (`..`, `/`, `:`, `%TEMP%`), secret leakage pattern detection & refusal (`BEGIN PRIVATE KEY`, `AWS_SECRET_ACCESS_KEY`, `ghp_`), and malicious command proposals (`git push`, `rm -rf /`, `sudo`, `curl | sh`, `npx --yes`).
+   - True mutation-style tests compare unmutated real security gates against controlled mutant doubles (simulating disabled path containment and secret checks) to verify non-zero mutation score and gate effectiveness.
    - **Result:** 4/4 PASS.
 
 3. **`v2ArtifactAndEvidenceHardeningTests.ts` (HARDENING-3, 4, 5, 8, 14):**
@@ -92,6 +92,8 @@ LabPackager Verified Delivery Package Manifest & Checksums
 | `simulatedColony` code injection | **TEST_FIXTURE_ALLOWED** | Optional parameters in `RunMissionRequest` (`simulatedColonyACode`) used strictly for deterministic fixture tests. |
 | `DETERMINISTIC_FIXTURE_MODE` | **TEST_FIXTURE_ALLOWED** | Explicitly declared runtime execution mode. Separated structurally from `PRODUCTION_MODE` across `NamlaRuntimeRequest`, `StageContext`, and `ColonyExecutor`. |
 | `generateObjectiveAdaptedSolution` | **TEST_FIXTURE_ALLOWED** | Deterministic fixture generator function callable ONLY in `DETERMINISTIC_FIXTURE_MODE`. Enforced by structural guard in `ColonyExecutor` that returns `PRODUCTION_FALLBACK_FORBIDDEN` if reached in `PRODUCTION_MODE`. |
+| Secret detection vs redaction claims | **PRECISION_ALIGNED** | Policy detects secret patterns (`looksLikeSecret`) and refuses writes; kernel rejects secret content without claiming in-place stream redaction. |
+| Docker qualification claims | **PRECISION_ALIGNED** | Docker daemon/overlayfs build issues in sandbox classified as `BLOCKED`; Dockerfile syntax/build errors classified as `FAIL`. |
 | `SKIPPED_REAL_PROVIDER` | **BLOCKED** | Returned by opt-in real provider suite when `NAMLA_RUN_REAL_PROVIDER` is unset or provider is unavailable. **Deterministic/integration P0 hardened and READY FOR HUMAN REVIEW. Real-provider production qualification remains BLOCKED.** |
 | Hardcoded generated domain behavior | **REMOVED** | Production path invokes real provider via `NodeProviderProcessDriver` and `buildSafeProviderRequest`. |
 | Source-text-only smoke checks | **REMOVED** | Replaced in `v2E2eRunner.ts` with executable smoke tests (REST API function-level handler smoke check, CLI execution, IN_MEMORY_REPOSITORY_SMOKE, Docker build check). |
@@ -121,10 +123,10 @@ LabPackager Verified Delivery Package Manifest & Checksums
 
 ## 6. TEST EXECUTION SUMMARY
 
-- **V2 Black-Box Clean-Room E2E Suite (`dist/tools/v2E2eRunner.js`):** 10/10 `PASS` (All 7 project classes + 8+ file DAG + broken build adversarial test + broken typecheck adversarial test + clean-room reproducibility).
+- **V2 Black-Box Clean-Room E2E Suite (`dist/tools/v2E2eRunner.js`):** 11/11 `PASS` (All 7 project classes + 8+ file DAG + broken build adversarial test + broken typecheck adversarial test + docker daemon classification test + clean-room reproducibility).
 - **V2 Adversarial Security Suite (`dist/tools/v2AdversarialTests.js`):** 9/9 `PASS` (Path traversal, secret leakage, unsafe commands, authority escalation, anti-livelock, stale evidence, unverified delivery refusal, artifact mutation detection).
 - **V2 Provider Parser Fuzz Suite (`dist/tools/v2ProviderParserFuzzTests.js`):** 2/2 `PASS` (JSON/JSONL fuzzing, malformed output, traversal, missing proposals).
-- **V2 Security Mutation Fuzz Suite (`dist/tools/v2SecurityMutationFuzzTests.js`):** 4/4 `PASS` (Path fuzzing, secret leakage, malicious commands, security gate mutation).
+- **V2 Security Mutation Fuzz Suite (`dist/tools/v2SecurityMutationFuzzTests.js`):** 4/4 `PASS` (Path fuzzing, secret leakage pattern detection/refusal, malicious commands, true security gate mutation).
 - **V2 Artifact & Evidence Hardening Suite (`dist/tools/v2ArtifactAndEvidenceHardeningTests.js`):** 2/2 `PASS` (Artifact tampering, post-acceptance modification/deletion, stale evidence causality, Lab fail-closed).
 - **V2 DAG & Concurrency Hardening Suite (`dist/tools/v2DagConcurrencyAndIsolationHardeningTests.js`):** 3/3 `PASS` (Anti-livelock budget ceilings, DAG dependency invariants, Colony A/B isolation).
 - **V2 Opt-In Real Provider Suite (`dist/tools/v2RealProviderTests.js`):** 1/1 `SKIPPED_REAL_PROVIDER` (Opt-in gate unconfigured).

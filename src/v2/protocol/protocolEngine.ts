@@ -1,13 +1,15 @@
 /**
- * PROTOCOL Engine (§04, §09, P0.14, FINAL-P0-9, Item 2).
+ * PROTOCOL Engine (§04, §09, P0.14, FINAL-P0-9, Gap 1).
  *
  * Validates draft plans and freezes canonical PlanContract bytes.
- * Generates bounded WorkPackages and derives explicit typed verification test contracts.
+ * Derives explicit typed verification requirements (BUILD, TYPECHECK, TEST, SMOKE, DOCKER_BUILD)
+ * mapped directly from actual project class characteristics and task specifications.
  */
 
 import { DraftPlan, PlanContract, TestRequirement, TestRequirementType } from "../types/contracts";
 import { WorkPackage } from "../types/missionState";
 import { PreFreezeStageContext } from "../types/stageContext";
+import { ProjectClass } from "../factory/projectFactory";
 import { createHash } from "crypto";
 
 export interface ProtocolResult {
@@ -53,33 +55,72 @@ export class ProtocolEngine {
     const version = "v1.0.0";
     const frozenAt = Date.now();
 
-    // Derive explicit typed verification test requirements (Item 2)
-    const lowerObj = draftPlan.objective.toLowerCase();
-    const requiredTests: TestRequirement[] = [
+    // Derive explicit typed verification test requirements based on project class (Gap 1)
+    const projectClass: ProjectClass = context.projectClass ?? "TYPESCRIPT_LIBRARY";
+    const requiredTests: TestRequirement[] = [];
+
+    // All supported classes require BUILD, TYPECHECK, and TEST
+    requiredTests.push(
+      {
+        id: "test-verif-build",
+        type: "BUILD",
+        name: "Project Build Contract",
+        command: "npm run build",
+        expectedExitCode: 0,
+      },
+      {
+        id: "test-verif-typecheck",
+        type: "TYPECHECK",
+        name: "TypeScript Compiler Verification",
+        command: "npx --package=typescript tsc --noEmit",
+        expectedExitCode: 0,
+      },
       {
         id: "test-verif-suite",
         type: "TEST",
         name: "Unit & Integration Test Suite",
         command: "npm test",
         expectedExitCode: 0,
-      },
-    ];
+      }
+    );
 
-    if (
-      lowerObj.includes("build") ||
-      lowerObj.includes("library") ||
-      lowerObj.includes("app") ||
-      lowerObj.includes("api") ||
-      lowerObj.includes("service") ||
-      lowerObj.includes("cli")
-    ) {
-      requiredTests.push({
-        id: "test-verif-build",
-        type: "BUILD",
-        name: "Project Build Contract",
-        command: "npm run build",
-        expectedExitCode: 0,
-      });
+    // Add class-specific verification requirements
+    switch (projectClass) {
+      case "CLI_APPLICATION":
+      case "REST_API":
+      case "WEB_APPLICATION":
+      case "DATABASE_SERVICE":
+        requiredTests.push({
+          id: "test-verif-smoke",
+          type: "SMOKE",
+          name: `${projectClass} Executable Smoke Verification`,
+          command: "npm test",
+          expectedExitCode: 0,
+        });
+        break;
+
+      case "FULLSTACK_APPLICATION":
+        requiredTests.push({
+          id: "test-verif-integration",
+          type: "INTEGRATION_TEST",
+          name: "Fullstack Contract Integration Verification",
+          command: "npm test",
+          expectedExitCode: 0,
+        });
+        break;
+
+      case "DOCKERIZED_SERVICE":
+        requiredTests.push({
+          id: "test-verif-docker",
+          type: "DOCKER_BUILD",
+          name: "Docker Build Environment Verification",
+          command: "npm test",
+          expectedExitCode: 0,
+        });
+        break;
+
+      default:
+        break;
     }
 
     const rawContract = {

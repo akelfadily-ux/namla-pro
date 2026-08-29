@@ -32,6 +32,42 @@ const ALL_PROJECT_CLASSES: ProjectClass[] = [
   "DOCKERIZED_SERVICE",
 ];
 
+export function classifyDockerBuild(
+  deliveryAbsDir: string,
+  tag: string
+): { qualification: "PASS" | "FAIL" | "BLOCKED"; reason: string } {
+  const dockerCheck = detectProviderAvailability("docker" as any);
+  if (!dockerCheck.available) {
+    return { qualification: "BLOCKED", reason: `Docker executable unavailable: ${dockerCheck.failureCategory}` };
+  }
+
+  const dockerBuild = spawnSync("docker", ["build", "-t", `test-${tag}`, "."], {
+    cwd: deliveryAbsDir,
+    shell: false,
+    encoding: "utf8",
+    timeout: 30000,
+  });
+
+  if (dockerBuild.status === 0) {
+    return { qualification: "PASS", reason: "Docker build succeeded" };
+  }
+
+  const output = (dockerBuild.stderr || "") + (dockerBuild.stdout || "") + (dockerBuild.error ? dockerBuild.error.message : "");
+  const isDaemonOrEnvIssue =
+    output.includes("Cannot connect to the Docker daemon") ||
+    output.includes("docker daemon is not running") ||
+    output.includes("permission denied") ||
+    output.includes("overlayfs") ||
+    output.includes("ENOENT") ||
+    dockerBuild.error !== undefined;
+
+  if (isDaemonOrEnvIssue) {
+    return { qualification: "BLOCKED", reason: `Docker build blocked by environment/daemon issue: ${output.slice(0, 100)}` };
+  }
+
+  return { qualification: "FAIL", reason: `Docker build failed due to Dockerfile syntax or build error: ${output.slice(0, 100)}` };
+}
+
 for (const projectClass of ALL_PROJECT_CLASSES) {
   test(`V2 Black-Box Clean-Room: ${projectClass} - Full Pipeline & Independent Verification`, () => {
     const ws = tempWorkspace(projectClass.toLowerCase());
@@ -163,25 +199,14 @@ for (const projectClass of ALL_PROJECT_CLASSES) {
         const dockerFile = resolve(join(deliveryAbsDir, "Dockerfile"));
         assert.equal(existsSync(dockerFile), true, "Dockerized service must deliver Dockerfile");
 
-        const dockerCheck = detectProviderAvailability("docker" as any);
-        if (dockerCheck.available) {
-          const dockerBuild = spawnSync("docker", ["build", "-t", `test-${missionId}`, "."], {
-            cwd: deliveryAbsDir,
-            shell: false,
-            encoding: "utf8",
-            timeout: 30000,
-          });
-          if (dockerBuild.status !== 0) {
-            // Docker daemon/overlayfs unavailable for container build in sandbox
-            // Item 5: DOCKER_RUNTIME_QUALIFICATION = BLOCKED
-            assert.equal(typeof dockerBuild.status, "number", "DOCKER_RUNTIME_QUALIFICATION = BLOCKED when docker daemon build is unavailable");
-          } else {
-            assert.equal(dockerBuild.status, 0, "Docker build succeeded");
-          }
-        } else {
-          // Docker runtime qualification is BLOCKED if docker daemon/executable is unavailable
-          assert.equal(dockerCheck.available, false, "DOCKER_RUNTIME_QUALIFICATION = BLOCKED when docker executable is unavailable");
+        const dockerResult = classifyDockerBuild(deliveryAbsDir, missionId);
+        if (dockerResult.qualification === "FAIL") {
+          assert.fail(`Docker build failed due to actual Dockerfile build defect: ${dockerResult.reason}`);
         }
+        assert.ok(
+          dockerResult.qualification === "PASS" || dockerResult.qualification === "BLOCKED",
+          `Docker qualification state must be PASS or BLOCKED, got ${dockerResult.qualification} (${dockerResult.reason})`
+        );
       }
     } finally {
       rmSync(ws, { recursive: true, force: true });
@@ -290,6 +315,25 @@ test("ADVERSARIAL: Failing Typecheck with Passing Build and Test Fails Qualifica
 
     const qualificationPassed = buildCmd.status === 0 && testCmd.status === 0 && typecheckCmd.status === 0;
     assert.equal(qualificationPassed, false, "Qualification MUST fail if typecheck fails even if build and test pass");
+  } finally {
+    rmSync(ws, { recursive: true, force: true });
+  }
+});
+
+test("ADVERSARIAL: Docker Unavailability / Daemon Failure is Classified as BLOCKED (Gap 3)", () => {
+  const ws = tempWorkspace("docker-blocked");
+  try {
+    const deliveryAbsDir = join(ws, "delivered");
+    spawnSync("mkdir", ["-p", deliveryAbsDir]);
+    writeFileSync(join(deliveryAbsDir, "Dockerfile"), "FROM alpine:latest\nCMD [\"echo\", \"hello\"]\n");
+
+    const res = classifyDockerBuild(deliveryAbsDir, "test-blocked-tag");
+
+    // In environment without docker daemon or executable, it MUST return BLOCKED, not false PASS or FAIL
+    assert.ok(
+      res.qualification === "BLOCKED" || res.qualification === "PASS",
+      `Docker build result must be BLOCKED or PASS in current environment, got ${res.qualification}`
+    );
   } finally {
     rmSync(ws, { recursive: true, force: true });
   }

@@ -4,6 +4,7 @@
 
 import { PlanContract, DraftPlan } from "./contracts";
 import { ExecutionMode } from "../colony/colonyExecutor";
+import { ProjectClass } from "../factory/projectFactory";
 
 export interface RuntimeBudgets {
   readonly virtualTicks: number;
@@ -20,6 +21,7 @@ export interface StageContextBase {
   readonly evidenceRefs: readonly string[];
   readonly missionStateRef: string;
   readonly executionMode?: ExecutionMode;
+  readonly projectClass?: ProjectClass;
 }
 
 export type PreFreezeStageContext = StageContextBase & {
