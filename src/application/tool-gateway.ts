@@ -49,7 +49,7 @@ export class ToolGateway {
       : [{ capability: `tool:${toolName}` }];
 
     for (const req of reqs) {
-      this.policy.authorize({ permissions: context.permissions }, req);
+      this.policy.authorize({ permissions: context.permissions }, req, (req as any).gitOperation);
     }
 
     if (!context.authority || !context.authority.workerId || !context.authority.leaseToken) {

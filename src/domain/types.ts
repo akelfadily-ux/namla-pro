@@ -72,6 +72,7 @@ export interface BudgetLimits {
   maxRuntimeMs?: number;
   maxIterations?: number;
   maxAgents?: number;
+  maxConcurrency?: number;
   maxDepth?: number;
 }
 

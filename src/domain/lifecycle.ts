@@ -26,6 +26,8 @@ export function assertRunTransition(from: RunStatus, to: RunStatus): void {
 const transitions: Record<TaskStatus, readonly TaskStatus[]> = {
   [TaskStatus.Created]: [
     TaskStatus.Assigned,
+    TaskStatus.Blocked,
+    TaskStatus.Failed,
     TaskStatus.Cancelled,
   ],
 

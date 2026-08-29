@@ -23,8 +23,9 @@ export class Scheduler {
       (t) => t.status === TaskStatus.Assigned || t.status === TaskStatus.Running || t.status === TaskStatus.Testing || t.status === TaskStatus.Review,
     );
 
-    const maxConcurrency = (run.budgetLimits as any).maxConcurrency ?? 10;
-    if (activeTasks.length >= maxConcurrency) {
+    const maxConcurrency = run.budgetLimits.maxConcurrency ?? 10;
+    const availableSlots = Math.max(0, maxConcurrency - activeTasks.length);
+    if (availableSlots <= 0) {
       return [];
     }
 
@@ -115,6 +116,6 @@ export class Scheduler {
       }
     }
 
-    return runnable;
+    return runnable.slice(0, availableSlots);
   }
 }

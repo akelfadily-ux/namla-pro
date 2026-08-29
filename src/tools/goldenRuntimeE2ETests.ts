@@ -13,7 +13,7 @@ import { Gate } from "../application/gate-engine";
 import { newDb } from "pg-mem";
 import { MigrationRunner } from "../infrastructure/persistence/migrations";
 
-function createRealPostgresPool() {
+function createPGlitePostgresPool() {
   const db = newDb();
   let backup: any = null;
 
@@ -55,7 +55,7 @@ test("Deterministic Golden Runtime E2E Suite", async () => {
   const tmpWorkspace = mkdtempSync(join(tmpdir(), "namla-golden-e2e-"));
   if (process.platform !== "win32") chmodSync(tmpWorkspace, 0o755);
 
-  const pool = createRealPostgresPool();
+  const pool = createPGlitePostgresPool();
   const initClient = await pool.connect();
   try {
     const runner = new MigrationRunner(initClient as any);
@@ -331,7 +331,7 @@ test("Negative Golden Runtime Path — Gate Failure Rejection", async () => {
   const tmpWorkspace = mkdtempSync(join(tmpdir(), "namla-golden-fail-"));
   if (process.platform !== "win32") chmodSync(tmpWorkspace, 0o755);
 
-  const pool = createRealPostgresPool();
+  const pool = createPGlitePostgresPool();
   const initClient = await pool.connect();
   try {
     const runner = new MigrationRunner(initClient as any);

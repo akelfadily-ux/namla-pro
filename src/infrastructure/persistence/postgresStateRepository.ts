@@ -129,7 +129,15 @@ export class PostgresStateRepository implements StateRepository {
     );
   }
 
-  async recoverAccountingState(runId: RunId): Promise<{ recovered: boolean; previousState: RunAccountingState }> {
+  async recoverAccountingState(
+    runId: RunId,
+    reconciliationAuthority: string,
+    evidenceRef: string,
+  ): Promise<{ recovered: boolean; previousState: RunAccountingState }> {
+    if (!reconciliationAuthority || !evidenceRef) {
+      throw new ConfigurationError("Accounting recovery requires explicit reconciliationAuthority and evidenceRef");
+    }
+
     const current = await this.getAccountingState(runId);
     if (current.state === "ACTIVE") {
       return { recovered: false, previousState: "ACTIVE" };
@@ -144,14 +152,14 @@ export class PostgresStateRepository implements StateRepository {
     );
 
     // Transition accounting safety state back to ACTIVE
-    await this.setAccountingState(runId, "ACTIVE", "Durable accounting recovery performed");
+    await this.setAccountingState(runId, "ACTIVE", `Recovered by ${reconciliationAuthority} with evidence ${evidenceRef}`);
 
     await this.appendEvent({
       type: "accounting.recovered",
       runId,
       traceId: `trace-${runId}`,
       timestamp: new Date(),
-      payload: { previousState: current.state, reason: current.reason },
+      payload: { previousState: current.state, reason: current.reason, reconciliationAuthority, evidenceRef },
     });
 
     return { recovered: true, previousState: current.state };

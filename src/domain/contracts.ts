@@ -49,7 +49,7 @@ export interface StateRepository {
 
   setAccountingState(runId: RunId, state: RunAccountingState, reason?: string): Promise<void>;
 
-  recoverAccountingState?(runId: RunId): Promise<{ recovered: boolean; previousState: RunAccountingState }>;
+  recoverAccountingState(runId: RunId, reconciliationAuthority: string, evidenceRef: string): Promise<{ recovered: boolean; previousState: RunAccountingState }>;
 
   transitionRun(
     runId: RunId,
@@ -221,7 +221,7 @@ export interface ToolAdapter<I = unknown, O = unknown> {
   getPermissionRequests?(
     input: I,
     context: ToolExecutionContext,
-  ): readonly import("./types").PermissionRequest[];
+  ): readonly (import("./types").PermissionRequest & { gitOperation?: import("./types").GitOperation })[];
 
   execute(
     input: I,

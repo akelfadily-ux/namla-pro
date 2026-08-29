@@ -97,13 +97,9 @@ export class NamlaService {
     };
   }
 
-  async recoverAccountingState(runId: string): Promise<{ recovered: boolean }> {
-    if (typeof this.container.state.recoverAccountingState === "function") {
-      const res = await this.container.state.recoverAccountingState(runId);
-      return { recovered: res.recovered };
-    }
-    await this.container.state.setAccountingState(runId, "ACTIVE", "Recovered by NamlaService");
-    return { recovered: true };
+  async recoverAccountingState(runId: string, reconciliationAuthority: string, evidenceRef: string): Promise<{ recovered: boolean }> {
+    const res = await this.container.state.recoverAccountingState(runId, reconciliationAuthority, evidenceRef);
+    return { recovered: res.recovered };
   }
 
   async processRun(runId: string, workerId = "worker-1"): Promise<void> {
@@ -134,6 +130,16 @@ export class NamlaService {
     const runnable = await this.container.scheduler.getRunnable(runId, workerId);
 
     for (const task of runnable) {
+      // Re-verify maxConcurrency and maxAgents atomically at task claim boundary
+      const allTasks = await this.container.state.listTasksForRun(runId);
+      const activeTasks = allTasks.filter(
+        (t) => t.status === TaskStatus.Assigned || t.status === TaskStatus.Running || t.status === TaskStatus.Testing || t.status === TaskStatus.Review,
+      );
+      const maxConcurrency = run.budgetLimits.maxConcurrency ?? 10;
+      if (activeTasks.length >= maxConcurrency) {
+        break; // Max concurrency limit reached
+      }
+
       const leasedTask = await this.container.state.claimTaskLease(task.id, workerId);
       if (!leasedTask) continue;
 
