@@ -17,6 +17,20 @@ export class Scheduler {
 
     const runnable: TaskRecord[] = [];
 
+    // Enforce maxConcurrency and maxAgents
+    const allRunTasks = await this.state.listTasksForRun(runId);
+    const activeTasks = allRunTasks.filter(
+      (t) => t.status === TaskStatus.Assigned || t.status === TaskStatus.Running || t.status === TaskStatus.Testing || t.status === TaskStatus.Review,
+    );
+
+    const maxConcurrency = (run.budgetLimits as any).maxConcurrency ?? 10;
+    if (activeTasks.length >= maxConcurrency) {
+      return [];
+    }
+
+    const activeAnts = new Set(activeTasks.map((t) => t.assignedAntId).filter(Boolean));
+    const maxAgents = run.budgetLimits.maxAgents ?? 10;
+
     for (const task of candidates) {
       if (
         task.status !== TaskStatus.Created &&
@@ -28,6 +42,11 @@ export class Scheduler {
       // Rule 1: Depth limit check
       const maxDepth = run.budgetLimits.maxDepth ?? 10;
       if (task.depth > maxDepth) {
+        continue;
+      }
+
+      // Max agents check
+      if (task.assignedAntId && !activeAnts.has(task.assignedAntId) && activeAnts.size >= maxAgents) {
         continue;
       }
 

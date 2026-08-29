@@ -62,8 +62,8 @@ class MemoryDatabaseClient implements DatabaseClient {
       return { rows: t ? [t as unknown as T] : [] };
     }
 
-    if (s.includes("UPDATE tasks") && s.includes("WHERE id = $7 AND status = $8 AND lease_owner = $9")) {
-      const [nextStatus, now, title, desc, attempt, antId, taskId, expectedStatus, workerId, leaseToken] = params;
+    if (s.includes("UPDATE tasks") && s.includes("WHERE id = $8 AND status = $9 AND lease_owner = $10 AND lease_token = $11")) {
+      const [nextStatus, now, title, desc, attempt, antId, nextEligibleAt, taskId, expectedStatus, workerId, leaseToken] = params;
       const t = this.tasks.get(taskId);
       if (t && t.status === expectedStatus && t.lease_owner === workerId && t.lease_token === leaseToken && t.lease_expires_at > new Date()) {
         t.status = nextStatus;
@@ -202,7 +202,7 @@ test("Extreme Quality Suite — Task Fencing and Worker Lease Isolation", async 
     TaskStatus.Assigned,
     TaskStatus.Running,
     "worker-alpha",
-    claimed.leaseToken!,
+    claimed!.leaseToken!,
   );
   assert.strictEqual(updated.status, TaskStatus.Running, "Active worker successfully transitions task");
 });

@@ -18,8 +18,8 @@ class MemoryDatabase {
     const s = sql.replace(/\s+/g, " ").trim().toUpperCase();
 
     if (s.startsWith("INSERT INTO RUNS")) {
-      const [id, status, goal, repo, limits, created_at, updated_at] = params;
-      const row = { id, status, goal, repository_path: repo, budget_limits: limits, created_at, updated_at };
+      const [id, root_task_id, status, goal, repo, limits, created_at, updated_at] = params;
+      const row = { id, root_task_id, status, goal, repository_path: repo, budget_limits: limits, created_at, updated_at };
       this.runs.set(id, row);
       return { rows: [row as any], rowCount: 1 };
     }
@@ -82,7 +82,7 @@ class MemoryDatabase {
     }
 
     if (s.startsWith("UPDATE TASKS SET STATUS = $1")) {
-      const [nextStatus, now, title, desc, attempt, ant, taskId, expectedStatus] = params;
+      const [nextStatus, now, title, desc, attempt, ant, nextEligibleAt, taskId, expectedStatus] = params;
       const task = this.tasks.get(taskId);
       if (!task || task.status !== expectedStatus) {
         return { rows: [], rowCount: 0 };

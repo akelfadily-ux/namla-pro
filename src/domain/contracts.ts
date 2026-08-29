@@ -110,7 +110,7 @@ export interface StateRepository {
 
   saveAntExecution(execution: AntExecution): Promise<void>;
 
-  updateAntExecution(execution: Partial<AntExecution> & { antId: AntId; runId: RunId; taskId: TaskId; attempt: number }): Promise<void>;
+  updateAntExecution(execution: Partial<AntExecution> & { antId: AntId; runId: RunId; taskId: TaskId; attempt: number; status: import("./types").AntExecutionStatus | TaskStatus }): Promise<void>;
 
   saveArtifact(artifact: Artifact): Promise<void>;
 

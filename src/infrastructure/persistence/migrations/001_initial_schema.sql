@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   lease_owner TEXT,
   lease_token TEXT,
   lease_expires_at TIMESTAMPTZ,
+  next_eligible_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

@@ -123,9 +123,18 @@ export interface TaskRecord {
   leaseOwner?: WorkerId;
   leaseToken?: string;
   leaseExpiresAt?: Date;
+  nextEligibleAt?: Date;
 
   createdAt: Date;
   updatedAt: Date;
+}
+
+export enum AntExecutionStatus {
+  Started = "STARTED",
+  Succeeded = "SUCCEEDED",
+  Failed = "FAILED",
+  Cancelled = "CANCELLED",
+  AuthorityLost = "AUTHORITY_LOST",
 }
 
 export interface AntExecution {
@@ -143,7 +152,7 @@ export interface AntExecution {
   startedAt: Date;
   finishedAt?: Date;
 
-  status: TaskStatus;
+  status: AntExecutionStatus | TaskStatus;
 }
 
 export type GitOperation =

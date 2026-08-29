@@ -445,9 +445,14 @@ test("Negative Golden Runtime Path — Gate Failure Rejection", async () => {
       repositoryPath: tmpWorkspace,
     });
 
-    // Process run through all 3 retries until maxAttempts exhausted
+    // Process run through all 3 retries until maxAttempts exhausted (with exponential backoff time advances)
     await service.processRun(summary.id, "worker-e2e");
+
+    // Clear nextEligibleAt for test execution speed so retries process immediately
+    await pool.query("UPDATE tasks SET next_eligible_at = NULL WHERE run_id = $1", [summary.id]);
     await service.processRun(summary.id, "worker-e2e");
+
+    await pool.query("UPDATE tasks SET next_eligible_at = NULL WHERE run_id = $1", [summary.id]);
     await service.processRun(summary.id, "worker-e2e");
 
     const runRecord = await stateRepo.getRun(summary.id);

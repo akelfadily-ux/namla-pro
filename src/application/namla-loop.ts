@@ -1,5 +1,5 @@
 import { StateRepository } from "../domain/contracts";
-import { TaskRecord, TaskStatus } from "../domain/types";
+import { TaskRecord, TaskStatus, AntExecutionStatus } from "../domain/types";
 import { GateEngine, GateContext } from "./gate-engine";
 import { Supervisor } from "./supervisor";
 
@@ -85,7 +85,7 @@ export class NamlaLoop {
       role: task.role,
       attempt: task.attempt,
       startedAt: executionStartTime,
-      status: TaskStatus.Running,
+      status: AntExecutionStatus.Started,
     });
 
     try {
@@ -103,17 +103,6 @@ export class NamlaLoop {
         throw new Error(`Worker lease lost during execution for task ${task.id}`);
       }
 
-      // Mark AntExecution as testing upon successful executor execution
-      if (typeof this.state.updateAntExecution === "function") {
-        await this.state.updateAntExecution({
-          antId: logicalAntId,
-          runId: task.runId,
-          taskId: task.id,
-          attempt: task.attempt,
-          finishedAt: new Date(),
-          status: TaskStatus.Testing,
-        });
-      }
 
       // Persist produced Artifacts
       if (execution.artifacts && Array.isArray(execution.artifacts)) {
@@ -236,7 +225,7 @@ export class NamlaLoop {
         leaseToken,
       );
 
-      // Terminal AntExecution update to APPROVED after supervisor approval
+      // Terminal AntExecution update to SUCCEEDED after supervisor approval
       if (typeof this.state.updateAntExecution === "function") {
         await this.state.updateAntExecution({
           antId: logicalAntId,
@@ -244,7 +233,7 @@ export class NamlaLoop {
           taskId: task.id,
           attempt: task.attempt,
           finishedAt: new Date(),
-          status: TaskStatus.Approved,
+          status: AntExecutionStatus.Succeeded,
         });
       }
     } catch (error) {
@@ -288,7 +277,7 @@ export class NamlaLoop {
         taskId: task.id,
         attempt: task.attempt,
         finishedAt: new Date(),
-        status: shouldRetry ? TaskStatus.Retrying : TaskStatus.Failed,
+        status: AntExecutionStatus.Failed,
       });
     }
 
@@ -302,6 +291,7 @@ export class NamlaLoop {
     });
 
     if (shouldRetry) {
+      const nextEligibleAt = new Date(Date.now() + Math.pow(2, task.attempt) * 1000);
       await this.state.transitionTaskFenced(
         task.id,
         task.status,
@@ -310,6 +300,7 @@ export class NamlaLoop {
         authority.leaseToken,
         {
           attempt: task.attempt + 1,
+          nextEligibleAt,
           updatedAt: new Date(),
         },
       );

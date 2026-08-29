@@ -55,7 +55,7 @@ class MockDatabase {
 
     if (s.startsWith("UPDATE TASKS")) {
       if (s.includes("SET STATUS = $1")) {
-        const [nextStatus, now, title, desc, attempt, ant, taskId, expectedStatus] = params;
+        const [nextStatus, now, title, desc, attempt, ant, nextEligibleAt, taskId, expectedStatus] = params;
         const task = this.tasks.get(taskId);
         if (!task || task.status !== expectedStatus) {
           return { rows: [] };

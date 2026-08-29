@@ -47,6 +47,7 @@ export interface PostgresTaskRow {
   assigned_ant_id: string | null;
   lease_owner: string | null;
   lease_expires_at: Date | null;
+  next_eligible_at: Date | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -247,6 +248,7 @@ export class PostgresStateRepository implements StateRepository {
     const updatedDesc = patch?.description;
     const updatedAttempt = patch?.attempt;
     const updatedAnt = patch?.assignedAntId;
+    const nextEligibleAt = patch?.nextEligibleAt;
 
     const res = await this.db.query<PostgresTaskRow>(
       `UPDATE tasks
@@ -256,8 +258,9 @@ export class PostgresStateRepository implements StateRepository {
          title = COALESCE($3, title),
          description = COALESCE($4, description),
          attempt = COALESCE($5, attempt),
-         assigned_ant_id = COALESCE($6, assigned_ant_id)
-       WHERE id = $7 AND status = $8
+         assigned_ant_id = COALESCE($6, assigned_ant_id),
+         next_eligible_at = $7
+       WHERE id = $8 AND status = $9
        RETURNING *`,
       [
         nextStatus,
@@ -266,6 +269,7 @@ export class PostgresStateRepository implements StateRepository {
         updatedDesc ?? null,
         updatedAttempt ?? null,
         updatedAnt ?? null,
+        nextEligibleAt ?? null,
         taskId,
         expectedStatus,
       ],
@@ -295,6 +299,7 @@ export class PostgresStateRepository implements StateRepository {
     const updatedDesc = patch?.description;
     const updatedAttempt = patch?.attempt;
     const updatedAnt = patch?.assignedAntId;
+    const nextEligibleAt = patch?.nextEligibleAt;
 
     const res = await this.db.query<PostgresTaskRow>(
       `UPDATE tasks
@@ -304,8 +309,9 @@ export class PostgresStateRepository implements StateRepository {
          title = COALESCE($3, title),
          description = COALESCE($4, description),
          attempt = COALESCE($5, attempt),
-         assigned_ant_id = COALESCE($6, assigned_ant_id)
-       WHERE id = $7 AND status = $8 AND lease_owner = $9 AND lease_token = $10 AND lease_expires_at > NOW()
+         assigned_ant_id = COALESCE($6, assigned_ant_id),
+         next_eligible_at = $7
+       WHERE id = $8 AND status = $9 AND lease_owner = $10 AND lease_token = $11 AND lease_expires_at > NOW()
        RETURNING *`,
       [
         nextStatus,
@@ -314,6 +320,7 @@ export class PostgresStateRepository implements StateRepository {
         updatedDesc ?? null,
         updatedAttempt ?? null,
         updatedAnt ?? null,
+        nextEligibleAt ?? null,
         taskId,
         expectedStatus,
         workerId,
@@ -335,7 +342,8 @@ export class PostgresStateRepository implements StateRepository {
       `SELECT * FROM tasks
        WHERE run_id = $1
          AND status IN ($2, $3)
-         AND (lease_expires_at IS NULL OR lease_expires_at < NOW())`,
+         AND (lease_expires_at IS NULL OR lease_expires_at < NOW())
+         AND (next_eligible_at IS NULL OR next_eligible_at <= NOW())`,
       [runId, TaskStatus.Created, TaskStatus.Retrying],
     );
 
@@ -894,6 +902,7 @@ export class PostgresStateRepository implements StateRepository {
       leaseOwner: r.lease_owner ?? undefined,
       leaseToken: r.lease_token ?? undefined,
       leaseExpiresAt: r.lease_expires_at ? new Date(r.lease_expires_at) : undefined,
+      nextEligibleAt: r.next_eligible_at ? new Date(r.next_eligible_at) : undefined,
       createdAt: new Date(r.created_at),
       updatedAt: new Date(r.updated_at),
     };
