@@ -52,7 +52,7 @@ class MemoryDatabase {
         attempt, max_attempts, depth,
         requirements: typeof reqs === "string" ? JSON.parse(reqs) : reqs,
         dependencies: typeof deps === "string" ? JSON.parse(deps) : deps,
-        assigned_ant_id: ant,
+        assigned_ant_id: ant ?? "ant-default-planner",
         lease_owner: lease_owner ?? null,
         lease_expires_at: lease_expires_at ?? null,
         created_at, updated_at
@@ -77,6 +77,12 @@ class MemoryDatabase {
       const runId = params[0];
       const rows = Array.from(this.tasks.values()).filter(t => t.run_id === runId && t.lease_expires_at && t.lease_expires_at > new Date());
       return { rows: rows as any, rowCount: rows.length };
+    }
+
+    if (s.includes("FROM RUNS WHERE ID =")) {
+      const id = params[0];
+      const r = this.runs.get(id);
+      return { rows: r ? [r] : [] };
     }
 
     if (s.includes("UPDATE TASKS SET LEASE_OWNER = $1")) {

@@ -180,32 +180,81 @@ export class PostgresStateRepository implements StateRepository {
         return { recovered: false, previousState: "ACTIVE" };
       }
 
+      // Validate numeric evidence bounds
+      const validateBounds = (cost: number, tokens: number) => {
+        if (typeof cost !== "number" || !Number.isFinite(cost) || cost < 0 || cost > 1_000_000) {
+          throw new ConfigurationError("Reconciliation evidence costUsd must be a finite number between 0 and 1,000,000");
+        }
+        if (typeof tokens !== "number" || !Number.isSafeInteger(tokens) || tokens < 0 || tokens > 1_000_000_000) {
+          throw new ConfigurationError("Reconciliation evidence tokens must be a safe integer between 0 and 1,000,000,000");
+        }
+      };
+
       // Execute distinct recovery mode semantics
       if (mode === "PROVIDER_RECONCILED") {
         if (evidence.type !== "PROVIDER_INVOICE" && evidence.type !== "PROVIDER_USAGE_API") {
           throw new ConfigurationError("PROVIDER_RECONCILED mode requires PROVIDER_INVOICE or PROVIDER_USAGE_API evidence");
         }
-        await client.query(
-          `UPDATE budget_reservations
-           SET status = 'RECONCILED', actual_cost_usd = $1, actual_tokens = $2, reconciled_at = NOW()
-           WHERE run_id = $3 AND status = 'RESERVED'`,
-          [evidence.actualCostUsd, evidence.actualTokens, runId],
+        validateBounds(evidence.actualCostUsd, evidence.actualTokens);
+
+        // Fetch active RESERVED reservations to distribute aggregate provider actuals without multiplying usage
+        const reservedRows = await client.query<{ id: string }>(
+          `SELECT id FROM budget_reservations WHERE run_id = $1 AND status = 'RESERVED' ORDER BY created_at ASC`,
+          [runId],
         );
+        const count = reservedRows.rows.length;
+        if (count > 0) {
+          // Set primary reservation to total actuals and secondary ones to 0 to guarantee aggregate getBudgetUsage() equals evidence
+          const primaryId = reservedRows.rows[0].id;
+          await client.query(
+            `UPDATE budget_reservations
+             SET status = 'RECONCILED', actual_cost_usd = $1, actual_tokens = $2, reconciled_at = NOW()
+             WHERE id = $3`,
+            [evidence.actualCostUsd, evidence.actualTokens, primaryId],
+          );
+          if (count > 1) {
+            await client.query(
+              `UPDATE budget_reservations
+               SET status = 'RECONCILED', actual_cost_usd = 0, actual_tokens = 0, reconciled_at = NOW()
+               WHERE run_id = $1 AND status = 'RESERVED' AND id != $2`,
+              [runId, primaryId],
+            );
+          }
+        }
       } else if (mode === "HUMAN_RECONCILED") {
         if (evidence.type !== "HUMAN_ADMIN_AUDIT") {
           throw new ConfigurationError("HUMAN_RECONCILED mode requires HUMAN_ADMIN_AUDIT evidence");
         }
-        await client.query(
-          `UPDATE budget_reservations
-           SET status = 'RECONCILED', actual_cost_usd = $1, actual_tokens = $2, reconciled_at = NOW()
-           WHERE run_id = $3 AND status = 'RESERVED'`,
-          [evidence.reconciledCostUsd, evidence.reconciledTokens, runId],
+        validateBounds(evidence.reconciledCostUsd, evidence.reconciledTokens);
+
+        const reservedRows = await client.query<{ id: string }>(
+          `SELECT id FROM budget_reservations WHERE run_id = $1 AND status = 'RESERVED' ORDER BY created_at ASC`,
+          [runId],
         );
+        const count = reservedRows.rows.length;
+        if (count > 0) {
+          const primaryId = reservedRows.rows[0].id;
+          await client.query(
+            `UPDATE budget_reservations
+             SET status = 'RECONCILED', actual_cost_usd = $1, actual_tokens = $2, reconciled_at = NOW()
+             WHERE id = $3`,
+            [evidence.reconciledCostUsd, evidence.reconciledTokens, primaryId],
+          );
+          if (count > 1) {
+            await client.query(
+              `UPDATE budget_reservations
+               SET status = 'RECONCILED', actual_cost_usd = 0, actual_tokens = 0, reconciled_at = NOW()
+               WHERE run_id = $1 AND status = 'RESERVED' AND id != $2`,
+              [runId, primaryId],
+            );
+          }
+        }
       } else if (mode === "CONSERVATIVE_MAX_WRITE_OFF") {
         if (evidence.type !== "CONSERVATIVE_MAX_WRITE_OFF_AUDIT") {
           throw new ConfigurationError("CONSERVATIVE_MAX_WRITE_OFF mode requires CONSERVATIVE_MAX_WRITE_OFF_AUDIT evidence");
         }
-        // Conservatively charge reserved maximums
+        validateBounds(evidence.maxReservedCostUsd, evidence.maxReservedTokens);
+        // Conservatively charge reserved maximums per reservation row
         await client.query(
           `UPDATE budget_reservations
            SET status = 'RECONCILED', actual_cost_usd = reserved_cost_usd, actual_tokens = reserved_tokens, reconciled_at = NOW()
@@ -460,14 +509,10 @@ export class PostgresStateRepository implements StateRepository {
     taskId: TaskId,
     workerId: WorkerId,
     leaseDurationMs = 120_000,
-    limits?: { maxConcurrency?: number; maxAgents?: number },
     workerCapabilities?: readonly string[],
   ): Promise<TaskRecord | null> {
     const leaseToken = randomUUID();
     const expiresAt = new Date(Date.now() + leaseDurationMs);
-
-    const maxConc = limits?.maxConcurrency ?? 10;
-    const maxA = limits?.maxAgents ?? 10;
 
     const executeClaim = async (client: DatabaseClient) => {
       // 1. Get task details and runId
@@ -475,6 +520,11 @@ export class PostgresStateRepository implements StateRepository {
       if (taskRes.rows.length === 0) return null;
       const targetTask = taskRes.rows[0];
       const runId = targetTask.run_id;
+
+      // Rule 2: Require executable Tasks to have a valid Ant ID at claim time
+      if (!targetTask.assigned_ant_id || targetTask.assigned_ant_id.trim().length === 0) {
+        return null; // Refuse claim on unassigned task
+      }
 
       // 1b. Enforce worker capability matching at database claim boundary
       const reqs: string[] = typeof targetTask.requirements === "string" ? JSON.parse(targetTask.requirements) : targetTask.requirements || [];
@@ -487,16 +537,18 @@ export class PostgresStateRepository implements StateRepository {
         }
       }
 
-      // 2. Lock the run row for explicit transaction-scoped claim serialization per run
-      await client.query(`SELECT id FROM runs WHERE id = $1 FOR UPDATE`, [runId]);
-
-      // 3. Verify run is active
-      const runRes = await client.query(`SELECT status FROM runs WHERE id = $1`, [runId]);
+      // 2. Lock the run row and derive authoritative persisted limits directly from locked DB row inside transaction
+      const runRes = await client.query<PostgresRunRow>(`SELECT budget_limits, status FROM runs WHERE id = $1 FOR UPDATE`, [runId]);
       if (runRes.rows.length === 0) return null;
-      const runStatus = runRes.rows[0].status;
-      if (["CANCELLED", "FAILED", "COMPLETED", "PAUSED"].includes(runStatus)) return null;
 
-      // 4. Count ALL active unexpired task leases across ALL task statuses to eliminate lease-acquired-but-not-counted window
+      const runRow = runRes.rows[0];
+      if (["CANCELLED", "FAILED", "COMPLETED", "PAUSED"].includes(runRow.status)) return null;
+
+      const runLimits: BudgetLimits = typeof runRow.budget_limits === "string" ? JSON.parse(runRow.budget_limits) : runRow.budget_limits || {};
+      const maxConc = runLimits.maxConcurrency ?? 10;
+      const maxA = runLimits.maxAgents ?? 10;
+
+      // 3. Count ALL active unexpired task leases across ALL task statuses to eliminate lease-acquired-but-not-counted window
       const activeLeasesRes = await client.query<{ assigned_ant_id: string | null }>(
         `SELECT assigned_ant_id FROM tasks
          WHERE run_id = $1
@@ -508,7 +560,7 @@ export class PostgresStateRepository implements StateRepository {
       const activeLeaseCount = activeLeaseRows.length;
       if (activeLeaseCount >= maxConc) return null;
 
-      // 5. Evaluate maxAgents: if candidate Ant is already active in unexpired lease set, allow; otherwise enforce activeAntsCount < maxAgents
+      // 4. Evaluate maxAgents: if candidate Ant is already active in unexpired lease set, allow; otherwise enforce activeAntsCount < maxAgents
       const candidateAntId = targetTask.assigned_ant_id;
       const activeAntSet = new Set(activeLeaseRows.map((r) => r.assigned_ant_id).filter(Boolean));
       const isAntActive = candidateAntId ? activeAntSet.has(candidateAntId) : false;
@@ -517,7 +569,7 @@ export class PostgresStateRepository implements StateRepository {
         return null;
       }
 
-      // 6. Execute task lease claim update
+      // 5. Execute task lease claim update
       const updateRes = await client.query<PostgresTaskRow>(
         `UPDATE tasks
          SET lease_owner = $1, lease_token = $2, lease_expires_at = $3, updated_at = NOW()

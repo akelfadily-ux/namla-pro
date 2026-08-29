@@ -39,6 +39,12 @@ class MemoryDatabase {
       return { rows: rows as any, rowCount: rows.length };
     }
 
+    if (s.includes("FROM RUNS WHERE ID =")) {
+      const id = params[0];
+      const r = this.runs.get(id);
+      return { rows: r ? [r] : [] };
+    }
+
     if (s.startsWith("UPDATE RUNS SET STATUS =")) {
       const [nextStatus, now, id, expectedStatus] = params;
       const r = this.runs.get(id);
@@ -62,7 +68,7 @@ class MemoryDatabase {
         attempt, max_attempts, depth,
         requirements: typeof reqs === "string" ? JSON.parse(reqs) : reqs,
         dependencies: typeof deps === "string" ? JSON.parse(deps) : deps,
-        assigned_ant_id: ant,
+        assigned_ant_id: ant ?? "ant-default-planner",
         lease_owner, lease_expires_at, created_at, updated_at
       };
       this.tasks.set(id, row);

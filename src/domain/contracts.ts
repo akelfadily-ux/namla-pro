@@ -92,7 +92,6 @@ export interface StateRepository {
     taskId: TaskId,
     workerId: WorkerId,
     leaseDurationMs?: number,
-    limits?: { maxConcurrency?: number; maxAgents?: number },
     workerCapabilities?: readonly string[],
   ): Promise<TaskRecord | null>;
 

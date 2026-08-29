@@ -150,6 +150,7 @@ test("PGlite WASM Engine Compatibility Suite — Driver, Migrations, CAS & Concu
       description: "Lease Test",
       status: TaskStatus.Created,
       role: AntRole.Engineer,
+      assignedAntId: "ant-eng-pglite",
       attempt: 0,
       maxAttempts: 3,
       depth: 0,
@@ -190,7 +191,7 @@ test("PGlite WASM Engine Compatibility Suite — Driver, Migrations, CAS & Concu
     const taskId = "88888888-8888-8888-8888-888888888888";
 
     await repo.createRun({ id: runId, status: RunStatus.Running, goal: "Op Race", budgetLimits: {}, createdAt: new Date(), updatedAt: new Date() });
-    await repo.createTask({ id: taskId, runId, title: "Op Task", description: "Desc", status: TaskStatus.Created, role: AntRole.Engineer, attempt: 0, maxAttempts: 3, depth: 0, requirements: [], dependencies: [], createdAt: new Date(), updatedAt: new Date() });
+    await repo.createTask({ id: taskId, runId, title: "Op Task", description: "Desc", status: TaskStatus.Created, role: AntRole.Engineer, assignedAntId: "ant-eng-op-pglite", attempt: 0, maxAttempts: 3, depth: 0, requirements: [], dependencies: [], createdAt: new Date(), updatedAt: new Date() });
 
     const claimedTask = await repo.claimTaskLease(taskId, "worker-race", 60_000);
     const authority = { workerId: "worker-race", leaseToken: claimedTask!.leaseToken! };

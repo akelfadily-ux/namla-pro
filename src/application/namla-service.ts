@@ -144,7 +144,9 @@ export class NamlaService {
     return { recovered: res.recovered };
   }
 
-  async processRun(runId: string, workerId = "worker-1"): Promise<void> {
+  async processRun(runId: string, workerIdentity: import("../domain/types").WorkerExecutionIdentity | string = "worker-1"): Promise<void> {
+    const workerId = typeof workerIdentity === "string" ? workerIdentity : workerIdentity.workerId;
+    const workerCapabilities = typeof workerIdentity === "string" ? undefined : workerIdentity.capabilities;
     const run = await this.container.state.getRun(runId);
     if (!run) {
       throw new ConfigurationError(`Run not found: ${runId}`);
@@ -169,7 +171,7 @@ export class NamlaService {
     // Correct Order: Recover expired executions FIRST before clearing stale lease times
     await this.container.state.recoverExpiredTaskExecutions(runId);
     await this.container.state.recoverExpiredLeases(runId);
-    const runnable = await this.container.scheduler.getRunnable(runId, workerId);
+    const runnable = await this.container.scheduler.getRunnable(runId, workerId, workerCapabilities);
 
     for (const task of runnable) {
       // Re-verify maxConcurrency and maxAgents atomically at task claim boundary
@@ -182,10 +184,7 @@ export class NamlaService {
         break; // Max concurrency limit reached
       }
 
-      const leasedTask = await this.container.state.claimTaskLease(task.id, workerId, 120_000, {
-        maxConcurrency: run.budgetLimits.maxConcurrency,
-        maxAgents: run.budgetLimits.maxAgents,
-      });
+      const leasedTask = await this.container.state.claimTaskLease(task.id, workerId, 120_000, workerCapabilities);
       if (!leasedTask) continue;
 
       if (!leasedTask.leaseToken) {

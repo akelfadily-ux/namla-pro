@@ -4,6 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, readFileSync, rmSync,
 import { join } from "path";
 import { tmpdir } from "os";
 import { Pool } from "pg";
+import { createServer } from "http";
 
 import { Container } from "../bootstrap/container";
 import { NamlaService } from "../application/namla-service";
@@ -15,7 +16,12 @@ import { MigrationRunner } from "../infrastructure/persistence/migrations";
 
 const dbUrl = process.env.DATABASE_URL;
 
-test("Golden E2E Software Task Execution against Actual PostgreSQL Server", { skip: !dbUrl ? "Skipped: DATABASE_URL environment variable absent" : false }, async () => {
+if (!dbUrl) {
+  console.error("GOLDEN POSTGRES RELEASE FAILED: DATABASE_URL environment variable is mandatory for release qualification");
+  process.exit(1);
+}
+
+test("Full Golden E2E Software Contract against Actual PostgreSQL Server", async () => {
   const pool = new Pool({ connectionString: dbUrl });
 
   const client = await pool.connect();
@@ -26,7 +32,7 @@ test("Golden E2E Software Task Execution against Actual PostgreSQL Server", { sk
     client.release();
   }
 
-  const tmpWorkspace = mkdtempSync(join(tmpdir(), "namla-golden-pg-"));
+  const tmpWorkspace = mkdtempSync(join(tmpdir(), "namla-golden-full-pg-"));
   if (process.platform !== "win32") chmodSync(tmpWorkspace, 0o755);
 
   try {
@@ -44,11 +50,79 @@ test("Golden E2E Software Task Execution against Actual PostgreSQL Server", { sk
       },
     };
 
+    const todoServerCode = `
+const http = require("http");
+function createTodoServer() {
+  const todos = new Map();
+  let idCounter = 1;
+
+  return http.createServer((req, res) => {
+    const url = req.url || "";
+    const parts = url.split("/").filter(Boolean);
+
+    if (req.method === "POST" && url === "/todos") {
+      let body = "";
+      req.on("data", chunk => body += chunk);
+      req.on("end", () => {
+        const todo = JSON.parse(body || "{}");
+        const id = String(idCounter++);
+        todo.id = id;
+        todos.set(id, todo);
+        res.writeHead(201, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(todo));
+      });
+    } else if (req.method === "GET" && url === "/todos") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(Array.from(todos.values())));
+    } else if (req.method === "GET" && parts.length === 2 && parts[0] === "todos") {
+      const id = parts[1];
+      if (todos.has(id)) {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(todos.get(id)));
+      } else {
+        res.writeHead(404, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Not Found" }));
+      }
+    } else if (req.method === "PATCH" && parts.length === 2 && parts[0] === "todos") {
+      const id = parts[1];
+      if (todos.has(id)) {
+        let body = "";
+        req.on("data", chunk => body += chunk);
+        req.on("end", () => {
+          const patch = JSON.parse(body || "{}");
+          const existing = todos.get(id);
+          Object.assign(existing, patch);
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify(existing));
+        });
+      } else {
+        res.writeHead(404, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Not Found" }));
+      }
+    } else if (req.method === "DELETE" && parts.length === 2 && parts[0] === "todos") {
+      const id = parts[1];
+      if (todos.has(id)) {
+        todos.delete(id);
+        res.writeHead(204);
+        res.end();
+      } else {
+        res.writeHead(404, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Not Found" }));
+      }
+    } else {
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Not Found" }));
+    }
+  });
+}
+module.exports = { createTodoServer };
+`;
+
     const modelAdapter: ModelAdapter = {
       provider: "openai",
       generate: async <T>(req: any) => ({
-        value: req.validate ? req.validate("export function todo() { return 'ok'; }") : ("export function todo() { return 'ok'; }" as unknown as T),
-        usage: { inputTokens: 50, outputTokens: 50, estimatedCostUsd: 0.005 },
+        value: req.validate ? req.validate(todoServerCode) : (todoServerCode as unknown as T),
+        usage: { inputTokens: 150, outputTokens: 250, estimatedCostUsd: 0.015 },
         provider: "openai",
         model: "gpt-4",
       }),
@@ -57,35 +131,63 @@ test("Golden E2E Software Task Execution against Actual PostgreSQL Server", { sk
     const buildGate: Gate = {
       name: "BuildGate",
       evaluate: async (ctx) => {
-        const todoPath = join(ctx.workspacePath, "src", "index.ts");
-        const exists = existsSync(todoPath);
+        const filePath = join(ctx.workspacePath, "src", "server.js");
+        const fileExists = existsSync(filePath);
+        let syntaxValid = false;
+        if (fileExists) {
+          try {
+            require(filePath);
+            syntaxValid = true;
+          } catch {
+            syntaxValid = false;
+          }
+        }
+        const passed = fileExists && syntaxValid;
         return {
           gate: "BuildGate",
-          passed: exists,
-          reason: exists ? "Source produced" : "Missing src/index.ts",
-          evidence: [exists ? "exists" : "absent"],
+          passed,
+          reason: passed ? "Server source generated and syntax checked" : "Syntax check failed",
+          evidence: [fileExists ? "src/server.js present" : "absent"],
           requiredFixes: [],
         };
       },
     };
 
     const supervisor = {
-      review: async () => ({
-        approved: true,
-        reason: "Source written and verified",
-        risks: [],
-        requiredFixes: [],
-      }),
+      review: async (input: any) => {
+        const gateEvidence = input.gateEvidence || [];
+        const buildGatePassed = gateEvidence.some((g: any) => g.gate === "BuildGate" && g.passed);
+        return {
+          approved: buildGatePassed,
+          reason: buildGatePassed ? "Verified via BuildGate evidence" : "BuildGate failed",
+          risks: [],
+          requiredFixes: [],
+        };
+      },
     };
 
     const executor = {
       execute: async (task: any) => {
-        const fullPath = join(tmpWorkspace, "src", "index.ts");
-        mkdirSync(join(fullPath, ".."), { recursive: true });
-        writeFileSync(fullPath, "export function todo() { return 'ok'; }", "utf8");
+        const modelResp = await container.models.generate(task.runId, "openai", {
+          system: "Engineer",
+          input: "Generate Todo REST API",
+          validate: (v: any) => String(v),
+        });
+
+        const toolCtx = {
+          runId: task.runId,
+          taskId: task.id,
+          antId: "ant-engineer",
+          traceId: `trace-${task.runId}`,
+          operationId: `op-${task.id}-${task.attempt}`,
+          permissions: [`filesystem.write:${join(tmpWorkspace, "src", "server.js")}`],
+          authority: { workerId: "worker-pg-e2e", leaseToken: task.leaseToken || "token-pg" },
+        };
+
+        await container.tools.execute("filesystem.write", { relativePath: "src/server.js", content: modelResp.value }, toolCtx);
 
         return {
-          artifacts: [{ id: `art-${task.id}`, runId: task.runId, type: "code", name: "src/index.ts", metadata: {}, createdAt: new Date() }],
+          artifacts: [{ id: `art-${task.id}`, runId: task.runId, taskId: task.id, type: "code", name: "src/server.js", metadata: {}, createdAt: new Date() }],
           workspacePath: tmpWorkspace,
         };
       },
@@ -109,9 +211,31 @@ test("Golden E2E Software Task Execution against Actual PostgreSQL Server", { sk
 
     await service.processRun(summary.id, "worker-pg-e2e");
 
-    const producedFile = join(tmpWorkspace, "src", "index.ts");
-    assert.equal(existsSync(producedFile), true);
-    assert.equal(readFileSync(producedFile, "utf8"), "export function todo() { return 'ok'; }");
+    const producedPath = join(tmpWorkspace, "src", "server.js");
+    assert.equal(existsSync(producedPath), true);
+
+    // Perform HTTP REST Contract Verification
+    const { createTodoServer } = require(producedPath);
+    const server = createTodoServer();
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as any).port;
+
+    try {
+      const postRes = await fetch(`http://127.0.0.1:${port}/todos`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: "Golden Postgres Task" }),
+      });
+      assert.equal(postRes.status, 201);
+
+      const getRes = await fetch(`http://127.0.0.1:${port}/todos`);
+      assert.equal(getRes.status, 200);
+
+      const deleteRes = await fetch(`http://127.0.0.1:${port}/todos/1`, { method: "DELETE" });
+      assert.equal(deleteRes.status, 204);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
 
     const runRecord = await stateRepo.getRun(summary.id);
     assert.equal(runRecord?.status, RunStatus.Completed);

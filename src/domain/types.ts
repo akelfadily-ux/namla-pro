@@ -98,6 +98,11 @@ export interface RunRecord {
 
 export type WorkerId = string;
 
+export interface WorkerExecutionIdentity {
+  workerId: WorkerId;
+  capabilities: readonly string[];
+}
+
 export interface TaskRecord {
   id: TaskId;
   runId: RunId;

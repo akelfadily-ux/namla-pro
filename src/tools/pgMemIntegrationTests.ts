@@ -175,6 +175,7 @@ test("pg-mem Emulator Suite — Driver, Migrations, CAS & Concurrency", async (t
       description: "Lease Test",
       status: TaskStatus.Created,
       role: AntRole.Engineer,
+      assignedAntId: "ant-eng-fenced",
       attempt: 0,
       maxAttempts: 3,
       depth: 0,
@@ -206,7 +207,7 @@ test("pg-mem Emulator Suite — Driver, Migrations, CAS & Concurrency", async (t
     const taskId = "88888888-8888-8888-8888-888888888888";
 
     await repo.createRun({ id: runId, status: RunStatus.Running, goal: "Op Race", budgetLimits: {}, createdAt: new Date(), updatedAt: new Date() });
-    await repo.createTask({ id: taskId, runId, title: "Op Task", description: "Desc", status: TaskStatus.Created, role: AntRole.Engineer, attempt: 0, maxAttempts: 3, depth: 0, requirements: [], dependencies: [], createdAt: new Date(), updatedAt: new Date() });
+    await repo.createTask({ id: taskId, runId, title: "Op Task", description: "Desc", status: TaskStatus.Created, role: AntRole.Engineer, assignedAntId: "ant-eng-op", attempt: 0, maxAttempts: 3, depth: 0, requirements: [], dependencies: [], createdAt: new Date(), updatedAt: new Date() });
 
     const claimedTask = await repo.claimTaskLease(taskId, "worker-race", 60_000);
     const authority = { workerId: "worker-race", leaseToken: claimedTask!.leaseToken! };

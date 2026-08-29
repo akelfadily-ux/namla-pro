@@ -6,7 +6,7 @@
 | Run lifecycle   | UNIT TESTED | UNIT TESTED | MOCK TESTED | MOCK TESTED | UNIT TESTED | MOCK TESTED | UNIT TESTED | UNIT | `src/domain/lifecycle.ts`, `src/tools/domainLifecycleTests.ts` |
 | Task lifecycle  | UNIT TESTED | UNIT TESTED | MOCK TESTED | MOCK TESTED | UNIT TESTED | MOCK TESTED | UNIT TESTED | UNIT | `src/domain/lifecycle.ts`, `src/tools/domainLifecycleTests.ts` |
 | PostgreSQL      | UNIT TESTED | UNIT TESTED | PGLITE TESTED | PGLITE TESTED | UNIT TESTED | PGLITE TESTED | UNIT TESTED | PGlite PostgreSQL-engine compatibility | `src/infrastructure/persistence/postgresStateRepository.ts`, `src/tools/pglitePostgresEngineTests.ts` |
-| PostgreSQL DB   | UNIT TESTED | UNIT TESTED | PG SERVER TESTED | PG SERVER TESTED | UNIT TESTED | PG SERVER TESTED | UNIT TESTED | NOT RUN (REQUIRES DATABASE_URL) | `src/tools/actualPostgresServerIntegrationTests.ts` |
+| PostgreSQL DB   | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN (REQUIRES DATABASE_URL) | `src/tools/actualPostgresServerIntegrationTests.ts` |
 | UnitOfWork      | UNIT TESTED | UNIT TESTED | PGLITE TESTED | PGLITE TESTED | UNIT TESTED | PGLITE TESTED | UNIT TESTED | PGlite PostgreSQL-engine compatibility | `src/infrastructure/persistence/postgresUnitOfWork.ts` |
 | CAS             | UNIT TESTED | UNIT TESTED | PGLITE TESTED | PGLITE TESTED | UNIT TESTED | PGLITE TESTED | UNIT TESTED | PGlite PostgreSQL-engine compatibility | `src/infrastructure/persistence/postgresStateRepository.ts` |
 | Task leasing    | UNIT TESTED | UNIT TESTED | PGLITE TESTED | PGLITE TESTED | UNIT TESTED | PGLITE TESTED | UNIT TESTED | PGlite PostgreSQL-engine compatibility | `src/infrastructure/persistence/postgresStateRepository.ts` |

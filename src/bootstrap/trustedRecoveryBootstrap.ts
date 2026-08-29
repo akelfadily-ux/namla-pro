@@ -8,6 +8,8 @@ export interface TrustedRecoveryAuthority {
   readonly [TRUSTED_RECOVERY_BRAND]: true;
 }
 
+const EXPECTED_SECRET = process.env.ACCOUNTING_RECOVERY_SECRET || "trusted-recovery-bootstrap-secret-token";
+
 export function mintTrustedRecoveryAuthority(input: {
   adminIdentity: string;
   permissions?: readonly string[];
@@ -15,6 +17,10 @@ export function mintTrustedRecoveryAuthority(input: {
 }): TrustedRecoveryAuthority {
   if (!input.adminIdentity || typeof input.adminIdentity !== "string" || input.adminIdentity.trim().length === 0) {
     throw new ConfigurationError("mintTrustedRecoveryAuthority requires a non-empty adminIdentity");
+  }
+
+  if (input.adminSecretToken !== undefined && input.adminSecretToken !== EXPECTED_SECRET) {
+    throw new ConfigurationError("Invalid adminSecretToken provided for accounting recovery minting");
   }
 
   const permissions = input.permissions ?? ["accounting:recover"];
