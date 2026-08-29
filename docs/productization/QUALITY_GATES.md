@@ -5,7 +5,7 @@
 | Layer isolation | UNIT TESTED | UNIT TESTED | UNIT TESTED | UNIT TESTED | UNIT TESTED | UNIT TESTED | UNIT TESTED | UNIT TESTED | `src/domain/types.ts`, `src/tools/architectureLayerTests.ts` |
 | Run lifecycle   | UNIT TESTED | UNIT TESTED | MOCK TESTED | MOCK TESTED | UNIT TESTED | MOCK TESTED | UNIT TESTED | MOCK TESTED | `src/domain/lifecycle.ts`, `src/tools/domainLifecycleTests.ts` |
 | Task lifecycle  | UNIT TESTED | UNIT TESTED | MOCK TESTED | MOCK TESTED | UNIT TESTED | MOCK TESTED | UNIT TESTED | MOCK TESTED | `src/domain/lifecycle.ts`, `src/tools/domainLifecycleTests.ts` |
-| PostgreSQL      | UNIT TESTED | UNIT TESTED | MOCK TESTED | MOCK TESTED | UNIT TESTED | MOCK TESTED | UNIT TESTED | MOCK TESTED | `src/infrastructure/persistence/postgresStateRepository.ts`, `src/tools/postgresIntegrationTests.ts` |
+| PostgreSQL      | UNIT TESTED | UNIT TESTED | MOCK TESTED | MOCK TESTED | UNIT TESTED | MOCK TESTED | UNIT TESTED | MOCK TESTED | `src/infrastructure/persistence/postgresStateRepository.ts`, `src/tools/realPostgresIntegrationTests.ts` |
 | UnitOfWork      | UNIT TESTED | UNIT TESTED | MOCK TESTED | MOCK TESTED | UNIT TESTED | MOCK TESTED | UNIT TESTED | MOCK TESTED | `src/infrastructure/persistence/postgresUnitOfWork.ts` |
 | CAS             | UNIT TESTED | UNIT TESTED | MOCK TESTED | MOCK TESTED | UNIT TESTED | MOCK TESTED | UNIT TESTED | MOCK TESTED | `src/infrastructure/persistence/postgresStateRepository.ts` |
 | Task leasing    | UNIT TESTED | UNIT TESTED | MOCK TESTED | MOCK TESTED | UNIT TESTED | MOCK TESTED | UNIT TESTED | MOCK TESTED | `src/infrastructure/persistence/postgresStateRepository.ts` |

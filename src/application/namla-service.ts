@@ -43,6 +43,7 @@ export class NamlaService {
 
     const runRecord: RunRecord = {
       id: runId,
+      rootTaskId: initialTaskId,
       status: RunStatus.Created,
       goal: input.goal,
       repositoryPath: input.repositoryPath,
@@ -146,12 +147,16 @@ export class NamlaService {
       }
     }
 
-    // Check terminal run state evaluation after runnable task loop
-    const allTasks = await this.container.state.listRunnableTasks(runId);
+    // Evaluate full task graph completion
     const updatedRun = await this.container.state.getRun(runId);
     if (updatedRun && updatedRun.status === RunStatus.Running) {
-      const initialPlanningTask = await this.container.state.getTask(runId);
-      if (initialPlanningTask?.status === TaskStatus.Approved) {
+      const rootTaskId = updatedRun.rootTaskId ?? runId;
+      const rootTask = await this.container.state.getTask(rootTaskId);
+
+      const accState = await this.container.state.getAccountingState(runId);
+      const isAccountingBlocked = accState.state !== "ACTIVE";
+
+      if (rootTask?.status === TaskStatus.Approved && !isAccountingBlocked) {
         await this.container.state.transitionRun(runId, RunStatus.Running, RunStatus.Completed);
         await this.container.state.appendEvent({
           type: "run.completed",
@@ -160,14 +165,14 @@ export class NamlaService {
           timestamp: new Date(),
           payload: { goal: updatedRun.goal },
         });
-      } else if (initialPlanningTask?.status === TaskStatus.Failed) {
+      } else if (rootTask?.status === TaskStatus.Failed || isAccountingBlocked) {
         await this.container.state.transitionRun(runId, RunStatus.Running, RunStatus.Failed);
         await this.container.state.appendEvent({
           type: "run.failed",
           runId,
           traceId: `trace-${runId}`,
           timestamp: new Date(),
-          payload: { goal: updatedRun.goal, reason: "Initial planning task failed" },
+          payload: { goal: updatedRun.goal, reason: isAccountingBlocked ? `Accounting hold: ${accState.reason}` : "Root task failed" },
         });
       }
     }

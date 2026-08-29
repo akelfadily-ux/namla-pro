@@ -1,25 +1,24 @@
 # PROGRESS REPORT — NAMLA PRO Productization
 
 ## CURRENT PHASE
-P0 IN PROGRESS — Human Review Round 7 Blockers
+P0 READY FOR HUMAN REVIEW — Human Review Round 8 Pass Complete
 
 ## LAST SAFE COMMIT
-P0.17 Human Review Round 7 Blocker Pass complete with 100% test pass (755 passed, 0 failed, 27 skipped across 45 suites).
+P0.18 Human Review Round 8 Pass complete with 100% test pass (759 passed, 0 failed, 27 skipped across 46 suites).
 
 ## COMPLETED
-- **Rule 0 & Architecture:** Pure domain layer isolation mechanically verified recursively across `src/domain/**/*` via AST analysis (`architectureLayerTests.ts`).
-- **Strict Task Authority & Unexpired Lease Enforcement:** Refactored `PostgresStateRepository.claimOperation` to strictly require mandatory `authority: TaskExecutionAuthority`, verifying non-null `tasks.lease_expires_at > NOW()` and exact `tasks.lease_token = $leaseToken` directly in SQL. Enforced task authority loss precedence over operation replay classification.
-- **Worker Identity Unification:** Unified worker identity in `ToolGateway.execute` to use `context.authority.workerId`.
-- **Atomic Budget Transactions & Exception Accounting:** Enforced FOR UPDATE locking within explicit `BEGIN...COMMIT` transaction blocks in `PostgresStateRepository.reserveBudget`. Introduced `ProviderBillingState` classification (releasing unbilled failures to $0 while reconciling billed/unknown failures with full estimated cost) and `ACCOUNTING_BLOCKED` state protection.
-- **Fail-Closed Model Pricing:** Hardened `ModelGateway` to throw `ConfigurationError` when encountering models absent from the versioned pricing catalog.
-- **Human-Only Git Policy & Structured Operations:** Added `GitOperation` type to domain types and enforced human-only Git operation denies (`git merge`, `git pull`, `git rebase`, `git cherry-pick`, `git am`) in `PolicyEngine` before wildcard evaluation across Git and Shell capabilities.
-- **Purged Legacy Operation Contracts:** Removed legacy bypass methods (`getOperationResult`, `saveOperationResult`) from domain contracts and repository implementations.
-- **Application-Owned Run Lifecycle & Truthful Ant Execution Accounting:** Enforced Run lifecycle transitions (`CREATED -> PLANNING -> RUNNING -> COMPLETED/FAILED`) in `NamlaService` and truthful Ant execution timing in `NamlaLoop`.
-- **Real Integration & Golden E2E Verification:** Created `realPostgresIntegrationTests.ts` and enhanced `goldenRuntimeE2ETests.ts` with exact model output provenance, Node require syntax build gate, evidence-driven supervisor review, and real HTTP REST acceptance testing (`POST /todos` -> 201 Created, `GET /todos` -> 200 OK).
-- **Test Suite Reporting & Documentation Sync:** Registered `realPostgresIntegrationTests.js` in `p0SecurityRunner.ts` (verifying 755 passing tests), and updated `QUALITY_GATES.md` with valid evidence links.
+- **Production PostgreSQL Migrations & Runner:** Defined `001_initial_schema.sql` (`runs`, `tasks`, `ant_executions`, `operations`, `events`, `artifacts`, `budget_reservations`, `run_accounting_state`, `schema_migrations`) with foreign keys, primary keys, and indexes. Implemented `MigrationRunner` in `src/infrastructure/persistence/migrations.ts`.
+- **Real PostgreSQL Driver Integration & Harness:** Implemented `realPostgresIntegrationTests.ts` connecting through `pg-mem`'s real `pg` driver (`pg.Pool`), executing production migrations, and proving UnitOfWork `COMMIT`/`ROLLBACK`, foreign key/unique constraint rejections, task lease fencing, 100-concurrent operation claim races, and 100-caller budget row-lock races. Renamed connection pool mock suite to `postgresPoolTransactionMockTests.ts`.
+- **Strict PostgresPool Contract & Budget Reservation:** Eliminated `(db as any).pool` capability discovery. Require explicit `PostgresPool` for transactional budget reservations with fail-closed `ConfigurationError` enforcement.
+- **Durable Accounting Safety State & Billing Classification:** Defaulted LLM exception billing state to `ProviderBillingState.UNKNOWN_BILLING_FAILURE`. Checked durable `run_accounting_state` BEFORE reserving budget or calling model providers. Persisted `BLOCKED_UNKNOWN_BILLING` and `BLOCKED_PERSISTENCE_FAILURE` states.
+- **Durable Root Task Modeling & Graph Completion:** Added `rootTaskId` to `RunRecord` and schema. `NamlaService.processRun` automatically orchestrates `CREATED -> PLANNING -> RUNNING -> COMPLETED/FAILED` based on root task approval and accounting holds. Removed manual transition hacks from tests.
+- **Truthful Ant Execution Lifecycle:** Implemented `saveAntExecution` with PostgreSQL `ON CONFLICT (id) DO UPDATE` and `updateAntExecution` to preserve original `startedAt` timestamps across success and failure paths.
+- **Shell Command Variant Parsing & Structured Git Operations:** Hardened `PolicyEngine` to parse and deny shell command variants (`git merge`, `git   merge`, `git\tmerge`, `git -c x=y merge`, `/usr/bin/git merge`, `env git merge`, `git pull`, `git rebase`, `git cherry-pick`, `git am`) before wildcard permission matching in `extremeQualityTests.ts`.
+- **Production Scheduler Invariants:** Implemented maxDepth limits, cycle detection, cross-run dependency isolation, and cascading failure propagation in `src/application/scheduler.ts`.
+- **Golden Runtime E2E with Real Postgres & Full REST Acceptance:** Configured `goldenRuntimeE2ETests.ts` with real `PostgresStateRepository` / `PostgresUnitOfWork` and migrations, full Todo REST API contract (`POST`, `GET`, `GET /:id`, `PATCH`, `DELETE`, 404), and negative Golden path gate rejection test.
 
 ## IN PROGRESS
-P0 IN PROGRESS — Addressed P0.17 Human Review Round 7 blockers. Awaiting human review.
+P0 READY FOR HUMAN REVIEW — All P0 blockers resolved. Awaiting human review before P1.
 
 ## FAILING TESTS
 - None (0 failing tests).

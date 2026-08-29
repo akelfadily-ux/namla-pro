@@ -26,10 +26,28 @@ export interface EventRecord {
 
 import { AntId, OperationRecord, RunRecord, RunStatus, WorkerId } from "./types";
 
+export type RunAccountingState = "ACTIVE" | "BLOCKED_UNKNOWN_BILLING" | "BLOCKED_PERSISTENCE_FAILURE";
+
+export interface PostgresQueryClient {
+  query<T = any>(sql: string, params?: any[]): Promise<{ rows: T[]; rowCount?: number }>;
+}
+
+export interface PostgresPoolClient extends PostgresQueryClient {
+  release(): void;
+}
+
+export interface PostgresPool extends PostgresQueryClient {
+  connect(): Promise<PostgresPoolClient>;
+}
+
 export interface StateRepository {
   createRun(run: RunRecord): Promise<void>;
 
   getRun(runId: RunId): Promise<RunRecord | null>;
+
+  getAccountingState(runId: RunId): Promise<{ state: RunAccountingState; reason?: string }>;
+
+  setAccountingState(runId: RunId, state: RunAccountingState, reason?: string): Promise<void>;
 
   transitionRun(
     runId: RunId,
@@ -87,6 +105,8 @@ export interface StateRepository {
   ): Promise<{ recoveredCount: number }>;
 
   saveAntExecution(execution: AntExecution): Promise<void>;
+
+  updateAntExecution(execution: Partial<AntExecution> & { antId: AntId; runId: RunId; taskId: TaskId; attempt: number }): Promise<void>;
 
   saveArtifact(artifact: Artifact): Promise<void>;
 

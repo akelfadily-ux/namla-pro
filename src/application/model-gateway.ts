@@ -7,13 +7,9 @@ import {
 import { RunId } from "../domain/types";
 import { BudgetController } from "./budget-controller";
 
-import { ConfigurationError } from "../domain/errors";
+import { ConfigurationError, ModelProviderError, ProviderBillingState } from "../domain/errors";
 
-export enum ProviderBillingState {
-  UNBILLED_FAILURE = "UNBILLED_FAILURE",
-  BILLED_FAILURE = "BILLED_FAILURE",
-  UNKNOWN_BILLING_FAILURE = "UNKNOWN_BILLING_FAILURE",
-}
+export { ProviderBillingState };
 
 export interface ModelPricing {
   version: string;
@@ -56,6 +52,12 @@ export class ModelGateway {
     provider: string,
     request: ModelRequest<T>,
   ): Promise<ModelResponse<T>> {
+    // 1. Check durable accounting safety state BEFORE reserving budget or calling provider
+    const accState = await this.state.getAccountingState(runId);
+    if (accState.state !== "ACTIVE") {
+      throw new Error(`ACCOUNTING_BLOCKED for run ${runId}: ${accState.reason ?? accState.state}`);
+    }
+
     const limits = await this.state.getBudgetLimits(runId);
     const usage = await this.state.getBudgetUsage(runId);
 
@@ -109,22 +111,23 @@ export class ModelGateway {
     } catch (error) {
       const errMsg = error instanceof Error ? error.message : "Model generation failed";
 
-      // Classify provider billing state
+      // Default to UNKNOWN_BILLING_FAILURE unless explicitly proven via ModelProviderError
       const billingState: ProviderBillingState =
-        (error as any)?.billingState ?? ProviderBillingState.UNBILLED_FAILURE;
+        error instanceof ModelProviderError ? error.billingState : ProviderBillingState.UNKNOWN_BILLING_FAILURE;
 
       if (reservation.reservationId) {
         if (billingState === ProviderBillingState.UNBILLED_FAILURE) {
-          // Release reservation to $0 cost on unbilled failure
+          // Release reservation to $0 cost ONLY on explicitly proven unbilled failure
           if (typeof this.state.releaseBudgetReservation === "function") {
             try {
               await this.state.releaseBudgetReservation(reservation.reservationId, errMsg);
             } catch (relErr) {
+              await this.state.setAccountingState(runId, "BLOCKED_PERSISTENCE_FAILURE", `Failed to release reservation ${reservation.reservationId}`);
               throw new Error(`ACCOUNTING_BLOCKED: Failed to release budget reservation ${reservation.reservationId}: ${relErr instanceof Error ? relErr.message : String(relErr)}`);
             }
           }
         } else {
-          // BILLED_FAILURE or UNKNOWN_BILLING_FAILURE: Reconcile reservation with full estimated cost to prevent uncounted API drain
+          // BILLED_FAILURE or UNKNOWN_BILLING_FAILURE: Reconcile reservation with full estimated cost and persist accounting hold
           try {
             await this.state.reconcileBudget(
               reservation.reservationId,
@@ -132,7 +135,12 @@ export class ModelGateway {
               estimatedInputTokens + estimatedOutputTokens,
             );
           } catch (recErr) {
+            await this.state.setAccountingState(runId, "BLOCKED_PERSISTENCE_FAILURE", `Failed to reconcile reservation ${reservation.reservationId}`);
             throw new Error(`ACCOUNTING_BLOCKED: Failed to reconcile budget reservation ${reservation.reservationId}: ${recErr instanceof Error ? recErr.message : String(recErr)}`);
+          }
+
+          if (billingState === ProviderBillingState.UNKNOWN_BILLING_FAILURE) {
+            await this.state.setAccountingState(runId, "BLOCKED_UNKNOWN_BILLING", `Model provider failed with UNKNOWN_BILLING_FAILURE: ${errMsg}`);
           }
         }
       }
@@ -160,6 +168,7 @@ export class ModelGateway {
           response.usage.inputTokens + response.usage.outputTokens,
         );
       } catch (error) {
+        await this.state.setAccountingState(runId, "BLOCKED_PERSISTENCE_FAILURE", `Failed to reconcile budget reservation ${reservation.reservationId}`);
         throw new Error(`ACCOUNTING_BLOCKED: Failed to reconcile budget reservation ${reservation.reservationId}: ${error instanceof Error ? error.message : String(error)}`);
       }
     }

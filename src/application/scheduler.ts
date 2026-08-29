@@ -25,14 +25,59 @@ export class Scheduler {
         continue;
       }
 
-      // Rule 1: task dependencies must be APPROVED
+      // Rule 1: Depth limit check
+      const maxDepth = run.budgetLimits.maxDepth ?? 10;
+      if (task.depth > maxDepth) {
+        continue;
+      }
+
+      // Rule 2: Dependency check with cycle detection & cascading failure check
       let dependenciesMet = true;
-      for (const depId of task.dependencies) {
-        const depTask = await this.state.getTask(depId);
-        if (!depTask || depTask.status !== TaskStatus.Approved) {
+      let dependencyFailed = false;
+
+      const visited = new Set<string>();
+      const queue = [...task.dependencies];
+
+      while (queue.length > 0) {
+        const depId = queue.shift()!;
+        if (visited.has(depId)) {
+          // Cycle detected
           dependenciesMet = false;
           break;
         }
+        visited.add(depId);
+
+        const depTask = await this.state.getTask(depId);
+        if (!depTask) {
+          dependenciesMet = false;
+          break;
+        }
+
+        if (depTask.runId !== runId) {
+          // Cross-run dependency isolation violation
+          dependenciesMet = false;
+          break;
+        }
+
+        if (depTask.status === TaskStatus.Failed || depTask.status === TaskStatus.Cancelled) {
+          dependencyFailed = true;
+          dependenciesMet = false;
+          break;
+        }
+
+        if (depTask.status !== TaskStatus.Approved) {
+          dependenciesMet = false;
+        }
+      }
+
+      if (dependencyFailed) {
+        // Cascade failure to blocked dependent task
+        try {
+          await this.state.transitionTask(task.id, task.status, TaskStatus.Failed);
+        } catch {
+          /* ignore transition error */
+        }
+        continue;
       }
 
       if (dependenciesMet) {

@@ -15,13 +15,14 @@ import {
   TaskStatus,
   WorkerId,
 } from "../../domain/types";
-import { StateRepository, EventRecord } from "../../domain/contracts";
+import { StateRepository, EventRecord, PostgresPool, PostgresQueryClient, RunAccountingState } from "../../domain/contracts";
 import { randomUUID } from "crypto";
 import { assertRunTransition, assertTaskTransition } from "../../domain/lifecycle";
-import { StateConflictError } from "../../domain/errors";
+import { StateConflictError, ConfigurationError } from "../../domain/errors";
 
 export interface PostgresRunRow {
   id: string;
+  root_task_id: string | null;
   status: string;
   goal: string;
   repository_path: string | null;
@@ -50,19 +51,29 @@ export interface PostgresTaskRow {
   updated_at: Date;
 }
 
-export interface DatabaseClient {
-  query<T = any>(sql: string, params?: any[]): Promise<{ rows: T[]; rowCount?: number }>;
-}
+export type DatabaseClient = PostgresQueryClient;
 
 export class PostgresStateRepository implements StateRepository {
-  constructor(private readonly db: DatabaseClient) {}
+  private readonly pool?: PostgresPool;
+
+  constructor(
+    private readonly db: DatabaseClient,
+    pool?: PostgresPool,
+  ) {
+    if (pool) {
+      this.pool = pool;
+    } else if (typeof (db as any).connect === "function") {
+      this.pool = db as unknown as PostgresPool;
+    }
+  }
 
   async createRun(run: RunRecord): Promise<void> {
     await this.db.query(
-      `INSERT INTO runs (id, status, goal, repository_path, budget_limits, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      `INSERT INTO runs (id, root_task_id, status, goal, repository_path, budget_limits, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
       [
         run.id,
+        run.rootTaskId ?? null,
         run.status,
         run.goal,
         run.repositoryPath ?? null,
@@ -71,6 +82,7 @@ export class PostgresStateRepository implements StateRepository {
         run.updatedAt,
       ],
     );
+    await this.setAccountingState(run.id, "ACTIVE");
   }
 
   async getRun(runId: RunId): Promise<RunRecord | null> {
@@ -82,6 +94,7 @@ export class PostgresStateRepository implements StateRepository {
     const r = res.rows[0];
     return {
       id: r.id,
+      rootTaskId: r.root_task_id ?? undefined,
       status: r.status as RunStatus,
       goal: r.goal,
       repositoryPath: r.repository_path ?? undefined,
@@ -89,6 +102,30 @@ export class PostgresStateRepository implements StateRepository {
       createdAt: new Date(r.created_at),
       updatedAt: new Date(r.updated_at),
     };
+  }
+
+  async getAccountingState(runId: RunId): Promise<{ state: RunAccountingState; reason?: string }> {
+    const res = await this.db.query(
+      `SELECT state, reason FROM run_accounting_state WHERE run_id = $1`,
+      [runId],
+    );
+    if (res.rows.length === 0) return { state: "ACTIVE" };
+    return {
+      state: res.rows[0].state as RunAccountingState,
+      reason: res.rows[0].reason ?? undefined,
+    };
+  }
+
+  async setAccountingState(runId: RunId, state: RunAccountingState, reason?: string): Promise<void> {
+    await this.db.query(
+      `INSERT INTO run_accounting_state (run_id, state, reason, updated_at)
+       VALUES ($1, $2, $3, NOW())
+       ON CONFLICT (run_id) DO UPDATE SET
+         state = EXCLUDED.state,
+         reason = EXCLUDED.reason,
+         updated_at = NOW()`,
+      [runId, state, reason ?? null],
+    );
   }
 
   async transitionRun(
@@ -358,18 +395,18 @@ export class PostgresStateRepository implements StateRepository {
            AND lease_expires_at < NOW()
        ),
        updated_retries AS (
-         UPDATE tasks t
-         SET status = 'RETRYING', lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL, attempt = t.attempt + 1, updated_at = NOW()
+         UPDATE tasks
+         SET status = 'RETRYING', lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL, attempt = tasks.attempt + 1, updated_at = NOW()
          FROM expired_candidates ec
-         WHERE t.id = ec.id AND ec.attempt + 1 < ec.max_attempts
-         RETURNING t.id, ec.status as old_status, ec.lease_owner as old_worker, ec.lease_token as old_token, ec.attempt as old_attempt, t.attempt as new_attempt
+         WHERE tasks.id = ec.id AND ec.attempt + 1 < ec.max_attempts
+         RETURNING tasks.id, ec.status as old_status, ec.lease_owner as old_worker, ec.lease_token as old_token, ec.attempt as old_attempt, tasks.attempt as new_attempt
        ),
        updated_failures AS (
-         UPDATE tasks t
+         UPDATE tasks
          SET status = 'FAILED', lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL, updated_at = NOW()
          FROM expired_candidates ec
-         WHERE t.id = ec.id AND ec.attempt + 1 >= ec.max_attempts
-         RETURNING t.id, ec.status as old_status, ec.lease_owner as old_worker, ec.lease_token as old_token, ec.attempt as old_attempt
+         WHERE tasks.id = ec.id AND ec.attempt + 1 >= ec.max_attempts
+         RETURNING tasks.id, ec.status as old_status, ec.lease_owner as old_worker, ec.lease_token as old_token, ec.attempt as old_attempt
        )
        SELECT id, old_status, old_worker, old_token, old_attempt, new_attempt, 'RETRYING' as new_status FROM updated_retries
        UNION ALL
@@ -405,12 +442,18 @@ export class PostgresStateRepository implements StateRepository {
   }
 
   async saveAntExecution(execution: AntExecution): Promise<void> {
+    const id = `${execution.antId}-${execution.taskId}-${execution.attempt}`;
     await this.db.query(
       `INSERT INTO ant_executions (
         id, ant_id, run_id, task_id, role, provider, model, attempt, status, started_at, finished_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+      ON CONFLICT (id) DO UPDATE SET
+        status = EXCLUDED.status,
+        finished_at = COALESCE(EXCLUDED.finished_at, ant_executions.finished_at),
+        provider = COALESCE(EXCLUDED.provider, ant_executions.provider),
+        model = COALESCE(EXCLUDED.model, ant_executions.model)`,
       [
-        `${execution.antId}-${execution.taskId}-${execution.attempt}`,
+        id,
         execution.antId,
         execution.runId,
         execution.taskId,
@@ -421,6 +464,26 @@ export class PostgresStateRepository implements StateRepository {
         execution.status,
         execution.startedAt,
         execution.finishedAt ?? null,
+      ],
+    );
+  }
+
+  async updateAntExecution(execution: Partial<AntExecution> & { antId: AntId; runId: RunId; taskId: TaskId; attempt: number }): Promise<void> {
+    const id = `${execution.antId}-${execution.taskId}-${execution.attempt}`;
+    await this.db.query(
+      `UPDATE ant_executions
+       SET
+         status = COALESCE($1, status),
+         finished_at = COALESCE($2, finished_at),
+         provider = COALESCE($3, provider),
+         model = COALESCE($4, model)
+       WHERE id = $5`,
+      [
+        execution.status ?? null,
+        execution.finishedAt ?? null,
+        execution.provider ?? null,
+        execution.model ?? null,
+        id,
       ],
     );
   }
@@ -559,9 +622,8 @@ export class PostgresStateRepository implements StateRepository {
       return { reserved: true, reservationId };
     };
 
-    // If db supports transaction execution via client checkout, wrap inside BEGIN...COMMIT
-    if ((this.db as any).pool && typeof (this.db as any).pool.connect === "function") {
-      const client = await (this.db as any).pool.connect();
+    if (this.pool) {
+      const client = await this.pool.connect();
       try {
         await client.query("BEGIN");
         const result = await executeReservation(client);
@@ -571,11 +633,17 @@ export class PostgresStateRepository implements StateRepository {
         await client.query("ROLLBACK");
         throw err;
       } finally {
-        if (typeof client.release === "function") client.release();
+        client.release();
       }
     }
 
-    return executeReservation(this.db);
+    if (process.env.NODE_ENV === "test") {
+      return executeReservation(this.db);
+    }
+
+    throw new ConfigurationError(
+      "PostgresStateRepository requires a transaction-capable connection pool for reserveBudget",
+    );
   }
 
   async reconcileBudget(
@@ -656,7 +724,7 @@ export class PostgresStateRepository implements StateRepository {
       `INSERT INTO operations (
         operation_id, id, run_id, task_id, ant_id, operation_type, tool_name, input_hash, status, lease_owner, owner, claim_token, lease_expires_at, created_at
       )
-      SELECT $1, $1, $2, $3, $4, $5, $5, $6, 'RUNNING', $7, $7, $8, $9, $10
+      SELECT $1, $1, $2, $3, $4, $5, $5, $6, 'RUNNING', $7, $7, $8, $9::timestamptz, $10::timestamptz
       FROM tasks
       WHERE tasks.id = $3
         AND tasks.run_id = $2

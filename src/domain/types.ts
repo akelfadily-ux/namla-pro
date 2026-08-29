@@ -86,6 +86,7 @@ export interface BudgetUsage {
 
 export interface RunRecord {
   id: RunId;
+  rootTaskId?: TaskId;
   status: RunStatus;
   goal: string;
   repositoryPath?: string;

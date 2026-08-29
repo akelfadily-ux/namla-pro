@@ -51,17 +51,27 @@ export class PolicyEngine {
     const reqRes = request.resource;
 
     // ABSOLUTE HUMAN-ONLY GIT POLICY DENY: evaluated BEFORE any permission match or wildcard '*'
-    const FORBIDDEN_GIT_OPS = ["pull", "merge", "rebase", "cherry-pick", "am", "git pull", "git merge", "git rebase", "git cherry-pick", "git am"];
     const isGitCapability = reqCap === "git" || reqCap.startsWith("git:") || reqCap.startsWith("tool:git") || reqCap === "shell" || reqCap.startsWith("shell.");
 
-    if (
-      isGitCapability &&
-      reqRes &&
-      FORBIDDEN_GIT_OPS.some((op) => reqRes.toLowerCase().includes(op))
-    ) {
-      throw new PermissionDeniedError(
-        `HUMAN-ONLY POLICY VIOLATION: Agent execution of '${reqRes}' is strictly forbidden`,
-      );
+    if (isGitCapability && reqRes) {
+      // Normalize whitespace and command separators
+      const normalizedRes = reqRes.toLowerCase().replace(/\s+/g, " ").trim();
+
+      // Parse shell command variants (e.g., "git merge", "git   merge", "git -c key=val merge", "/usr/bin/git merge", "env git merge")
+      const forbiddenGitSubcommands = ["pull", "merge", "rebase", "cherry-pick", "am"];
+
+      const containsForbiddenGitOp = forbiddenGitSubcommands.some((subcmd) => {
+        // Regex matching git command variants with arbitrary flags/options prior to subcommand
+        const gitPattern = new RegExp(`(?:^|[\\s;/&|])(?:(?:/usr/bin/|/usr/local/bin/|/bin/)?git|(?:env\\s+git))(?:\\s+-[^\\s]+)*\\s+${subcmd}(?:[\\s;/&|]|$)`);
+        const directSubcmdPattern = new RegExp(`(?:^|[\\s;/&|])${subcmd}(?:[\\s;/&|]|$)`);
+        return gitPattern.test(normalizedRes) || directSubcmdPattern.test(normalizedRes);
+      });
+
+      if (containsForbiddenGitOp) {
+        throw new PermissionDeniedError(
+          `HUMAN-ONLY POLICY VIOLATION: Agent execution of '${reqRes}' is strictly forbidden`,
+        );
+      }
     }
 
     const wildcard = policy.permissions.includes("*");

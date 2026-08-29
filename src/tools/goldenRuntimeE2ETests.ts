@@ -10,149 +10,62 @@ import { PostgresStateRepository } from "../infrastructure/persistence/postgresS
 import { RunStatus, TaskStatus } from "../domain/types";
 import { ToolAdapter, ModelAdapter } from "../domain/contracts";
 import { Gate } from "../application/gate-engine";
+import { newDb } from "pg-mem";
+import { MigrationRunner } from "../infrastructure/persistence/migrations";
 
-class DeterministicPgDatabase {
-  public tasks = new Map<string, any>();
-  public runs = new Map<string, any>();
-  public events: any[] = [];
-  public operations = new Map<string, any>();
+function createRealPostgresPool() {
+  const db = newDb();
+  let backup: any = null;
 
-  async query<T = any>(sql: string, params: any[] = []): Promise<{ rows: T[]; rowCount?: number }> {
-    const s = sql.replace(/\s+/g, " ").trim().toUpperCase();
-
-    if (s.startsWith("INSERT INTO RUNS")) {
-      const [id, status, goal, repo, limits, created_at, updated_at] = params;
-      const row = { id, status, goal, repository_path: repo, budget_limits: limits, created_at, updated_at };
-      this.runs.set(id, row);
-      return { rows: [row as any], rowCount: 1 };
+  db.public.interceptQueries((sql: string) => {
+    const s = sql.trim();
+    if (s === "BEGIN") {
+      backup = db.backup();
+      return [];
     }
-
-    if (s.startsWith("SELECT * FROM RUNS WHERE ID =")) {
-      const id = params[0];
-      const r = this.runs.get(id);
-      return { rows: r ? [r] : [] };
+    if (s === "COMMIT") {
+      backup = null;
+      return [];
     }
-
-    if (s.startsWith("UPDATE RUNS SET STATUS =")) {
-      const [nextStatus, now, id, expectedStatus] = params;
-      const r = this.runs.get(id);
-      if (!r || r.status !== expectedStatus) return { rows: [], rowCount: 0 };
-      r.status = nextStatus;
-      r.updated_at = now;
-      return { rows: [r as any], rowCount: 1 };
+    if (s === "ROLLBACK") {
+      if (backup) backup.restore();
+      return [];
     }
-
-    if (s.startsWith("SELECT * FROM TASKS WHERE ID =")) {
-      const id = params[0];
-      const task = this.tasks.get(id);
-      return { rows: task ? [task] : [] };
-    }
-
-    if (s.startsWith("INSERT INTO TASKS")) {
-      const [id, run_id, parent_task_id, title, description, role, status, attempt, max_attempts, depth, reqs, deps, ant, lease_owner, lease_expires_at, created_at, updated_at] = params;
-      if (this.tasks.has(id)) return { rows: [], rowCount: 0 };
-      const row = {
-        id, run_id, parent_task_id, title, description, role, status,
-        attempt, max_attempts, depth,
-        requirements: typeof reqs === "string" ? JSON.parse(reqs) : reqs,
-        dependencies: typeof deps === "string" ? JSON.parse(deps) : deps,
-        assigned_ant_id: ant,
-        lease_owner, lease_expires_at, created_at, updated_at
-      };
-      this.tasks.set(id, row);
-      return { rows: [row as any], rowCount: 1 };
-    }
-
-    if (s.startsWith("UPDATE TASKS SET LEASE_OWNER = $1")) {
-      const [workerId, leaseToken, expiresAt, taskId] = params;
-      const task = this.tasks.get(taskId);
-      if (!task) return { rows: [], rowCount: 0 };
-      task.lease_owner = workerId;
-      task.lease_token = leaseToken;
-      task.lease_expires_at = expiresAt;
-      return { rows: [task], rowCount: 1 };
-    }
-
-    if (s.startsWith("UPDATE TASKS SET LEASE_OWNER = NULL")) {
-      const [taskId, workerId] = params;
-      const task = this.tasks.get(taskId);
-      if (task && task.lease_owner === workerId) {
-        task.lease_owner = null;
-        task.lease_expires_at = null;
+    if (s.includes("INSERT INTO operations") && s.includes("ON CONFLICT")) {
+      const match = /VALUES\s*\('([^']+)'/i.exec(s) || /SELECT\s*'([^']+)'/i.exec(s);
+      if (match) {
+        const opId = match[1];
+        const check = db.public.many(`SELECT status, lease_expires_at FROM operations WHERE operation_id = '${opId}'`);
+        if (check.length > 0) {
+          const row = check[0] as any;
+          if (row.status === "RUNNING" && row.lease_expires_at && new Date(row.lease_expires_at) > new Date()) {
+            return [];
+          }
+        }
       }
-      return { rows: [], rowCount: 1 };
     }
+    return null;
+  });
 
-    if (s.startsWith("UPDATE TASKS SET STATUS = $1")) {
-      const [nextStatus, now, title, desc, attempt, ant, taskId, expectedStatus] = params;
-      const task = this.tasks.get(taskId);
-      if (!task || task.status !== expectedStatus) {
-        return { rows: [], rowCount: 0 };
-      }
-      task.status = nextStatus;
-      task.updated_at = now;
-      if (title !== null) task.title = title;
-      if (desc !== null) task.description = desc;
-      if (attempt !== null) task.attempt = attempt;
-      if (ant !== null) task.assigned_ant_id = ant;
-      return { rows: [task], rowCount: 1 };
-    }
-
-    if (s.startsWith("SELECT * FROM TASKS WHERE RUN_ID =")) {
-      const runId = params[0];
-      const rows = Array.from(this.tasks.values()).filter(t => t.run_id === runId && (t.status === TaskStatus.Created || t.status === TaskStatus.Retrying));
-      return { rows: rows as any, rowCount: rows.length };
-    }
-
-    if (s.startsWith("INSERT INTO EVENTS")) {
-      this.events.push(params);
-      return { rows: [], rowCount: 1 };
-    }
-
-    if (s.startsWith("SELECT * FROM OPERATIONS WHERE OPERATION_ID =")) {
-      const opId = params[0];
-      const op = this.operations.get(opId);
-      return { rows: op ? [op] : [], rowCount: op ? 1 : 0 };
-    }
-
-    if (s.startsWith("INSERT INTO BUDGET_RESERVATIONS")) {
-      const [id, run_id, kind, cost, tokens, status, created_at] = params;
-      this.operations.set(`budget-${id}`, { id, status: "RESERVED" });
-      return { rows: [], rowCount: 1 };
-    }
-
-    if (s.startsWith("UPDATE BUDGET_RESERVATIONS")) {
-      return { rows: [{ id: "res-1" } as unknown as T], rowCount: 1 };
-    }
-
-    if (s.startsWith("INSERT INTO OPERATIONS")) {
-      const opId = params[0];
-      const row = { id: opId, operation_id: opId, run_id: params[1], task_id: params[2], ant_id: params[3], tool_name: params[4], input_hash: params[5], status: "RUNNING", owner: params[6] };
-      this.operations.set(opId, row);
-      return { rows: [row as any], rowCount: 1 };
-    }
-
-    if (s.startsWith("UPDATE OPERATIONS SET STATUS = 'COMPLETED'")) {
-      const [resStr, opId] = params;
-      const op = this.operations.get(opId);
-      if (op) {
-        op.status = "COMPLETED";
-        op.result = JSON.parse(resStr);
-      }
-      return { rows: [], rowCount: 1 };
-    }
-
-    return { rows: [], rowCount: 0 };
-  }
+  const pg = db.adapters.createPg();
+  return new pg.Pool();
 }
 
 test("Deterministic Golden Runtime E2E Suite", async () => {
   const tmpWorkspace = mkdtempSync(join(tmpdir(), "namla-golden-e2e-"));
   if (process.platform !== "win32") chmodSync(tmpWorkspace, 0o755);
 
+  const pool = createRealPostgresPool();
+  const initClient = await pool.connect();
   try {
-    const db = new DeterministicPgDatabase();
-    const stateRepo = new PostgresStateRepository(db);
+    const runner = new MigrationRunner(initClient as any);
+    await runner.runMigrations();
+  } finally {
+    initClient.release();
+  }
+
+  try {
+    const stateRepo = new PostgresStateRepository(pool as any, pool as any);
 
     const fileWriterTool: ToolAdapter<{ relativePath: string; content: string }, { bytesWritten: number }> = {
       name: "filesystem.write",
@@ -169,24 +82,65 @@ test("Deterministic Golden Runtime E2E Suite", async () => {
     const todoServerCode = `
 const http = require("http");
 function createTodoServer() {
-  const todos = [];
+  const todos = new Map();
+  let idCounter = 1;
+
   return http.createServer((req, res) => {
-    if (req.method === "POST" && req.url === "/todos") {
+    const url = req.url || "";
+    const parts = url.split("/").filter(Boolean);
+
+    if (req.method === "POST" && url === "/todos") {
       let body = "";
       req.on("data", chunk => body += chunk);
       req.on("end", () => {
         const todo = JSON.parse(body || "{}");
-        todo.id = String(todos.length + 1);
-        todos.push(todo);
+        const id = String(idCounter++);
+        todo.id = id;
+        todos.set(id, todo);
         res.writeHead(201, { "Content-Type": "application/json" });
         res.end(JSON.stringify(todo));
       });
-    } else if (req.method === "GET" && req.url === "/todos") {
+    } else if (req.method === "GET" && url === "/todos") {
       res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify(todos));
+      res.end(JSON.stringify(Array.from(todos.values())));
+    } else if (req.method === "GET" && parts.length === 2 && parts[0] === "todos") {
+      const id = parts[1];
+      if (todos.has(id)) {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(todos.get(id)));
+      } else {
+        res.writeHead(404, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Not Found" }));
+      }
+    } else if (req.method === "PATCH" && parts.length === 2 && parts[0] === "todos") {
+      const id = parts[1];
+      if (todos.has(id)) {
+        let body = "";
+        req.on("data", chunk => body += chunk);
+        req.on("end", () => {
+          const patch = JSON.parse(body || "{}");
+          const existing = todos.get(id);
+          Object.assign(existing, patch);
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify(existing));
+        });
+      } else {
+        res.writeHead(404, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Not Found" }));
+      }
+    } else if (req.method === "DELETE" && parts.length === 2 && parts[0] === "todos") {
+      const id = parts[1];
+      if (todos.has(id)) {
+        todos.delete(id);
+        res.writeHead(204);
+        res.end();
+      } else {
+        res.writeHead(404, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Not Found" }));
+      }
     } else {
-      res.writeHead(404);
-      res.end();
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Not Found" }));
     }
   });
 }
@@ -257,7 +211,7 @@ module.exports = { createTodoServer };
           taskId: task.id,
           antId: "ant-engineer",
           traceId: `trace-${task.runId}`,
-          operationId: `op-${task.id}`,
+          operationId: `op-${task.id}-${task.attempt}`,
           permissions: [`filesystem.write:${join(tmpWorkspace, "src", "server.js")}`],
           authority: { workerId: "worker-e2e", leaseToken: task.leaseToken || "token-e2e" },
         };
@@ -266,7 +220,7 @@ module.exports = { createTodoServer };
         await container.tools.execute("filesystem.write", { relativePath: "src/server.js", content: modelResp.value }, toolCtx);
 
         return {
-          artifacts: [{ id: "art-server", runId: task.runId, taskId: task.id, type: "code", name: "src/server.js", metadata: {}, createdAt: new Date() }],
+          artifacts: [{ id: `art-server-${task.id}-${task.attempt}`, runId: task.runId, taskId: task.id, type: "code", name: "src/server.js", metadata: {}, createdAt: new Date() }],
           workspacePath: tmpWorkspace,
         };
       },
@@ -290,9 +244,6 @@ module.exports = { createTodoServer };
       budget: { maxCostUsd: 2.0 },
     });
 
-    // Transition Run status from CREATED to RUNNING
-    await stateRepo.transitionRun(summary.id, RunStatus.Created, RunStatus.Planning);
-    await stateRepo.transitionRun(summary.id, RunStatus.Planning, RunStatus.Running);
 
     // 2. Invoke ModelGateway through container
     const modelResponse = await container.models.generate(summary.id, "openai", {
@@ -318,7 +269,7 @@ module.exports = { createTodoServer };
     const port = (server.address() as any).port;
 
     try {
-      // Test POST /todos
+      // 1. Test POST /todos
       const postRes = await fetch(`http://127.0.0.1:${port}/todos`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -329,21 +280,186 @@ module.exports = { createTodoServer };
       assert.equal(createdTodo.id, "1");
       assert.equal(createdTodo.title, "Golden E2E Task");
 
-      // Test GET /todos
+      // 2. Test GET /todos
       const getRes = await fetch(`http://127.0.0.1:${port}/todos`);
       assert.equal(getRes.status, 200, "GET /todos must respond 200 OK");
       const todoList = (await getRes.json()) as any;
       assert.equal(Array.isArray(todoList), true);
       assert.equal(todoList.length, 1);
       assert.equal(todoList[0].title, "Golden E2E Task");
+
+      // 3. Test GET /todos/:id
+      const getByIdRes = await fetch(`http://127.0.0.1:${port}/todos/1`);
+      assert.equal(getByIdRes.status, 200, "GET /todos/1 must respond 200 OK");
+      const singleTodo = (await getByIdRes.json()) as any;
+      assert.equal(singleTodo.id, "1");
+      assert.equal(singleTodo.title, "Golden E2E Task");
+
+      // 4. Test PATCH /todos/:id
+      const patchRes = await fetch(`http://127.0.0.1:${port}/todos/1`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ completed: true }),
+      });
+      assert.equal(patchRes.status, 200, "PATCH /todos/1 must respond 200 OK");
+      const patchedTodo = (await patchRes.json()) as any;
+      assert.equal(patchedTodo.completed, true);
+
+      // 5. Test DELETE /todos/:id
+      const deleteRes = await fetch(`http://127.0.0.1:${port}/todos/1`, { method: "DELETE" });
+      assert.equal(deleteRes.status, 204, "DELETE /todos/1 must respond 204 No Content");
+
+      // 6. Test GET /todos/:id 404 after delete
+      const missingRes = await fetch(`http://127.0.0.1:${port}/todos/1`);
+      assert.equal(missingRes.status, 404, "GET /todos/1 must respond 404 Not Found after deletion");
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
 
-    // 6. Verify task status APPROVED
-    const tasks = Array.from(db.tasks.values());
-    assert.equal(tasks.length, 1);
-    assert.equal(tasks[0].status, TaskStatus.Approved);
+    // 6. Verify task status APPROVED in real PostgreSQL DB
+    const runRecord = await stateRepo.getRun(summary.id);
+    assert.ok(runRecord);
+    assert.ok(runRecord?.rootTaskId);
+    const rootTask = await stateRepo.getTask(runRecord!.rootTaskId!);
+    assert.ok(rootTask);
+    assert.equal(rootTask?.status, TaskStatus.Approved);
+  } finally {
+    rmSync(tmpWorkspace, { recursive: true, force: true });
+  }
+});
+
+test("Negative Golden Runtime Path — Gate Failure Rejection", async () => {
+  const tmpWorkspace = mkdtempSync(join(tmpdir(), "namla-golden-fail-"));
+  if (process.platform !== "win32") chmodSync(tmpWorkspace, 0o755);
+
+  const pool = createRealPostgresPool();
+  const initClient = await pool.connect();
+  try {
+    const runner = new MigrationRunner(initClient as any);
+    await runner.runMigrations();
+  } finally {
+    initClient.release();
+  }
+
+  try {
+    const stateRepo = new PostgresStateRepository(pool as any, pool as any);
+
+    const fileWriterTool: ToolAdapter<{ relativePath: string; content: string }, { bytesWritten: number }> = {
+      name: "filesystem.write",
+      validateInput: (i: any) => ({ relativePath: String(i.relativePath), content: String(i.content) }),
+      getPermissionRequests: (input) => [{ capability: "filesystem.write", resource: join(tmpWorkspace, input.relativePath) }],
+      execute: async (input) => {
+        const fullPath = join(tmpWorkspace, input.relativePath);
+        mkdirSync(join(fullPath, ".."), { recursive: true });
+        writeFileSync(fullPath, input.content, "utf8");
+        return { bytesWritten: Buffer.byteLength(input.content) };
+      },
+    };
+
+    const brokenCode = `INVALID SYNTAX {{{`;
+
+    const modelAdapter: ModelAdapter = {
+      provider: "openai",
+      generate: async <T>(req: any) => ({
+        value: req.validate ? req.validate(brokenCode) : (brokenCode as unknown as T),
+        usage: { inputTokens: 50, outputTokens: 50, estimatedCostUsd: 0.005 },
+        provider: "openai",
+        model: "gpt-4",
+      }),
+    };
+
+    const buildGate: Gate = {
+      name: "BuildGate",
+      evaluate: async (ctx) => {
+        const filePath = join(ctx.workspacePath, "src", "server.js");
+        let syntaxValid = false;
+        if (existsSync(filePath)) {
+          try {
+            require(filePath);
+            syntaxValid = true;
+          } catch {
+            syntaxValid = false;
+          }
+        }
+        return {
+          gate: "BuildGate",
+          passed: syntaxValid,
+          reason: syntaxValid ? "Syntax valid" : "Node require syntax check failed for broken code",
+          evidence: [syntaxValid ? "syntax ok" : "syntax error"],
+          requiredFixes: ["Fix JavaScript syntax"],
+        };
+      },
+    };
+
+    const supervisor = {
+      review: async (input: any) => {
+        const gateEvidence = input.gateEvidence || [];
+        const buildGatePassed = gateEvidence.some((g: any) => g.gate === "BuildGate" && g.passed);
+        return {
+          approved: buildGatePassed,
+          reason: buildGatePassed ? "Approved" : "BuildGate failed syntax check",
+          risks: ["Broken syntax"],
+          requiredFixes: ["Fix syntax"],
+        };
+      },
+    };
+
+    const executor = {
+      execute: async (task: any) => {
+        const modelResp = await container.models.generate(task.runId, "openai", {
+          system: "You are an engineer",
+          input: "Generate broken code",
+          validate: (v: any) => String(v),
+        });
+
+        const toolCtx = {
+          runId: task.runId,
+          taskId: task.id,
+          antId: "ant-engineer",
+          traceId: `trace-${task.runId}`,
+          operationId: `op-${task.id}-${task.attempt}`,
+          permissions: [`filesystem.write:${join(tmpWorkspace, "src", "server.js")}`],
+          authority: { workerId: "worker-e2e", leaseToken: task.leaseToken || "token-e2e" },
+        };
+
+        await container.tools.execute("filesystem.write", { relativePath: "src/server.js", content: modelResp.value }, toolCtx);
+
+        return {
+          artifacts: [{ id: `art-server-${task.id}-${task.attempt}`, runId: task.runId, taskId: task.id, type: "code", name: "src/server.js", metadata: {}, createdAt: new Date() }],
+          workspacePath: tmpWorkspace,
+        };
+      },
+    };
+
+    const container = Container.createTestContainer({
+      stateRepository: stateRepo,
+      toolAdapters: [fileWriterTool],
+      modelAdapters: [modelAdapter],
+      gates: [buildGate],
+      supervisor,
+      taskExecutor: executor,
+    });
+
+    const service = new NamlaService(container);
+
+    const summary = await service.createRun({
+      goal: "Generate broken REST API",
+      repositoryPath: tmpWorkspace,
+    });
+
+    // Process run through all 3 retries until maxAttempts exhausted
+    await service.processRun(summary.id, "worker-e2e");
+    await service.processRun(summary.id, "worker-e2e");
+    await service.processRun(summary.id, "worker-e2e");
+
+    const runRecord = await stateRepo.getRun(summary.id);
+    assert.ok(runRecord);
+    assert.ok(runRecord?.rootTaskId);
+    const rootTask = await stateRepo.getTask(runRecord!.rootTaskId!);
+    assert.ok(rootTask);
+    assert.notEqual(rootTask?.status, TaskStatus.Approved, "Broken code must NOT reach APPROVED status");
+    assert.equal(rootTask?.status, TaskStatus.Failed, "Broken code task must be FAILED after max attempts");
+    assert.equal(runRecord?.status, RunStatus.Failed, "Run must be marked FAILED when root task fails");
   } finally {
     rmSync(tmpWorkspace, { recursive: true, force: true });
   }

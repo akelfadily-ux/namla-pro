@@ -26,15 +26,24 @@ export class BudgetExceededError extends NamlaError {
   readonly retryable = false;
 }
 
+export enum ProviderBillingState {
+  UNBILLED_FAILURE = "UNBILLED_FAILURE",
+  BILLED_FAILURE = "BILLED_FAILURE",
+  UNKNOWN_BILLING_FAILURE = "UNKNOWN_BILLING_FAILURE",
+}
+
 export class ModelProviderError extends NamlaError {
   readonly code = "MODEL_PROVIDER_ERROR";
+  readonly billingState: ProviderBillingState;
 
   constructor(
     message: string,
     readonly retryable: boolean,
+    billingState = ProviderBillingState.UNKNOWN_BILLING_FAILURE,
     cause?: unknown,
   ) {
     super(message, cause);
+    this.billingState = billingState;
   }
 }
 

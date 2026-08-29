@@ -21,8 +21,8 @@ class MemoryDatabase {
     const s = sql.replace(/\s+/g, " ").trim().toUpperCase();
 
     if (s.startsWith("INSERT INTO RUNS")) {
-      const [id, status, goal, repo, limits, created_at, updated_at] = params;
-      const row = { id, status, goal, repository_path: repo, budget_limits: limits, created_at, updated_at };
+      const [id, root_task_id, status, goal, repo, limits, created_at, updated_at] = params;
+      const row = { id, root_task_id, status, goal, repository_path: repo, budget_limits: limits, created_at, updated_at };
       this.runs.set(id, row);
       return { rows: [row as any], rowCount: 1 };
     }
@@ -225,9 +225,6 @@ test("Real Isolated Workspace Golden Runtime E2E", async () => {
     assert.ok(runRecord);
     assert.equal(runRecord?.goal, "Build Todo REST API module");
 
-    // Transition Run status to PLANNING -> RUNNING for scheduler processing
-    await stateRepo.transitionRun(summary.id, RunStatus.Created, RunStatus.Planning);
-    await stateRepo.transitionRun(summary.id, RunStatus.Planning, RunStatus.Running);
 
     // 2. Process Run through Namla Loop in real workspace
     await service.processRun(summary.id, "worker-e2e");

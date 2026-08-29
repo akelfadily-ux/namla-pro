@@ -179,9 +179,6 @@ test("Golden E2E Software Task Execution", async () => {
   assert.match(summary.id, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
   assert.equal(summary.status, "CREATED");
 
-  // Transition Run status to PLANNING -> RUNNING for scheduler processing
-  await stateRepo.transitionRun(summary.id, RunStatus.Created, RunStatus.Planning);
-  await stateRepo.transitionRun(summary.id, RunStatus.Planning, RunStatus.Running);
 
   // 2. Process Run (Namla Loop: EXECUTE -> TEST -> VERIFY -> REVIEW -> APPROVE)
   await service.processRun(summary.id, "worker-1");

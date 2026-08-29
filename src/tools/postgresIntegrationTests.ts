@@ -14,8 +14,8 @@ class MockPgClient {
     const normalized = sql.replace(/\s+/g, " ").trim().toUpperCase();
 
     if (normalized.startsWith("INSERT INTO RUNS")) {
-      const [id, status, goal, repo, limits, created_at, updated_at] = params;
-      const row = { id, status, goal, repository_path: repo, budget_limits: limits, created_at, updated_at };
+      const [id, root_task_id, status, goal, repo, limits, created_at, updated_at] = params;
+      const row = { id, root_task_id, status, goal, repository_path: repo, budget_limits: limits, created_at, updated_at };
       this.rowsMap.set(`run:${id}`, [row]);
       return { rows: [row as any], rowCount: 1 };
     }

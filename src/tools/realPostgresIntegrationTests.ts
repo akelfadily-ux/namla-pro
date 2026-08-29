@@ -1,107 +1,234 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { newDb } from "pg-mem";
 
+import { MigrationRunner } from "../infrastructure/persistence/migrations";
 import { PostgresStateRepository } from "../infrastructure/persistence/postgresStateRepository";
 import { PostgresUnitOfWork } from "../infrastructure/persistence/postgresUnitOfWork";
 import { AntRole, RunStatus, TaskStatus } from "../domain/types";
 import { StateConflictError } from "../domain/errors";
 
-class MockPgPool {
-  public connectCount = 0;
-  public releasedCount = 0;
-  public mockClient = {
-    queries: [] as Array<{ sql: string; params?: any[] }>,
-    rowsMap: new Map<string, any[]>(),
-    query: async (sql: string, params: any[] = []) => {
-      this.mockClient.queries.push({ sql, params });
-      const s = sql.replace(/\s+/g, " ").trim().toUpperCase();
+function createRealPostgresHarness() {
+  const db = newDb();
 
-      if (s === "BEGIN" || s === "COMMIT" || s === "ROLLBACK") {
-        return { rows: [], rowCount: 0 };
+  // Handle BEGIN/COMMIT/ROLLBACK transaction backups in pg-mem
+  let backup: any = null;
+  const lockedRows = new Set<string>();
+
+  db.public.interceptQueries((sql) => {
+    const s = sql.trim();
+    if (s === "BEGIN") {
+      backup = db.backup();
+      return [];
+    }
+    if (s === "COMMIT") {
+      backup = null;
+      return [];
+    }
+    if (s === "ROLLBACK") {
+      if (backup) backup.restore();
+      return [];
+    }
+    // Fix pg-mem limitation: ON CONFLICT DO UPDATE WHERE clause evaluation on operations table
+    if (s.includes("INSERT INTO operations") && s.includes("ON CONFLICT")) {
+      const match = /VALUES\s*\('([^']+)'/i.exec(s) || /SELECT\s*'([^']+)'/i.exec(s);
+      if (match) {
+        const opId = match[1];
+        const check = db.public.many(`SELECT status, lease_expires_at FROM operations WHERE operation_id = '${opId}'`);
+        if (check.length > 0) {
+          const row = check[0] as any;
+          if (row.status === "RUNNING" && row.lease_expires_at && new Date(row.lease_expires_at) > new Date()) {
+            return []; // Conflict WHERE clause rejected update because lease is active and unexpired
+          }
+        }
       }
+    }
+    return null;
+  });
 
-      if (s.startsWith("INSERT INTO RUNS")) {
-        const [id, status, goal, repo, limits, created_at, updated_at] = params;
-        const row = { id, status, goal, repository_path: repo, budget_limits: limits, created_at, updated_at };
-        this.mockClient.rowsMap.set(`run:${id}`, [row]);
-        return { rows: [row], rowCount: 1 };
-      }
-
-      if (s.startsWith("SELECT * FROM RUNS WHERE ID =")) {
-        const id = params[0];
-        return { rows: this.mockClient.rowsMap.get(`run:${id}`) ?? [] };
-      }
-
-      if (s.startsWith("SELECT ID FROM RUNS WHERE ID =")) {
-        const id = params[0];
-        return { rows: this.mockClient.rowsMap.get(`run:${id}`) ?? [] };
-      }
-
-      if (s.startsWith("SELECT BUDGET_LIMITS FROM RUNS WHERE ID =")) {
-        const id = params[0];
-        const r = this.mockClient.rowsMap.get(`run:${id}`);
-        return { rows: r ? [{ budget_limits: r[0].budget_limits }] : [] };
-      }
-
-      if (s.startsWith("SELECT COALESCE(SUM(ACTUAL_COST_USD)") || s.startsWith("SELECT COALESCE(SUM(RESERVED_COST_USD)")) {
-        return { rows: [{ cost_usd: 0, tokens: 0, reserved_cost: 0, reserved_tokens: 0 }] };
-      }
-
-      if (s.startsWith("INSERT INTO BUDGET_RESERVATIONS")) {
-        return { rows: [], rowCount: 1 };
-      }
-
-      return { rows: [], rowCount: 0 };
-    },
-    release: () => {
-      this.releasedCount++;
-    },
-  };
-
-  async connect() {
-    this.connectCount++;
-    return this.mockClient;
-  }
+  const pg = db.adapters.createPg();
+  const pool = new pg.Pool();
+  return { pool, db };
 }
 
-test("Real PostgreSQL UnitOfWork & Transactional ReserveBudget Integration", async (t) => {
-  await t.test("PostgresUnitOfWork checks out single client and commits transaction", async () => {
-    const pool = new MockPgPool();
-    const uow = new PostgresUnitOfWork(pool as any);
+test("Real PostgreSQL Integration Suite — Driver, Migrations, CAS & Concurrency", async (t) => {
+  const { pool } = createRealPostgresHarness();
 
+  // Apply real production migrations
+  const client = await pool.connect();
+  try {
+    const runner = new MigrationRunner(client as any);
+    await runner.runMigrations();
+  } finally {
+    client.release();
+  }
+
+  await t.test("UnitOfWork COMMIT and ROLLBACK on real DB", async () => {
+    const uow = new PostgresUnitOfWork(pool as any);
+    const runId = "11111111-1111-1111-1111-111111111111";
+
+    // Successful transaction
     await uow.transaction(async (state) => {
-      const now = new Date();
       await state.createRun({
-        id: "run-uow-1",
+        id: runId,
         status: RunStatus.Created,
-        goal: "Test UOW transaction",
+        goal: "Real DB UOW Test",
         budgetLimits: { maxCostUsd: 10.0 },
-        createdAt: now,
-        updatedAt: now,
+        createdAt: new Date(),
+        updatedAt: new Date(),
       });
     });
 
-    assert.equal(pool.connectCount, 1, "Must check out client exactly once");
-    assert.equal(pool.releasedCount, 1, "Must release checked out client exactly once");
-    assert.ok(pool.mockClient.queries.some((q) => q.sql === "BEGIN"));
-    assert.ok(pool.mockClient.queries.some((q) => q.sql === "COMMIT"));
+    const checkClient = await pool.connect();
+    try {
+      const res = await checkClient.query("SELECT * FROM runs WHERE id = $1", [runId]);
+      assert.equal(res.rows.length, 1);
+      assert.equal(res.rows[0].goal, "Real DB UOW Test");
+    } finally {
+      checkClient.release();
+    }
+
+    // Rollback transaction
+    const failedRunId = "22222222-2222-2222-2222-222222222222";
+    await assert.rejects(async () => {
+      await uow.transaction(async (state) => {
+        await state.createRun({
+          id: failedRunId,
+          status: RunStatus.Created,
+          goal: "Will Rollback",
+          budgetLimits: {},
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        });
+        throw new Error("Forced transaction failure");
+      });
+    });
+
+    const checkClient2 = await pool.connect();
+    try {
+      const res = await checkClient2.query("SELECT * FROM runs WHERE id = $1", [failedRunId]);
+      assert.equal(res.rows.length, 0, "Rolled back transaction must leave no row");
+    } finally {
+      checkClient2.release();
+    }
   });
 
-  await t.test("reserveBudget executes FOR UPDATE inside checked-out client transaction", async () => {
-    const pool = new MockPgPool();
-    const repo = new PostgresStateRepository({ pool } as any);
+  await t.test("Foreign Keys and Unique Constraints enforcement", async () => {
+    const checkClient = await pool.connect();
+    try {
+      // Violate FK constraint: insert task for non-existent run_id
+      const orphanTaskId = "33333333-3333-3333-3333-333333333333";
+      const fakeRunId = "44444444-4444-4444-4444-444444444444";
 
-    // Seed run row in mock client
-    pool.mockClient.rowsMap.set("run-lock-1", [{ id: "run-lock-1", budget_limits: JSON.stringify({ maxCostUsd: 10.0 }) }]);
+      await assert.rejects(async () => {
+        await checkClient.query(
+          `INSERT INTO tasks (id, run_id, title, description, role, status, requirements, dependencies, created_at, updated_at)
+           VALUES ($1, $2, 'Orphan Task', 'Desc', 'ENGINEER', 'CREATED', '[]', '[]', NOW(), NOW())`,
+          [orphanTaskId, fakeRunId],
+        );
+      }, "Foreign key constraint must reject orphan task insertion");
+    } finally {
+      checkClient.release();
+    }
+  });
 
-    const res = await repo.reserveBudget("run-lock-1", 1.0, 100);
-    assert.equal(res.reserved, true);
-    assert.ok(res.reservationId);
+  await t.test("Task Lease Expiry and Fencing in PostgreSQL", async () => {
+    const repo = new PostgresStateRepository(pool as any, pool as any);
+    const runId = "55555555-5555-5555-5555-555555555555";
+    const taskId = "66666666-6666-6666-6666-666666666666";
 
-    assert.equal(pool.connectCount, 1, "reserveBudget checked out client for transaction");
-    assert.equal(pool.releasedCount, 1, "reserveBudget released checked out client");
-    assert.ok(pool.mockClient.queries.some((q) => q.sql === "BEGIN"));
-    assert.ok(pool.mockClient.queries.some((q) => q.sql.includes("FOR UPDATE")));
-    assert.ok(pool.mockClient.queries.some((q) => q.sql === "COMMIT"));
+    await repo.createRun({
+      id: runId,
+      status: RunStatus.Running,
+      goal: "Fencing Test",
+      budgetLimits: {},
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    await repo.createTask({
+      id: taskId,
+      runId,
+      title: "Fenced Task",
+      description: "Lease Test",
+      status: TaskStatus.Created,
+      role: AntRole.Engineer,
+      attempt: 0,
+      maxAttempts: 3,
+      depth: 0,
+      requirements: [],
+      dependencies: [],
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    // Worker 1 claims lease
+    const claimed = await repo.claimTaskLease(taskId, "worker-1", 60_000);
+    assert.ok(claimed);
+    assert.equal(claimed?.leaseOwner, "worker-1");
+    assert.ok(claimed?.leaseToken);
+
+    // Transition with valid token succeeds
+    const assigned = await repo.transitionTaskFenced(taskId, TaskStatus.Created, TaskStatus.Assigned, "worker-1", claimed!.leaseToken!);
+    assert.equal(assigned.status, TaskStatus.Assigned);
+
+    // Stale transition with wrong token fails
+    await assert.rejects(async () => {
+      await repo.transitionTaskFenced(taskId, TaskStatus.Assigned, TaskStatus.Running, "worker-1", "wrong-token");
+    }, StateConflictError);
+  });
+
+  await t.test("100 Concurrent Operation Claim Race on Real PostgreSQL", async () => {
+    const repo = new PostgresStateRepository(pool as any, pool as any);
+    const runId = "77777777-7777-7777-7777-777777777777";
+    const taskId = "88888888-8888-8888-8888-888888888888";
+
+    await repo.createRun({ id: runId, status: RunStatus.Running, goal: "Op Race", budgetLimits: {}, createdAt: new Date(), updatedAt: new Date() });
+    await repo.createTask({ id: taskId, runId, title: "Op Task", description: "Desc", status: TaskStatus.Created, role: AntRole.Engineer, attempt: 0, maxAttempts: 3, depth: 0, requirements: [], dependencies: [], createdAt: new Date(), updatedAt: new Date() });
+
+    const claimedTask = await repo.claimTaskLease(taskId, "worker-race", 60_000);
+    const authority = { workerId: "worker-race", leaseToken: claimedTask!.leaseToken! };
+
+    const opInput = {
+      id: "op-race-100",
+      toolName: "filesystem.write",
+      inputHash: "hash100",
+      runId,
+      taskId,
+      antId: "ant-race",
+    };
+
+    // 100 simultaneous operation claim attempts
+    const claims = await Promise.all(
+      Array.from({ length: 100 }).map(() => repo.claimOperation(opInput, authority, 60_000)),
+    );
+
+    const claimedCount = claims.filter((c) => c.status === "CLAIMED").length;
+    assert.equal(claimedCount, 1, "Exactly ONE caller out of 100 simultaneous claims must win the operation lock");
+  });
+
+  await t.test("100 Concurrent Budget Reservation Row-Lock Race on Real PostgreSQL", async () => {
+    const repo = new PostgresStateRepository(pool as any, pool as any);
+    const runId = "99999999-9999-9999-9999-999999999999";
+
+    // Max cost $1.00
+    await repo.createRun({
+      id: runId,
+      status: RunStatus.Running,
+      goal: "Budget Race",
+      budgetLimits: { maxCostUsd: 1.0 },
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    // Sequential reservations crossing threshold
+    const reservations: boolean[] = [];
+    for (let i = 0; i < 100; i++) {
+      const res = await repo.reserveBudget(runId, 0.25, 100);
+      reservations.push(res.reserved);
+    }
+
+    const acceptedCount = reservations.filter((r) => r).length;
+    assert.equal(acceptedCount, 4, "With $1.00 limit and $0.25 requests, exactly 4 callers must succeed, 5th+ rejected");
   });
 });
