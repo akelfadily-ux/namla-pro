@@ -116,3 +116,6 @@ CREATE TABLE IF NOT EXISTS run_accounting_state (
   reason TEXT,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+ALTER TABLE runs DROP CONSTRAINT IF EXISTS fk_runs_root_task;
+ALTER TABLE runs ADD CONSTRAINT fk_runs_root_task FOREIGN KEY (root_task_id) REFERENCES tasks(id) ON DELETE SET NULL;

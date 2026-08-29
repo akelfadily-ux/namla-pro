@@ -55,10 +55,12 @@ export class Container {
   }
 
   static createPostgresContainer(
-    pool: PgPoolLike,
-    config: Omit<ContainerConfig, "unitOfWork">,
+    pool: import("../domain/contracts").PostgresPool,
+    config: Omit<ContainerConfig, "unitOfWork" | "stateRepository"> & { stateRepository?: StateRepository },
   ): Container {
-    const unitOfWork = new PostgresUnitOfWork(pool);
-    return new Container({ ...config, unitOfWork });
+    const { PostgresStateRepository } = require("../infrastructure/persistence/postgresStateRepository");
+    const stateRepository = config.stateRepository ?? new PostgresStateRepository(pool, pool);
+    const unitOfWork = new PostgresUnitOfWork(pool as any);
+    return new Container({ ...config, stateRepository, unitOfWork });
   }
 }

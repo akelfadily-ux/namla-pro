@@ -71,10 +71,16 @@ export class NamlaService {
       updatedAt: now,
     };
 
-    // Execute run, initial task, and event creation atomically inside UnitOfWork transaction
+    // Execute task creation first, then run record with rootTaskId to satisfy FK constraints
     await this.container.unitOfWork.transaction(async (txState) => {
-      await txState.createRun(runRecord);
+      // 1. Create run without rootTaskId first
+      await txState.createRun({ ...runRecord, rootTaskId: undefined });
+      // 2. Create initial task
       await txState.createTask(initialTask);
+      // 3. Update run with rootTaskId
+      if (typeof (txState as any).db?.query === "function") {
+        await (txState as any).db.query("UPDATE runs SET root_task_id = $1 WHERE id = $2", [initialTaskId, runId]);
+      }
       await txState.appendEvent({
         type: "run.created",
         runId,
@@ -89,6 +95,15 @@ export class NamlaService {
       id: runId,
       status: RunStatus.Created,
     };
+  }
+
+  async recoverAccountingState(runId: string): Promise<{ recovered: boolean }> {
+    if (typeof this.container.state.recoverAccountingState === "function") {
+      const res = await this.container.state.recoverAccountingState(runId);
+      return { recovered: res.recovered };
+    }
+    await this.container.state.setAccountingState(runId, "ACTIVE", "Recovered by NamlaService");
+    return { recovered: true };
   }
 
   async processRun(runId: string, workerId = "worker-1"): Promise<void> {
@@ -147,16 +162,37 @@ export class NamlaService {
       }
     }
 
-    // Evaluate full task graph completion
+    // Authoritative full task graph completion evaluation
     const updatedRun = await this.container.state.getRun(runId);
     if (updatedRun && updatedRun.status === RunStatus.Running) {
-      const rootTaskId = updatedRun.rootTaskId ?? runId;
-      const rootTask = await this.container.state.getTask(rootTaskId);
+      const allTasks = await this.container.state.listTasksForRun(runId);
 
       const accState = await this.container.state.getAccountingState(runId);
       const isAccountingBlocked = accState.state !== "ACTIVE";
 
-      if (rootTask?.status === TaskStatus.Approved && !isAccountingBlocked) {
+      const hasFailedOrBlocked = allTasks.some(
+        (t) => t.status === TaskStatus.Failed || t.status === TaskStatus.Blocked || t.status === TaskStatus.Cancelled,
+      );
+
+      const allApproved =
+        allTasks.length > 0 &&
+        allTasks.every((t) => t.status === TaskStatus.Approved);
+
+      if (isAccountingBlocked || hasFailedOrBlocked) {
+        await this.container.state.transitionRun(runId, RunStatus.Running, RunStatus.Failed);
+        await this.container.state.appendEvent({
+          type: "run.failed",
+          runId,
+          traceId: `trace-${runId}`,
+          timestamp: new Date(),
+          payload: {
+            goal: updatedRun.goal,
+            reason: isAccountingBlocked
+              ? `Accounting hold: ${accState.reason}`
+              : "One or more tasks in DAG failed/blocked",
+          },
+        });
+      } else if (allApproved) {
         await this.container.state.transitionRun(runId, RunStatus.Running, RunStatus.Completed);
         await this.container.state.appendEvent({
           type: "run.completed",
@@ -164,15 +200,6 @@ export class NamlaService {
           traceId: `trace-${runId}`,
           timestamp: new Date(),
           payload: { goal: updatedRun.goal },
-        });
-      } else if (rootTask?.status === TaskStatus.Failed || isAccountingBlocked) {
-        await this.container.state.transitionRun(runId, RunStatus.Running, RunStatus.Failed);
-        await this.container.state.appendEvent({
-          type: "run.failed",
-          runId,
-          traceId: `trace-${runId}`,
-          timestamp: new Date(),
-          payload: { goal: updatedRun.goal, reason: isAccountingBlocked ? `Accounting hold: ${accState.reason}` : "Root task failed" },
         });
       }
     }

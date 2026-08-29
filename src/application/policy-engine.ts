@@ -1,9 +1,9 @@
 import { relative, isAbsolute, resolve } from "path";
 import { realpathSync, existsSync } from "fs";
 import { PermissionDeniedError } from "../domain/errors";
-import { PermissionRequest } from "../domain/types";
+import { PermissionRequest, GitOperation } from "../domain/types";
 
-export { PermissionRequest };
+export { PermissionRequest, GitOperation };
 
 export interface AntPolicy {
   permissions: readonly string[];
@@ -43,10 +43,23 @@ export function canonicalizePath(targetPath: string): string {
 }
 
 export class PolicyEngine {
+  authorizeGitOperation(operation: GitOperation): void {
+    if (operation.kind === "forbidden") {
+      throw new PermissionDeniedError(
+        `HUMAN-ONLY POLICY VIOLATION: Agent execution of Git operation '${operation.action}' is strictly forbidden`,
+      );
+    }
+  }
+
   authorize(
     policy: AntPolicy,
     request: PermissionRequest,
+    gitOp?: GitOperation,
   ): void {
+    if (gitOp) {
+      this.authorizeGitOperation(gitOp);
+    }
+
     const reqCap = request.capability;
     const reqRes = request.resource;
 

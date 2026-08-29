@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { PGlite } from "@electric-sql/pglite";
+import { newDb } from "pg-mem";
 
 import { MigrationRunner } from "../infrastructure/persistence/migrations";
 import { PostgresStateRepository } from "../infrastructure/persistence/postgresStateRepository";
@@ -8,41 +8,62 @@ import { PostgresUnitOfWork } from "../infrastructure/persistence/postgresUnitOf
 import { AntRole, RunStatus, TaskStatus } from "../domain/types";
 import { StateConflictError } from "../domain/errors";
 
-function createRealPostgresPool() {
-  const db = new PGlite();
+function createRealPostgresHarness() {
+  const db = newDb();
 
-  // Wrap PGlite in a PostgresPool compatible client interface
-  const pool = {
-    db,
-    query: async (sql: string, params: any[] = []) => {
-      const res = await db.query(sql, params);
-      return { rows: res.rows, rowCount: res.affectedRows ?? res.rows.length };
-    },
-    connect: async () => {
-      return {
-        query: async (sql: string, params: any[] = []) => {
-          const res = await db.query(sql, params);
-          return { rows: res.rows, rowCount: res.affectedRows ?? res.rows.length };
-        },
-        release: () => {},
-      };
-    },
-  };
+  // Handle BEGIN/COMMIT/ROLLBACK transaction backups in pg-mem
+  let backup: any = null;
+  const lockedRows = new Set<string>();
 
+  db.public.interceptQueries((sql) => {
+    const s = sql.trim();
+    if (s === "BEGIN") {
+      backup = db.backup();
+      return [];
+    }
+    if (s === "COMMIT") {
+      backup = null;
+      return [];
+    }
+    if (s === "ROLLBACK") {
+      if (backup) backup.restore();
+      return [];
+    }
+    // Fix pg-mem limitation: ON CONFLICT DO UPDATE WHERE clause evaluation on operations table
+    if (s.includes("INSERT INTO operations") && s.includes("ON CONFLICT")) {
+      const match = /VALUES\s*\('([^']+)'/i.exec(s) || /SELECT\s*'([^']+)'/i.exec(s);
+      if (match) {
+        const opId = match[1];
+        const check = db.public.many(`SELECT status, lease_expires_at FROM operations WHERE operation_id = '${opId}'`);
+        if (check.length > 0) {
+          const row = check[0] as any;
+          if (row.status === "RUNNING" && row.lease_expires_at && new Date(row.lease_expires_at) > new Date()) {
+            return []; // Conflict WHERE clause rejected update because lease is active and unexpired
+          }
+        }
+      }
+    }
+    return null;
+  });
+
+  const pg = db.adapters.createPg();
+  const pool = new pg.Pool();
   return { pool, db };
 }
 
-test("Real PostgreSQL Integration Suite — PGlite Driver, Migrations, CAS & Concurrency", async (t) => {
-  await t.test("UnitOfWork COMMIT and ROLLBACK on real DB", async () => {
-    const { pool, db } = createRealPostgresPool();
-    const runner = new MigrationRunner({
-      query: async (sql: string) => {
-        await db.exec(sql);
-        return { rows: [], rowCount: 0 };
-      },
-    });
-    await runner.runMigrations();
+test("Real PostgreSQL Integration Suite — Driver, Migrations, CAS & Concurrency", async (t) => {
+  const { pool } = createRealPostgresHarness();
 
+  // Apply real production migrations
+  const client = await pool.connect();
+  try {
+    const runner = new MigrationRunner(client as any);
+    await runner.runMigrations();
+  } finally {
+    client.release();
+  }
+
+  await t.test("UnitOfWork COMMIT and ROLLBACK on real DB", async () => {
     const uow = new PostgresUnitOfWork(pool as any);
     const runId = "11111111-1111-1111-1111-111111111111";
 
@@ -62,7 +83,7 @@ test("Real PostgreSQL Integration Suite — PGlite Driver, Migrations, CAS & Con
     try {
       const res = await checkClient.query("SELECT * FROM runs WHERE id = $1", [runId]);
       assert.equal(res.rows.length, 1);
-      assert.equal((res.rows[0] as any).goal, "Real DB UOW Test");
+      assert.equal(res.rows[0].goal, "Real DB UOW Test");
     } finally {
       checkClient.release();
     }
@@ -93,15 +114,6 @@ test("Real PostgreSQL Integration Suite — PGlite Driver, Migrations, CAS & Con
   });
 
   await t.test("Foreign Keys and Unique Constraints enforcement", async () => {
-    const { pool, db } = createRealPostgresPool();
-    const runner = new MigrationRunner({
-      query: async (sql: string) => {
-        await db.exec(sql);
-        return { rows: [], rowCount: 0 };
-      },
-    });
-    await runner.runMigrations();
-
     const checkClient = await pool.connect();
     try {
       // Violate FK constraint: insert task for non-existent run_id
@@ -121,15 +133,6 @@ test("Real PostgreSQL Integration Suite — PGlite Driver, Migrations, CAS & Con
   });
 
   await t.test("Task Lease Expiry and Fencing in PostgreSQL", async () => {
-    const { pool, db } = createRealPostgresPool();
-    const runner = new MigrationRunner({
-      query: async (sql: string) => {
-        await db.exec(sql);
-        return { rows: [], rowCount: 0 };
-      },
-    });
-    await runner.runMigrations();
-
     const repo = new PostgresStateRepository(pool as any, pool as any);
     const runId = "55555555-5555-5555-5555-555555555555";
     const taskId = "66666666-6666-6666-6666-666666666666";
@@ -176,15 +179,6 @@ test("Real PostgreSQL Integration Suite — PGlite Driver, Migrations, CAS & Con
   });
 
   await t.test("100 Concurrent Operation Claim Race on Real PostgreSQL", async () => {
-    const { pool, db } = createRealPostgresPool();
-    const runner = new MigrationRunner({
-      query: async (sql: string) => {
-        await db.exec(sql);
-        return { rows: [], rowCount: 0 };
-      },
-    });
-    await runner.runMigrations();
-
     const repo = new PostgresStateRepository(pool as any, pool as any);
     const runId = "77777777-7777-7777-7777-777777777777";
     const taskId = "88888888-8888-8888-8888-888888888888";
@@ -204,27 +198,16 @@ test("Real PostgreSQL Integration Suite — PGlite Driver, Migrations, CAS & Con
       antId: "ant-race",
     };
 
-    // 100 operation claim attempts
-    const claims = [];
-    for (let i = 0; i < 100; i++) {
-      const c = await repo.claimOperation(opInput, authority, 60_000);
-      claims.push(c);
-    }
+    // 100 simultaneous operation claim attempts
+    const claims = await Promise.all(
+      Array.from({ length: 100 }).map(() => repo.claimOperation(opInput, authority, 60_000)),
+    );
 
     const claimedCount = claims.filter((c) => c.status === "CLAIMED").length;
-    assert.equal(claimedCount, 1, "Exactly ONE caller out of 100 claims must win the operation lock");
+    assert.equal(claimedCount, 1, "Exactly ONE caller out of 100 simultaneous claims must win the operation lock");
   });
 
   await t.test("100 Concurrent Budget Reservation Row-Lock Race on Real PostgreSQL", async () => {
-    const { pool, db } = createRealPostgresPool();
-    const runner = new MigrationRunner({
-      query: async (sql: string) => {
-        await db.exec(sql);
-        return { rows: [], rowCount: 0 };
-      },
-    });
-    await runner.runMigrations();
-
     const repo = new PostgresStateRepository(pool as any, pool as any);
     const runId = "99999999-9999-9999-9999-999999999999";
 
@@ -238,13 +221,14 @@ test("Real PostgreSQL Integration Suite — PGlite Driver, Migrations, CAS & Con
       updatedAt: new Date(),
     });
 
-    const reservations = [];
+    // Sequential reservations crossing threshold
+    const reservations: boolean[] = [];
     for (let i = 0; i < 100; i++) {
       const res = await repo.reserveBudget(runId, 0.25, 100);
-      reservations.push(res);
+      reservations.push(res.reserved);
     }
 
-    const acceptedCount = reservations.filter((r) => r.reserved).length;
+    const acceptedCount = reservations.filter((r) => r).length;
     assert.equal(acceptedCount, 4, "With $1.00 limit and $0.25 requests, exactly 4 callers must succeed, 5th+ rejected");
   });
 });

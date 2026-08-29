@@ -7,7 +7,7 @@
   "type": "commonjs",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "build": "tsc",
+    "build": "tsc && node -e \"require('fs').mkdirSync('dist/infrastructure/persistence/migrations', { recursive: true }); require('fs').copyFileSync('src/infrastructure/persistence/migrations/001_initial_schema.sql', 'dist/infrastructure/persistence/migrations/001_initial_schema.sql');\"",
     "demo": "node dist/tools/reviewerDemo.js",
     "test": "node dist/tools/p0SecurityRunner.js",
     "test:golden": "node dist/examples/demoGoldenOutputs.js",
@@ -31,6 +31,7 @@
     "typescript": "^5.4.0"
   },
   "dependencies": {
+    "@electric-sql/pglite": "^0.5.8",
     "@types/pg": "^8.23.1",
     "pg": "^8.23.0",
     "pg-mem": "^3.0.14"

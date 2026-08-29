@@ -128,6 +128,34 @@ export class PostgresStateRepository implements StateRepository {
     );
   }
 
+  async recoverAccountingState(runId: RunId): Promise<{ recovered: boolean; previousState: RunAccountingState }> {
+    const current = await this.getAccountingState(runId);
+    if (current.state === "ACTIVE") {
+      return { recovered: false, previousState: "ACTIVE" };
+    }
+
+    // Reconcile pending/unreconciled budget reservations for this run
+    await this.db.query(
+      `UPDATE budget_reservations
+       SET status = 'RECONCILED', actual_cost_usd = reserved_cost_usd, actual_tokens = reserved_tokens, reconciled_at = NOW()
+       WHERE run_id = $1 AND status = 'RESERVED'`,
+      [runId],
+    );
+
+    // Transition accounting safety state back to ACTIVE
+    await this.setAccountingState(runId, "ACTIVE", "Durable accounting recovery performed");
+
+    await this.appendEvent({
+      type: "accounting.recovered",
+      runId,
+      traceId: `trace-${runId}`,
+      timestamp: new Date(),
+      payload: { previousState: current.state, reason: current.reason },
+    });
+
+    return { recovered: true, previousState: current.state };
+  }
+
   async transitionRun(
     runId: RunId,
     expectedStatus: RunStatus,
@@ -311,6 +339,14 @@ export class PostgresStateRepository implements StateRepository {
       [runId, TaskStatus.Created, TaskStatus.Retrying],
     );
 
+    return res.rows.map((r) => this.mapTaskRow(r));
+  }
+
+  async listTasksForRun(runId: RunId): Promise<TaskRecord[]> {
+    const res = await this.db.query<PostgresTaskRow>(
+      `SELECT * FROM tasks WHERE run_id = $1`,
+      [runId],
+    );
     return res.rows.map((r) => this.mapTaskRow(r));
   }
 

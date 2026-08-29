@@ -157,6 +157,8 @@ test("Application Core Components Unit Tests", async (t) => {
       runId: "run-1",
       title: "Test Task",
       status: TaskStatus.Assigned,
+      role: AntRole.Engineer,
+      assignedAntId: "ant-engineer-1",
       attempt: 0,
       maxAttempts: 3,
     });

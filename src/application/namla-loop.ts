@@ -58,6 +58,9 @@ export class NamlaLoop {
         if (heartbeatTimer) clearInterval(heartbeatTimer);
       }
     }, 10_000);
+    if (heartbeatTimer && typeof heartbeatTimer.unref === "function") {
+      heartbeatTimer.unref();
+    }
 
     if (task.status === TaskStatus.Assigned) {
       task = await this.state.transitionTaskFenced(
@@ -69,9 +72,14 @@ export class NamlaLoop {
       );
     }
 
+    const logicalAntId = task.assignedAntId ?? (task.role ? `ant-${String(task.role).toLowerCase()}` : null);
+    if (!logicalAntId) {
+      throw new Error(`Execution error: Task ${task.id} requires an assigned Ant or AntRole identity`);
+    }
+
     const executionStartTime = new Date();
     await this.state.saveAntExecution({
-      antId: task.assignedAntId || (task.role ? `ant-${String(task.role).toLowerCase()}` : "ant-worker"),
+      antId: logicalAntId,
       runId: task.runId,
       taskId: task.id,
       role: task.role,
@@ -95,17 +103,17 @@ export class NamlaLoop {
         throw new Error(`Worker lease lost during execution for task ${task.id}`);
       }
 
-      // Mark AntExecution as complete upon successful executor execution
-      await this.state.saveAntExecution({
-        antId: task.assignedAntId || (task.role ? `ant-${String(task.role).toLowerCase()}` : "ant-worker"),
-        runId: task.runId,
-        taskId: task.id,
-        role: task.role,
-        attempt: task.attempt,
-        startedAt: executionStartTime,
-        finishedAt: new Date(),
-        status: TaskStatus.Testing,
-      });
+      // Mark AntExecution as testing upon successful executor execution
+      if (typeof this.state.updateAntExecution === "function") {
+        await this.state.updateAntExecution({
+          antId: logicalAntId,
+          runId: task.runId,
+          taskId: task.id,
+          attempt: task.attempt,
+          finishedAt: new Date(),
+          status: TaskStatus.Testing,
+        });
+      }
 
       // Persist produced Artifacts
       if (execution.artifacts && Array.isArray(execution.artifacts)) {
@@ -227,6 +235,18 @@ export class NamlaLoop {
         workerId,
         leaseToken,
       );
+
+      // Terminal AntExecution update to APPROVED after supervisor approval
+      if (typeof this.state.updateAntExecution === "function") {
+        await this.state.updateAntExecution({
+          antId: logicalAntId,
+          runId: task.runId,
+          taskId: task.id,
+          attempt: task.attempt,
+          finishedAt: new Date(),
+          status: TaskStatus.Approved,
+        });
+      }
     } catch (error) {
       const latest = await this.state.getTask(taskId);
 
@@ -258,17 +278,19 @@ export class NamlaLoop {
   ): Promise<void> {
     const shouldRetry = task.attempt + 1 < task.maxAttempts;
 
-    // Persist AntExecution failure status
-    await this.state.saveAntExecution({
-      antId: task.assignedAntId || (task.role ? `ant-${String(task.role).toLowerCase()}` : "ant-worker"),
-      runId: task.runId,
-      taskId: task.id,
-      role: task.role,
-      attempt: task.attempt,
-      startedAt: new Date(),
-      finishedAt: new Date(),
-      status: shouldRetry ? TaskStatus.Retrying : TaskStatus.Failed,
-    });
+    const logicalAntId = task.assignedAntId ?? (task.role ? `ant-${String(task.role).toLowerCase()}` : `ant-worker-${task.id}`);
+
+    // Persist AntExecution failure status using updateAntExecution to preserve original startedAt
+    if (typeof this.state.updateAntExecution === "function") {
+      await this.state.updateAntExecution({
+        antId: logicalAntId,
+        runId: task.runId,
+        taskId: task.id,
+        attempt: task.attempt,
+        finishedAt: new Date(),
+        status: shouldRetry ? TaskStatus.Retrying : TaskStatus.Failed,
+      });
+    }
 
     await this.state.appendEvent({
       type: shouldRetry ? "task.retrying" : "task.failed",

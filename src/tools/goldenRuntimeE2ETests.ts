@@ -226,8 +226,7 @@ module.exports = { createTodoServer };
       },
     };
 
-    const container = Container.createTestContainer({
-      stateRepository: stateRepo,
+    const container = Container.createPostgresContainer(pool as any, {
       toolAdapters: [fileWriterTool],
       modelAdapters: [modelAdapter],
       gates: [buildGate],
@@ -431,8 +430,7 @@ test("Negative Golden Runtime Path — Gate Failure Rejection", async () => {
       },
     };
 
-    const container = Container.createTestContainer({
-      stateRepository: stateRepo,
+    const container = Container.createPostgresContainer(pool as any, {
       toolAdapters: [fileWriterTool],
       modelAdapters: [modelAdapter],
       gates: [buildGate],

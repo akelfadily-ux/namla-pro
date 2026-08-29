@@ -49,6 +49,8 @@ export interface StateRepository {
 
   setAccountingState(runId: RunId, state: RunAccountingState, reason?: string): Promise<void>;
 
+  recoverAccountingState?(runId: RunId): Promise<{ recovered: boolean; previousState: RunAccountingState }>;
+
   transitionRun(
     runId: RunId,
     expectedStatus: RunStatus,
@@ -76,6 +78,8 @@ export interface StateRepository {
   ): Promise<TaskRecord>;
 
   listRunnableTasks(runId: RunId): Promise<TaskRecord[]>;
+
+  listTasksForRun(runId: RunId): Promise<TaskRecord[]>;
 
   claimTaskLease(
     taskId: TaskId,
