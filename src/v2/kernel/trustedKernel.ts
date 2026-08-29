@@ -9,12 +9,15 @@ import { SafetyGuard } from "../../core/safetyGuard";
 import { ReceiptLog } from "../../core/receiptLog";
 import { isInsideProjectRoot } from "../../policies/fileBoundaryPolicy";
 import { looksLikeSecret } from "../../policies/secretProtectionPolicy";
+import { isForbiddenCommand } from "../../policies/commandSafetyPolicy";
 import { resolveTrustedExecutable, TrustedExecutableId } from "../../cognitive/trustedExecutableRegistry";
+import { buildSafeChildEnv } from "../../cognitive/safeProviderRequest";
 import { CapabilityScope, PlanContract } from "../types/contracts";
 import { ArtifactIdentity, EnvironmentIdentity, EvidenceRecord } from "../types/evidence";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
 import { resolve, join, dirname } from "path";
 import { createHash } from "crypto";
+import { spawnSync } from "child_process";
 
 export interface TrustedKernelOptions {
   readonly workspaceRoot: string;
@@ -24,6 +27,15 @@ export interface TrustedKernelOptions {
 export interface EffectiveAuthorityResult {
   readonly authorized: boolean;
   readonly reasonCode: string;
+}
+
+export interface CommandExecutionResult {
+  readonly success: boolean;
+  readonly exitCode: number | null;
+  readonly stdout: string;
+  readonly stderr: string;
+  readonly reasonCode: string;
+  readonly evidenceRecord?: EvidenceRecord;
 }
 
 export class TrustedKernel {
@@ -151,6 +163,107 @@ export class TrustedKernel {
 
   public resolveExecutable(id: TrustedExecutableId) {
     return resolveTrustedExecutable(id, { workspaceRoots: [this.workspaceRoot] });
+  }
+
+  /**
+   * Execute an allowlisted command safely through the Trusted Kernel (P0.2).
+   */
+  public executeCommand(
+    executableId: TrustedExecutableId,
+    args: readonly string[],
+    missionId: string,
+    stageId: string,
+    subDirRelative?: string,
+    timeoutMs = 15000
+  ): CommandExecutionResult {
+    const rawCmd = `${executableId} ${args.join(" ")}`;
+    if (isForbiddenCommand(rawCmd)) {
+      this.receiptLog.create({
+        summary: "EXECUTE_COMMAND: FORBIDDEN",
+        status: "blocked",
+        details: { command: rawCmd, reason: "Forbidden command policy match" },
+      });
+      return {
+        success: false,
+        exitCode: null,
+        stdout: "",
+        stderr: "Forbidden command policy match",
+        reasonCode: "FORBIDDEN_COMMAND_REFUSED",
+      };
+    }
+
+    const resolved = this.resolveExecutable(executableId);
+    if (!resolved.ok || !resolved.value.executionAuthorized) {
+      this.receiptLog.create({
+        summary: "EXECUTE_COMMAND: UNAUTHORIZED",
+        status: "blocked",
+        details: { executableId, reason: resolved.ok ? resolved.value.authorizationReason : resolved.reasonCode },
+      });
+      return {
+        success: false,
+        exitCode: null,
+        stdout: "",
+        stderr: "Executable resolution or authorization failed",
+        reasonCode: "EXECUTABLE_UNAUTHORIZED",
+      };
+    }
+
+    const targetCwd = subDirRelative
+      ? resolve(join(this.workspaceRoot, subDirRelative))
+      : this.workspaceRoot;
+
+    if (!targetCwd.startsWith(this.workspaceRoot)) {
+      return {
+        success: false,
+        exitCode: null,
+        stdout: "",
+        stderr: "Target working directory outside workspace root",
+        reasonCode: "PATH_TRAVERSAL_REFUSED",
+      };
+    }
+
+    const outcome = spawnSync(resolved.value.command, [...resolved.value.prefixArgs, ...args], {
+      shell: false,
+      cwd: targetCwd,
+      timeout: timeoutMs,
+      maxBuffer: 1024 * 1024,
+      env: buildSafeChildEnv(),
+      encoding: "utf8",
+    });
+
+    const stdout = outcome.stdout ?? "";
+    const stderr = outcome.stderr ?? "";
+    const exitCode = outcome.status;
+    const success = exitCode === 0;
+
+    const evidenceRecord = this.emitEvidence(
+      "TRUSTED_KERNEL_COMMAND",
+      missionId,
+      stageId,
+      {
+        executableId,
+        args,
+        exitCode,
+        success,
+        stdoutSnippet: stdout.slice(0, 500),
+        stderrSnippet: stderr.slice(0, 500),
+      }
+    );
+
+    this.receiptLog.create({
+      summary: `EXECUTE_COMMAND: ${success ? "SUCCESS" : "FAILED"}`,
+      status: success ? "approved" : "failed",
+      details: { executableId, args, exitCode },
+    });
+
+    return {
+      success,
+      exitCode,
+      stdout,
+      stderr,
+      reasonCode: success ? "OK" : `COMMAND_FAILED_EXIT_${exitCode}`,
+      evidenceRecord,
+    };
   }
 
   public emitEvidence(

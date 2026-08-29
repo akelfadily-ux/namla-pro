@@ -1,13 +1,16 @@
 /**
- * NAMLA PRO V2 Adversarial Security & Invariant Qualification Suite (§15).
+ * NAMLA PRO V2 Adversarial Security & Failure Qualification Suite (§15, P0.9).
  *
- * Attacks NAMLA V2 runtime boundaries:
+ * Attacks and verifies failure qualification across NAMLA V2 runtime boundaries:
  * - Path traversal attempts
  * - Secret leakage attempts
  * - Authority-sensitive ambiguity escalation
  * - Anti-livelock & budget exhaustion
  * - Stale evidence detection
  * - Unverified candidate delivery refusal
+ * - Unsafe command execution refusal
+ * - Empty / malformed objective handling
+ * - Partial colony output failure recovery
  *
  * Run: node dist/tools/v2AdversarialTests.js
  */
@@ -21,6 +24,7 @@ import { TrustedKernel } from "../v2/kernel/trustedKernel";
 import { NamlaLoopGate } from "../v2/loop/namlaLoopGate";
 import { EerEngine } from "../v2/eer/eerEngine";
 import { LabPackager } from "../v2/lab/labPackager";
+import { NamlaRuntime } from "../v2/runtime/namlaRuntime";
 import { GateInput, LoopBudget, StageRecoveryPolicy } from "../v2/types/namlaLoopTypes";
 import { EvidenceRecord, ArtifactIdentity, EnvironmentIdentity } from "../v2/types/evidence";
 import { PlanContract } from "../v2/types/contracts";
@@ -58,6 +62,19 @@ test("ADVERSARIAL: Secret Leakage in Proposed Content is Refused", () => {
   }
 });
 
+test("ADVERSARIAL: Unsafe Command Execution Attempt in TrustedKernel is Refused", () => {
+  const ws = tempWorkspace("unsafe-cmd");
+  try {
+    const kernel = new TrustedKernel({ workspaceRoot: ws });
+    const result = kernel.executeCommand("npm", ["install", "-g", "malicious-pkg"], "m-cmd", "VERIFY");
+
+    assert.equal(result.success, false, "Unsafe command execution must be refused");
+    assert.equal(result.reasonCode, "FORBIDDEN_COMMAND_REFUSED");
+  } finally {
+    rmSync(ws, { recursive: true, force: true });
+  }
+});
+
 test("ADVERSARIAL: Authority-Sensitive Destructive Objective Escalate to HUMAN_REQUIRED", () => {
   const engine = new EerEngine();
   const context = {
@@ -75,6 +92,24 @@ test("ADVERSARIAL: Authority-Sensitive Destructive Objective Escalate to HUMAN_R
   assert.equal(result.success, false, "Destructive action must not succeed automatically");
   assert.equal(result.humanRequired, true, "Destructive action must escalate to HUMAN_REQUIRED");
   assert.equal(result.reasonCode, "AUTHORITY_SENSITIVE_AMBIGUITY_ESCALATED");
+});
+
+test("ADVERSARIAL: Empty Objective Refused cleanly", () => {
+  const engine = new EerEngine();
+  const context = {
+    missionId: "mission-empty",
+    authoritativeInputs: [],
+    policyVersions: ["v1.0.0"],
+    budgets: { virtualTicks: 100, providerCalls: 10, maxFixAttempts: 3 },
+    evidenceRefs: [],
+    missionStateRef: "INTERPRETING",
+    contractPhase: "PRE_FREEZE" as const,
+  };
+
+  const result = engine.evaluateObjective("   ", context);
+
+  assert.equal(result.success, false);
+  assert.equal(result.reasonCode, "EMPTY_OBJECTIVE_REFUSED");
 });
 
 test("ADVERSARIAL: Anti-Livelock / Max Retry Threshold Prevents Infinite Loop", () => {
@@ -213,7 +248,7 @@ test("ADVERSARIAL: Lab Packager Refuses Unverified ProMax Candidate", () => {
 
     const failedProMaxAssessment: ProMaxAssessment = {
       candidateId: "cand-unverified",
-      contractSatisfied: false, // Verification failed!
+      contractSatisfied: false,
       verifiedCriteria: [],
       failedCriteria: ["AC-1: Unit tests failed"],
       securityCheckPassed: true,
@@ -256,6 +291,27 @@ test("ADVERSARIAL: Lab Packager Refuses Unverified ProMax Candidate", () => {
 
     assert.equal(result.success, false, "Lab must refuse to package unverified candidate");
     assert.equal(result.reasonCode.includes("ProMax verification failed"), true);
+  } finally {
+    rmSync(ws, { recursive: true, force: true });
+  }
+});
+
+test("ADVERSARIAL: Partial Colony Output Failure Synthesizes Remaining Colony Output", () => {
+  const ws = tempWorkspace("partial-colony");
+  try {
+    const runtime = new NamlaRuntime();
+    // Colony A supplies valid solution, Colony B supplies empty/failing code
+    const result = runtime.runMission({
+      missionId: "m-partial",
+      objective: "Build a TypeScript library",
+      workspaceRoot: ws,
+      projectClass: "TYPESCRIPT_LIBRARY",
+      simulatedColonyACode: "export function run(): string { return 'ok'; }\n",
+      simulatedColonyBCode: "", // empty
+    });
+
+    assert.equal(result.success, true);
+    assert.equal(result.finalState, "COMPLETED");
   } finally {
     rmSync(ws, { recursive: true, force: true });
   }

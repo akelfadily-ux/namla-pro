@@ -1,5 +1,8 @@
 /**
  * LEGGO Component Integrator (§04, §11).
+ *
+ * Integrates compatible, validated components from Colony A and B into a unified candidate.
+ * Preserves source traceability and copies project workspace configs.
  */
 
 import { ComparisonAssessment, IntegratedCandidate, WorkPackage } from "../types/missionState";
@@ -33,6 +36,9 @@ export class LeggoIntegrator {
 
     const integratedWorkspaceRelPath = `workspaces/v2-missions/${context.missionId}/leggo-integrated`;
     const targetFile = workPackage.taskSpec.targetFiles[0] ?? "src/index.ts";
+
+    // Copy project config templates into integrated workspace
+    this.copyWorkspaceConfigs(kernel, integratedWorkspaceRelPath);
 
     let chosenContent = "";
     let source: "COLONY_A" | "COLONY_B" | "MERGED" = "MERGED";
@@ -109,5 +115,15 @@ export class LeggoIntegrator {
       evidenceRecord,
       reasonCode: "OK",
     };
+  }
+
+  private copyWorkspaceConfigs(kernel: TrustedKernel, targetWorkspaceRelPath: string): void {
+    const commonConfigs = ["package.json", "tsconfig.json", "Dockerfile"];
+    for (const f of commonConfigs) {
+      const read = kernel.safeReadWorkspaceFile(f);
+      if (read.success && read.content) {
+        kernel.safeWriteWorkspaceFile(`${targetWorkspaceRelPath}/${f}`, read.content, "system");
+      }
+    }
   }
 }

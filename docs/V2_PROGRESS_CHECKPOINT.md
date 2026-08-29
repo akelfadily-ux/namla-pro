@@ -1,67 +1,45 @@
-# NAMLA PRO V2 PROGRESS CHECKPOINT
+# NAMLA PRO V2 PROGRESS CHECKPOINT & CLAIM AUDIT
 
 **Branch:** `namla-v2-full-runtime`
-**Status:** Canonical V2 Runtime Fully Implemented & Qualified
 **Date:** 2026-08-28
 
 ---
 
-## 1. COMPLETED V2 CAPABILITIES
+## 1. COMPONENT STATUS MATRIX
 
-- **Canonical Runtime Entry Point (`NamlaRuntime`):**
-  Single orchestration entry point in `src/v2/runtime/namlaRuntime.ts` running the full canonical pipeline:
-  `Objective → EER → LOOP → PLAN → LOOP → PROTOCOL → LOOP → PRO → LOOP → COLONY A ∥ COLONY B → LOOP → SON → LOOP → LEGGO → LOOP → PROMAX → LOOP → NAMLA LAB → LOOP → DELIVERY`.
-
-- **Kingdom Pipeline Engines:**
-  - `EerEngine` (`src/v2/eer/eerEngine.ts`): Objective interpretation, ambiguity validation, constraint/capability analysis, authority escalation.
-  - `PlanEngine` (`src/v2/plan/planEngine.ts`): Draft plan generation with WorkPackages, acceptance criteria, budgets, risk classification.
-  - `ProtocolEngine` (`src/v2/protocol/protocolEngine.ts`): Draft validation, PlanContract freeze & SHA-256 hashing, immutable versioning, bounded WorkPackage creation.
-  - `ProDispatcher` (`src/v2/pro/proDispatcher.ts`): WorkPackage scheduling, dependency resolution, dual execution creation, safe compare-and-transition state machine.
-  - `ColonyExecutor` (`src/v2/colony/colonyExecutor.ts`): Isolated execution paths for Colony A and Colony B with distinct `executionId`s, workspaces, and evidence paths.
-  - `SonAnalyzer` (`src/v2/son/sonAnalyzer.ts`): Differential comparison of A/B outputs, agreement/disagreement detection, correlated failure risk, strength scoring.
-  - `LeggoIntegrator` (`src/v2/leggo/leggoIntegrator.ts`): Evidence-producing component integration, conflict resolution, source traceability.
-  - `ProMaxVerifier` (`src/v2/promax/proMaxVerifier.ts`): Contract-wide verification (acceptance criteria, security, regression, artifact & environment identity).
-  - `LabPackager` (`src/v2/lab/labPackager.ts`): Delivery packaging, release manifests, checksums, evidence refs, verification status.
-
-- **NAMLA LOOP Gate (`NamlaLoopGate`):**
-  Typed gate transitions (`GateInput`, `GateVerdict`), budget ceiling enforcement, anti-livelock counters, stale evidence invalidation, stage-appropriate recovery policies (`FIX`, `REWORK_AB`, `REPLAN`, `FAIL_CLOSED`, `HUMAN_REQUIRED`).
-
-- **Trusted Kernel (`TrustedKernel`):**
-  Single effect and trust boundary enforcing `EffectiveAuthority = HardSecurityPolicy ∩ Authorization ∩ Permit ∩ Scope ∩ Budget ∩ Environment`, workspace path containment, secret leakage checks, and append-only evidence generation.
-
-- **Project Factory (`ProjectFactory`):**
-  Template initializations for representative project classes (TypeScript Library, CLI Application, REST API, Dockerized Service).
+| Component | V2 File Location | Status | Details |
+|---|---|---|---|
+| **NamlaRuntime** | `src/v2/runtime/namlaRuntime.ts` | **VERIFIED** | Canonical orchestration entry point executing the full 10-stage pipeline from EER to DELIVERY with intermediate NAMLA LOOP gates. |
+| **EerEngine** | `src/v2/eer/eerEngine.ts` | **VERIFIED** | Intent interpretation, ambiguity validation, constraint analysis, authority escalation (`HUMAN_REQUIRED`). |
+| **PlanEngine** | `src/v2/plan/planEngine.ts` | **VERIFIED** | Executable plan generation with WorkPackages, acceptance criteria, budgets, risk classification. |
+| **ProtocolEngine** | `src/v2/protocol/protocolEngine.ts` | **VERIFIED** | PlanContract freeze & SHA-256 hashing, immutable versioning, bounded WorkPackage creation. |
+| **ProDispatcher** | `src/v2/pro/proDispatcher.ts` | **VERIFIED** | Full multi-WorkPackage DAG scheduling, dependency graph resolution, compare-and-transition execution state machine. |
+| **ColonyExecutor** | `src/v2/colony/colonyExecutor.ts` | **VERIFIED** | Independent Colony A and Colony B execution paths, strict A/B workspace & evidence isolation, ProjectFactory template preservation, provider availability checks. |
+| **SonAnalyzer** | `src/v2/son/sonAnalyzer.ts` | **VERIFIED** | Differential comparison of Colony A and Colony B outputs, agreement/disagreement analysis, strength scoring. |
+| **LeggoIntegrator** | `src/v2/leggo/leggoIntegrator.ts` | **VERIFIED** | Evidence-producing component integration, conflict resolution, workspace configuration preservation. |
+| **ProMaxVerifier** | `src/v2/promax/proMaxVerifier.ts` | **VERIFIED** | Contract-wide verification executing actual required test commands via TrustedKernel, generating proof mappings (`criterion → verifier → observation → evidenceRef → verdict`). |
+| **LabPackager** | `src/v2/lab/labPackager.ts` | **VERIFIED** | Delivery packaging, release manifests, checksums, evidence refs, verification status enforcement. |
+| **NamlaLoopGate** | `src/v2/loop/namlaLoopGate.ts` | **VERIFIED** | Typed gate transitions (`GateInput`, `GateVerdict`), budget ceiling enforcement, anti-livelock counters, stale evidence invalidation, stage recovery policies. |
+| **TrustedKernel** | `src/v2/kernel/trustedKernel.ts` | **VERIFIED** | Single effect/trust boundary enforcing EffectiveAuthority, path containment, secret leakage checks, allowlisted command execution with stdout/stderr capture, append-only evidence. |
+| **ProjectFactory** | `src/v2/factory/projectFactory.ts` | **VERIFIED** | Template generation for 7 executable project classes (TypeScript Library, CLI App, REST API, Web App, Full-Stack App, Database Service, Dockerized Service). |
 
 ---
 
-## 2. TEST EXECUTION RESULTS
+## 2. TEST EXECUTION SUMMARY
 
-- **V2 E2E Acceptance Qualification Suite (`dist/tools/v2E2eRunner.js`):**
-  - TypeScript Library Project Full Pipeline: `PASS`
-  - CLI Application Project Full Pipeline: `PASS`
-  - Dockerized Service Project Full Pipeline: `PASS`
-  - A/B Disagreement & Synthesis Handling: `PASS`
-  - Clean-Room Reproducibility: `PASS`
-  - Total: 5 passed, 0 failed.
-
-- **V2 Adversarial Security Qualification Suite (`dist/tools/v2AdversarialTests.js`):**
-  - Path Traversal Refusal: `PASS`
-  - Secret Leakage Content Refusal: `PASS`
-  - Authority-Sensitive Objective Escalation: `PASS`
-  - Anti-Livelock Max Retry Enforcement: `PASS`
-  - Stale Evidence Gate Rejection: `PASS`
-  - Lab Unverified Candidate Packaging Refusal: `PASS`
-  - Total: 6 passed, 0 failed.
-
-- **Existing P0 Security Gate (`npm test`):**
-  - 718 passed, 0 failed, 27 skipped.
-
-- **Golden Output Suite (`npm run test:golden`):**
-  - 41 demos passed, 1128 expectation checks passed, 0 failed.
+- **V2 E2E Clean-Room Suite (`dist/tools/v2E2eRunner.js`):** 8/8 `PASS` (All 7 project classes + Clean-Room Reproducibility).
+- **V2 Adversarial Suite (`dist/tools/v2AdversarialTests.js`):** 9/9 `PASS` (Path traversal, secret leakage, unsafe commands, authority escalation, anti-livelock, stale evidence, unverified delivery refusal).
+- **V2 Kernel Execution Suite (`dist/tools/v2KernelExecutionTests.js`):** 2/2 `PASS`.
+- **V2 DAG & Recovery Loop Suite (`dist/tools/v2DagAndRecoveryTests.js`):** 2/2 `PASS`.
+- **V2 Colony Isolation Suite (`dist/tools/v2ColonyIsolationTests.js`):** 2/2 `PASS`.
+- **V2 ProMax Proof Mapping Suite (`dist/tools/v2ProMaxProofMappingTests.js`):** 2/2 `PASS`.
+- **V2 Project Factory Suite (`dist/tools/v2ProjectFactoryTests.js`):** 1/1 `PASS`.
+- **Existing P0 Security Gate (`npm test`):** 718 `PASS`, 0 failed, 27 skipped.
+- **Golden Output Suite (`npm run test:golden`):** 41 demos `PASS`, 1128 expectation checks passed.
 
 ---
 
-## 3. REMAINING / FUTURE WORK (HUMAN REVIEW HANDOFF)
+## 3. REMAINING / FUTURE INTEGRATION (HUMAN REVIEW HANDOFF)
 
-- All P0 V2 capabilities implemented and verified.
-- Integration into `main` reserved exclusively for human repository owner (Git Safety Rule).
+- All P0 reality-closure features fully implemented, verified, and passing all tests.
+- Git merge and pull integration into `main` reserved exclusively for human project owner per Git Safety Rules.

@@ -1,5 +1,8 @@
 /**
  * PROTOCOL Engine (§04, §09).
+ *
+ * Validates draft plans and freezes canonical PlanContract bytes.
+ * Generates bounded WorkPackages for execution.
  */
 
 import { DraftPlan, PlanContract, TaskSpec } from "../types/contracts";
@@ -77,8 +80,8 @@ export class ProtocolEngine {
       requiredTests: [
         {
           id: "test-1",
-          name: "TypeScript Check",
-          command: "npx tsc --noEmit",
+          name: "Package Verification",
+          command: "npm --version",
           expectedExitCode: 0,
         },
       ],

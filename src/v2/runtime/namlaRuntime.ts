@@ -1,9 +1,11 @@
 /**
- * NAMLA PRO V2 Canonical Runtime (§03, §04, §05, §08, §18).
+ * NAMLA PRO V2 Canonical Runtime (§03, §04, §05, §08, §18, P0.5, P0.6).
  *
  * Single orchestration entry point running the canonical V2 pipeline:
  * Objective → EER → LOOP → PLAN → LOOP → PROTOCOL → LOOP → PRO → LOOP →
  * COLONY A ∥ COLONY B → LOOP → SON → LOOP → LEGGO → LOOP → PROMAX → LOOP → NAMLA LAB → LOOP → DELIVERY.
+ *
+ * Handles multi-WorkPackage DAG scheduling and active recovery loops (FIX, REWORK_AB, REPLAN, FAIL_CLOSED, HUMAN_REQUIRED).
  */
 
 import { TrustedKernel } from "../kernel/trustedKernel";
@@ -12,7 +14,7 @@ import { EerEngine } from "../eer/eerEngine";
 import { PlanEngine } from "../plan/planEngine";
 import { ProtocolEngine } from "../protocol/protocolEngine";
 import { ProDispatcher } from "../pro/proDispatcher";
-import { ColonyExecutor } from "../colony/colonyExecutor";
+import { ColonyExecutor, ColonyExecutionResult } from "../colony/colonyExecutor";
 import { SonAnalyzer } from "../son/sonAnalyzer";
 import { LeggoIntegrator } from "../leggo/leggoIntegrator";
 import { ProMaxVerifier } from "../promax/proMaxVerifier";
@@ -20,9 +22,9 @@ import { LabPackager } from "../lab/labPackager";
 import { ProjectFactory, ProjectClass } from "../factory/projectFactory";
 
 import { PreFreezeStageContext, ContractBoundStageContext, RuntimeBudgets } from "../types/stageContext";
-import { GateInput, StageRecoveryPolicy, LoopBudget } from "../types/namlaLoopTypes";
+import { GateInput, StageRecoveryPolicy, LoopBudget, GateVerdict } from "../types/namlaLoopTypes";
 import { EvidenceRecord, ArtifactIdentity, EnvironmentIdentity } from "../types/evidence";
-import { DeliveryPackage, MissionState } from "../types/missionState";
+import { DeliveryPackage, MissionState, WorkPackageExecution, IntegratedCandidate } from "../types/missionState";
 import { createHash } from "crypto";
 
 export interface RunMissionRequest {
@@ -65,7 +67,7 @@ export class NamlaRuntime {
     });
 
     const loopGate = new NamlaLoopGate();
-    const evidencePool: EvidenceRecord[] = [];
+    let evidencePool: EvidenceRecord[] = [];
 
     const defaultBudgets: RuntimeBudgets = {
       virtualTicks: request.budgets?.virtualTicks ?? 100,
@@ -75,7 +77,7 @@ export class NamlaRuntime {
 
     let currentState: MissionState = "CREATED";
 
-    const defaultLoopBudget: LoopBudget = {
+    let defaultLoopBudget: LoopBudget = {
       maxTicks: defaultBudgets.virtualTicks,
       remainingTicks: defaultBudgets.virtualTicks,
       maxFixAttempts: defaultBudgets.maxFixAttempts,
@@ -151,7 +153,7 @@ export class NamlaRuntime {
 
     const verdict1 = loopGate.evaluateGate(gate1Input, evidencePool, recoveryPolicy);
     if (verdict1.status !== "PASS") {
-      return this.buildResponse(request.missionId, "FAILED", kernel, evidencePool, `GATE_1_FAILED: ${verdict1.reasonCodes.join(",")}`);
+      return this.handleGateFailure(request.missionId, verdict1, kernel, evidencePool);
     }
 
     // ------------------------------------------------------------ 2. PLAN STAGE ---
@@ -176,7 +178,7 @@ export class NamlaRuntime {
 
     const verdict2 = loopGate.evaluateGate(gate2Input, evidencePool, recoveryPolicy);
     if (verdict2.status !== "PASS") {
-      return this.buildResponse(request.missionId, "FAILED", kernel, evidencePool, `GATE_2_FAILED: ${verdict2.reasonCodes.join(",")}`);
+      return this.handleGateFailure(request.missionId, verdict2, kernel, evidencePool);
     }
 
     // -------------------------------------------------------- 3. PROTOCOL STAGE ---
@@ -207,7 +209,7 @@ export class NamlaRuntime {
 
     const verdict3 = loopGate.evaluateGate(gate3Input, evidencePool, recoveryPolicy);
     if (verdict3.status !== "PASS") {
-      return this.buildResponse(request.missionId, "FAILED", kernel, evidencePool, `GATE_3_FAILED: ${verdict3.reasonCodes.join(",")}`);
+      return this.handleGateFailure(request.missionId, verdict3, kernel, evidencePool);
     }
 
     const boundContext: ContractBoundStageContext = {
@@ -221,149 +223,198 @@ export class NamlaRuntime {
       frozenPlanContract: frozenContract,
     };
 
-    // ------------------------------------------------------------- 4. PRO STAGE ---
+    // -------------------------------------------------- 4. PRO & DAG DISPATCH ---
     currentState = "DISPATCHING";
-    const schedule = this.proDispatcher.computeSchedule(protocolResult.workPackages, []);
-    if (schedule.readyPackages.length === 0) {
-      return this.buildResponse(request.missionId, "FAILED", kernel, evidencePool, "PRO_DISPATCH_FAILED: No ready WorkPackages");
+    const allWorkPackages = protocolResult.workPackages;
+    let allExecutions: WorkPackageExecution[] = [];
+    const integratedCandidates: IntegratedCandidate[] = [];
+
+    // Loop through full WorkPackage DAG until all packages complete or fail
+    let schedule = this.proDispatcher.computeSchedule(allWorkPackages, allExecutions);
+
+    while (!schedule.isComplete && schedule.readyPackages.length > 0) {
+      for (const targetWp of schedule.readyPackages) {
+        const dualExec = this.proDispatcher.createDualExecutions(
+          targetWp,
+          `workspaces/v2-missions/${request.missionId}`,
+          allExecutions
+        );
+
+        allExecutions.push(dualExec.executionA, dualExec.executionB);
+
+        const proEv = kernel.emitEvidence("PRO", request.missionId, "PRO", {
+          dispatchedWorkPackageId: targetWp.id,
+          execA: dualExec.executionA.executionId,
+          execB: dualExec.executionB.executionId,
+        });
+        evidencePool.push(proEv);
+
+        // NAMLA LOOP Gate 4 (PRO)
+        const gate4Input: GateInput = {
+          missionId: request.missionId,
+          stageId: "PRO",
+          artifactIdentity: dummyArtifact,
+          policyVersions: ["v1.0.0"],
+          environmentIdentity: envIdentity,
+          requiredAttestations: [],
+          requiredAssessments: [],
+          evidenceRefs: [proEv.evidenceId],
+          budget: defaultLoopBudget,
+          phase: "CONTRACT_BOUND",
+          contractVersion: frozenContract.version,
+        };
+
+        const verdict4 = loopGate.evaluateGate(gate4Input, evidencePool, recoveryPolicy);
+        if (verdict4.status !== "PASS") {
+          return this.handleGateFailure(request.missionId, verdict4, kernel, evidencePool);
+        }
+
+        // --------------------------------------------- 5. COLONY A & B STAGE ---
+        currentState = "EXECUTING_AB";
+
+        let resA: ColonyExecutionResult = this.colonyExecutor.executeWorkPackage(
+          targetWp,
+          dualExec.executionA,
+          boundContext,
+          kernel,
+          request.simulatedColonyACode
+        );
+
+        let resB: ColonyExecutionResult = this.colonyExecutor.executeWorkPackage(
+          targetWp,
+          dualExec.executionB,
+          boundContext,
+          kernel,
+          request.simulatedColonyBCode
+        );
+
+        evidencePool.push(...resA.evidenceRecords, ...resB.evidenceRecords);
+
+        // NAMLA LOOP Gate 5
+        const gate5Input: GateInput = {
+          missionId: request.missionId,
+          stageId: "COLONY_AB",
+          artifactIdentity: resA.outputArtifacts[0] ?? dummyArtifact,
+          policyVersions: ["v1.0.0"],
+          environmentIdentity: envIdentity,
+          requiredAttestations: [],
+          requiredAssessments: [],
+          evidenceRefs: evidencePool.map((e) => e.evidenceId),
+          budget: defaultLoopBudget,
+          phase: "CONTRACT_BOUND",
+          contractVersion: frozenContract.version,
+        };
+
+        let verdict5 = loopGate.evaluateGate(gate5Input, evidencePool, recoveryPolicy);
+
+        // Active Recovery Loop for COLONY_AB failures
+        if (verdict5.status !== "PASS") {
+          if (verdict5.nextAction === "REWORK_AB") {
+            evidencePool = loopGate.invalidateStaleEvidence(evidencePool, verdict5.staleEvidenceRefs);
+            const rerunExec = this.proDispatcher.createDualExecutions(
+              targetWp,
+              `workspaces/v2-missions/${request.missionId}`,
+              allExecutions
+            );
+            allExecutions.push(rerunExec.executionA, rerunExec.executionB);
+
+            resA = this.colonyExecutor.executeWorkPackage(targetWp, rerunExec.executionA, boundContext, kernel, request.simulatedColonyACode);
+            resB = this.colonyExecutor.executeWorkPackage(targetWp, rerunExec.executionB, boundContext, kernel, request.simulatedColonyBCode);
+            evidencePool.push(...resA.evidenceRecords, ...resB.evidenceRecords);
+          } else {
+            return this.handleGateFailure(request.missionId, verdict5, kernel, evidencePool);
+          }
+        }
+
+        // ----------------------------------------------------- 6. SON STAGE ---
+        currentState = "COMPARING";
+        const comparison = this.sonAnalyzer.compareResults(targetWp, resA, resB, boundContext);
+
+        const sonEv = kernel.emitEvidence("SON", request.missionId, "SON", {
+          recommendedAction: comparison.recommendedAction,
+          agreementsCount: comparison.agreements.length,
+          disagreementsCount: comparison.disagreements.length,
+        });
+        evidencePool.push(sonEv);
+
+        // NAMLA LOOP Gate 6
+        const gate6Input: GateInput = {
+          missionId: request.missionId,
+          stageId: "SON",
+          artifactIdentity: resA.outputArtifacts[0] ?? dummyArtifact,
+          policyVersions: ["v1.0.0"],
+          environmentIdentity: envIdentity,
+          requiredAttestations: [],
+          requiredAssessments: [],
+          evidenceRefs: [sonEv.evidenceId],
+          budget: defaultLoopBudget,
+          phase: "CONTRACT_BOUND",
+          contractVersion: frozenContract.version,
+        };
+
+        const verdict6 = loopGate.evaluateGate(gate6Input, evidencePool, recoveryPolicy);
+        if (verdict6.status !== "PASS") {
+          return this.handleGateFailure(request.missionId, verdict6, kernel, evidencePool);
+        }
+
+        // --------------------------------------------------- 7. LEGGO STAGE ---
+        currentState = "INTEGRATING";
+        const leggoRes = this.leggoIntegrator.integrate(targetWp, comparison, resA, resB, boundContext, kernel);
+        if (!leggoRes.success || !leggoRes.integratedCandidate) {
+          return this.buildResponse(request.missionId, "FAILED", kernel, evidencePool, leggoRes.reasonCode);
+        }
+
+        if (leggoRes.evidenceRecord) {
+          evidencePool.push(leggoRes.evidenceRecord);
+        }
+
+        // NAMLA LOOP Gate 7
+        const gate7Input: GateInput = {
+          missionId: request.missionId,
+          stageId: "LEGGO",
+          artifactIdentity: leggoRes.integratedCandidate.integratedArtifacts[0],
+          policyVersions: ["v1.0.0"],
+          environmentIdentity: envIdentity,
+          requiredAttestations: [],
+          requiredAssessments: [],
+          evidenceRefs: evidencePool.map((e) => e.evidenceId),
+          budget: defaultLoopBudget,
+          phase: "CONTRACT_BOUND",
+          contractVersion: frozenContract.version,
+        };
+
+        const verdict7 = loopGate.evaluateGate(gate7Input, evidencePool, recoveryPolicy);
+        if (verdict7.status !== "PASS") {
+          return this.handleGateFailure(request.missionId, verdict7, kernel, evidencePool);
+        }
+
+        // Mark execution PASSED and update execution list
+        const passA = this.proDispatcher.transitionExecutionState(dualExec.executionA, "PASSED");
+        if (passA.success && passA.updatedExecution) {
+          allExecutions = allExecutions.map((e) => (e.executionId === passA.updatedExecution!.executionId ? passA.updatedExecution! : e));
+        }
+
+        integratedCandidates.push(leggoRes.integratedCandidate);
+      }
+
+      schedule = this.proDispatcher.computeSchedule(allWorkPackages, allExecutions);
     }
 
-    const targetWp = schedule.readyPackages[0];
-    const dualExec = this.proDispatcher.createDualExecutions(targetWp, `workspaces/v2-missions/${request.missionId}`, []);
-
-    const proEv = kernel.emitEvidence("PRO", request.missionId, "PRO", {
-      dispatchedWorkPackageId: targetWp.id,
-      execA: dualExec.executionA.executionId,
-      execB: dualExec.executionB.executionId,
-    });
-    evidencePool.push(proEv);
-
-    // NAMLA LOOP Gate 4
-    const gate4Input: GateInput = {
-      missionId: request.missionId,
-      stageId: "PRO",
-      artifactIdentity: dummyArtifact,
-      policyVersions: ["v1.0.0"],
-      environmentIdentity: envIdentity,
-      requiredAttestations: [],
-      requiredAssessments: [],
-      evidenceRefs: [proEv.evidenceId],
-      budget: defaultLoopBudget,
-      phase: "CONTRACT_BOUND",
-      contractVersion: frozenContract.version,
-    };
-
-    const verdict4 = loopGate.evaluateGate(gate4Input, evidencePool, recoveryPolicy);
-    if (verdict4.status !== "PASS") {
-      return this.buildResponse(request.missionId, "FAILED", kernel, evidencePool, `GATE_4_FAILED: ${verdict4.reasonCodes.join(",")}`);
+    if (!schedule.isComplete || integratedCandidates.length === 0) {
+      return this.buildResponse(
+        request.missionId,
+        "FAILED",
+        kernel,
+        evidencePool,
+        "DAG_INCOMPLETE: Required WorkPackages remained uncompleted"
+      );
     }
 
-    // ----------------------------------------------------- 5. COLONY A & B STAGE ---
-    currentState = "EXECUTING_AB";
+    const primaryCandidate = integratedCandidates[integratedCandidates.length - 1];
 
-    const resA = this.colonyExecutor.executeWorkPackage(
-      targetWp,
-      dualExec.executionA,
-      boundContext,
-      kernel,
-      request.simulatedColonyACode
-    );
-
-    const resB = this.colonyExecutor.executeWorkPackage(
-      targetWp,
-      dualExec.executionB,
-      boundContext,
-      kernel,
-      request.simulatedColonyBCode
-    );
-
-    evidencePool.push(...resA.evidenceRecords, ...resB.evidenceRecords);
-
-    // NAMLA LOOP Gate 5
-    const gate5Input: GateInput = {
-      missionId: request.missionId,
-      stageId: "COLONY_AB",
-      artifactIdentity: resA.outputArtifacts[0] ?? dummyArtifact,
-      policyVersions: ["v1.0.0"],
-      environmentIdentity: envIdentity,
-      requiredAttestations: [],
-      requiredAssessments: [],
-      evidenceRefs: evidencePool.map((e) => e.evidenceId),
-      budget: defaultLoopBudget,
-      phase: "CONTRACT_BOUND",
-      contractVersion: frozenContract.version,
-    };
-
-    const verdict5 = loopGate.evaluateGate(gate5Input, evidencePool, recoveryPolicy);
-    if (verdict5.status !== "PASS") {
-      return this.buildResponse(request.missionId, "FAILED", kernel, evidencePool, `GATE_5_FAILED: ${verdict5.reasonCodes.join(",")}`);
-    }
-
-    // ------------------------------------------------------------- 6. SON STAGE ---
-    currentState = "COMPARING";
-    const comparison = this.sonAnalyzer.compareResults(targetWp, resA, resB, boundContext);
-
-    const sonEv = kernel.emitEvidence("SON", request.missionId, "SON", {
-      recommendedAction: comparison.recommendedAction,
-      agreementsCount: comparison.agreements.length,
-      disagreementsCount: comparison.disagreements.length,
-    });
-    evidencePool.push(sonEv);
-
-    // NAMLA LOOP Gate 6
-    const gate6Input: GateInput = {
-      missionId: request.missionId,
-      stageId: "SON",
-      artifactIdentity: resA.outputArtifacts[0] ?? dummyArtifact,
-      policyVersions: ["v1.0.0"],
-      environmentIdentity: envIdentity,
-      requiredAttestations: [],
-      requiredAssessments: [],
-      evidenceRefs: [sonEv.evidenceId],
-      budget: defaultLoopBudget,
-      phase: "CONTRACT_BOUND",
-      contractVersion: frozenContract.version,
-    };
-
-    const verdict6 = loopGate.evaluateGate(gate6Input, evidencePool, recoveryPolicy);
-    if (verdict6.status !== "PASS") {
-      return this.buildResponse(request.missionId, "FAILED", kernel, evidencePool, `GATE_6_FAILED: ${verdict6.reasonCodes.join(",")}`);
-    }
-
-    // ----------------------------------------------------------- 7. LEGGO STAGE ---
-    currentState = "INTEGRATING";
-    const leggoRes = this.leggoIntegrator.integrate(targetWp, comparison, resA, resB, boundContext, kernel);
-    if (!leggoRes.success || !leggoRes.integratedCandidate) {
-      return this.buildResponse(request.missionId, "FAILED", kernel, evidencePool, leggoRes.reasonCode);
-    }
-
-    if (leggoRes.evidenceRecord) {
-      evidencePool.push(leggoRes.evidenceRecord);
-    }
-
-    // NAMLA LOOP Gate 7
-    const gate7Input: GateInput = {
-      missionId: request.missionId,
-      stageId: "LEGGO",
-      artifactIdentity: leggoRes.integratedCandidate.integratedArtifacts[0],
-      policyVersions: ["v1.0.0"],
-      environmentIdentity: envIdentity,
-      requiredAttestations: [],
-      requiredAssessments: [],
-      evidenceRefs: evidencePool.map((e) => e.evidenceId),
-      budget: defaultLoopBudget,
-      phase: "CONTRACT_BOUND",
-      contractVersion: frozenContract.version,
-    };
-
-    const verdict7 = loopGate.evaluateGate(gate7Input, evidencePool, recoveryPolicy);
-    if (verdict7.status !== "PASS") {
-      return this.buildResponse(request.missionId, "FAILED", kernel, evidencePool, `GATE_7_FAILED: ${verdict7.reasonCodes.join(",")}`);
-    }
-
-    // ---------------------------------------------------------- 8. PROMAX STAGE ---
+    // -------------------------------------------------------- 8. PROMAX STAGE ---
     currentState = "VERIFYING";
-    const proMaxRes = this.proMaxVerifier.verifyCandidate(leggoRes.integratedCandidate, boundContext, kernel);
+    const proMaxRes = this.proMaxVerifier.verifyCandidate(primaryCandidate, boundContext, kernel);
     if (proMaxRes.evidenceRecord) {
       evidencePool.push(proMaxRes.evidenceRecord);
     }
@@ -376,7 +427,7 @@ export class NamlaRuntime {
     const gate8Input: GateInput = {
       missionId: request.missionId,
       stageId: "PROMAX",
-      artifactIdentity: leggoRes.integratedCandidate.integratedArtifacts[0],
+      artifactIdentity: primaryCandidate.integratedArtifacts[0],
       policyVersions: ["v1.0.0"],
       environmentIdentity: envIdentity,
       requiredAttestations: [],
@@ -389,13 +440,13 @@ export class NamlaRuntime {
 
     const verdict8 = loopGate.evaluateGate(gate8Input, evidencePool, recoveryPolicy);
     if (verdict8.status !== "PASS") {
-      return this.buildResponse(request.missionId, "FAILED", kernel, evidencePool, `GATE_8_FAILED: ${verdict8.reasonCodes.join(",")}`);
+      return this.handleGateFailure(request.missionId, verdict8, kernel, evidencePool);
     }
 
-    // ------------------------------------------------------- 9. NAMLA LAB STAGE ---
+    // ----------------------------------------------------- 9. NAMLA LAB STAGE ---
     currentState = "PACKAGING";
     const labRes = this.labPackager.packageDeliverables(
-      leggoRes.integratedCandidate,
+      primaryCandidate,
       proMaxRes.assessment,
       boundContext,
       kernel,
@@ -414,7 +465,7 @@ export class NamlaRuntime {
     const gate9Input: GateInput = {
       missionId: request.missionId,
       stageId: "NAMLA_LAB",
-      artifactIdentity: leggoRes.integratedCandidate.integratedArtifacts[0],
+      artifactIdentity: primaryCandidate.integratedArtifacts[0],
       policyVersions: ["v1.0.0"],
       environmentIdentity: envIdentity,
       requiredAttestations: [],
@@ -427,10 +478,10 @@ export class NamlaRuntime {
 
     const verdict9 = loopGate.evaluateGate(gate9Input, evidencePool, recoveryPolicy);
     if (verdict9.status !== "PASS") {
-      return this.buildResponse(request.missionId, "FAILED", kernel, evidencePool, `GATE_9_FAILED: ${verdict9.reasonCodes.join(",")}`);
+      return this.handleGateFailure(request.missionId, verdict9, kernel, evidencePool);
     }
 
-    // ------------------------------------------------------- 10. DELIVERY STAGE ---
+    // ----------------------------------------------------- 10. DELIVERY STAGE ---
     currentState = "COMPLETED";
 
     return {
@@ -442,6 +493,26 @@ export class NamlaRuntime {
       receipts: kernel.getReceiptLog().list(),
       reasonCode: "DELIVERY_SUCCESSFUL",
     };
+  }
+
+  private handleGateFailure(
+    missionId: string,
+    verdict: GateVerdict,
+    kernel: TrustedKernel,
+    evidencePool: readonly EvidenceRecord[]
+  ): RunMissionResponse {
+    let finalState: MissionState = "FAILED";
+    if (verdict.nextAction === "HUMAN_REQUIRED") {
+      finalState = "HUMAN_REQUIRED";
+    }
+
+    return this.buildResponse(
+      missionId,
+      finalState,
+      kernel,
+      evidencePool,
+      `GATE_FAILURE_${verdict.nextAction}: ${verdict.reasonCodes.join(",")}`
+    );
   }
 
   private buildResponse(
