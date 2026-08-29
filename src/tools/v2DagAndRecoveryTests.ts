@@ -98,10 +98,12 @@ test("NamlaRuntime: Multi-Task Mission Pipeline Completion", () => {
       missionId: "mission-multi-task",
       objective: "Build a TypeScript project with core logic and tests",
       workspaceRoot: ws,
+      executionMode: "DETERMINISTIC_FIXTURE_MODE",
       projectClass: "TYPESCRIPT_LIBRARY",
     });
 
     assert.equal(result.success, true, `Multi-task DAG mission must complete: ${result.reasonCode}`);
+    assert.equal(result.executionMode, "DETERMINISTIC_FIXTURE_MODE");
     assert.equal(result.finalState, "COMPLETED");
   } finally {
     rmSync(ws, { recursive: true, force: true });

@@ -1,5 +1,5 @@
 /**
- * NAMLA PRO V2 Canonical Runtime (§03, §04, §05, §08, §18, P0.5, P0.6, P0.18).
+ * NAMLA PRO V2 Canonical Runtime (§03, §04, §05, §08, §18, P0.5, P0.6, P0.18, FINAL-P0-3).
  *
  * Single orchestration entry point running the canonical V2 pipeline:
  * Objective → EER → LOOP → PLAN → LOOP → PROTOCOL → LOOP → PRO → LOOP →
@@ -14,7 +14,7 @@ import { EerEngine } from "../eer/eerEngine";
 import { PlanEngine } from "../plan/planEngine";
 import { ProtocolEngine } from "../protocol/protocolEngine";
 import { ProDispatcher } from "../pro/proDispatcher";
-import { ColonyExecutor, ColonyExecutionResult } from "../colony/colonyExecutor";
+import { ColonyExecutor, ColonyExecutionResult, ExecutionMode } from "../colony/colonyExecutor";
 import { SonAnalyzer } from "../son/sonAnalyzer";
 import { LeggoIntegrator } from "../leggo/leggoIntegrator";
 import { ProMaxVerifier } from "../promax/proMaxVerifier";
@@ -31,6 +31,7 @@ export interface RunMissionRequest {
   readonly missionId: string;
   readonly objective: string;
   readonly workspaceRoot: string;
+  readonly executionMode: ExecutionMode;
   readonly humanAuthorizationGranted?: boolean;
   readonly projectClass?: ProjectClass;
   readonly simulatedColonyACode?: string;
@@ -41,6 +42,7 @@ export interface RunMissionRequest {
 export interface RunMissionResponse {
   readonly success: boolean;
   readonly missionId: string;
+  readonly executionMode: ExecutionMode;
   readonly finalState: MissionState;
   readonly deliveryPackage?: DeliveryPackage;
   readonly evidenceRecords: readonly EvidenceRecord[];
@@ -61,6 +63,8 @@ export class NamlaRuntime {
   private readonly projectFactory = new ProjectFactory();
 
   public runMission(request: RunMissionRequest): RunMissionResponse {
+    const executionMode = request.executionMode;
+
     const kernel = new TrustedKernel({
       workspaceRoot: request.workspaceRoot,
       humanAuthorizationGranted: request.humanAuthorizationGranted ?? true,
@@ -123,15 +127,16 @@ export class NamlaRuntime {
       budgets: defaultBudgets,
       evidenceRefs: [],
       missionStateRef: currentState,
+      executionMode,
       contractPhase: "PRE_FREEZE",
     };
 
     const eerResult = this.eerEngine.evaluateObjective(request.objective, preFreezeContext);
     if (!eerResult.success || !eerResult.eerOutput) {
       if (eerResult.humanRequired) {
-        return this.buildResponse(request.missionId, "HUMAN_REQUIRED", kernel, evidencePool, eerResult.reasonCode);
+        return this.buildResponse(request.missionId, executionMode, "HUMAN_REQUIRED", kernel, evidencePool, eerResult.reasonCode);
       }
-      return this.buildResponse(request.missionId, "FAILED", kernel, evidencePool, eerResult.reasonCode);
+      return this.buildResponse(request.missionId, executionMode, "FAILED", kernel, evidencePool, eerResult.reasonCode);
     }
 
     const eerEv = kernel.emitEvidence("EER", request.missionId, "EER", { eerOutput: eerResult.eerOutput });
@@ -153,7 +158,7 @@ export class NamlaRuntime {
 
     const verdict1 = loopGate.evaluateGate(gate1Input, evidencePool, recoveryPolicy);
     if (verdict1.status !== "PASS") {
-      return this.handleGateFailure(request.missionId, verdict1, kernel, evidencePool);
+      return this.handleGateFailure(request.missionId, executionMode, verdict1, kernel, evidencePool);
     }
 
     // ------------------------------------------------------------ 2. PLAN STAGE ---
@@ -178,14 +183,14 @@ export class NamlaRuntime {
 
     const verdict2 = loopGate.evaluateGate(gate2Input, evidencePool, recoveryPolicy);
     if (verdict2.status !== "PASS") {
-      return this.handleGateFailure(request.missionId, verdict2, kernel, evidencePool);
+      return this.handleGateFailure(request.missionId, executionMode, verdict2, kernel, evidencePool);
     }
 
     // -------------------------------------------------------- 3. PROTOCOL STAGE ---
     currentState = "CONTRACT_FREEZE";
     const protocolResult = this.protocolEngine.freezePlanContract(draftPlan, preFreezeContext);
     if (!protocolResult.success || !protocolResult.frozenContract) {
-      return this.buildResponse(request.missionId, "FAILED", kernel, evidencePool, protocolResult.reasonCode);
+      return this.buildResponse(request.missionId, executionMode, "FAILED", kernel, evidencePool, protocolResult.reasonCode);
     }
 
     const frozenContract = protocolResult.frozenContract;
@@ -209,7 +214,7 @@ export class NamlaRuntime {
 
     const verdict3 = loopGate.evaluateGate(gate3Input, evidencePool, recoveryPolicy);
     if (verdict3.status !== "PASS") {
-      return this.handleGateFailure(request.missionId, verdict3, kernel, evidencePool);
+      return this.handleGateFailure(request.missionId, executionMode, verdict3, kernel, evidencePool);
     }
 
     const boundContext: ContractBoundStageContext = {
@@ -219,6 +224,7 @@ export class NamlaRuntime {
       budgets: defaultBudgets,
       evidenceRefs: evidencePool.map((e) => e.evidenceId),
       missionStateRef: currentState,
+      executionMode,
       contractPhase: "CONTRACT_BOUND",
       frozenPlanContract: frozenContract,
     };
@@ -266,7 +272,7 @@ export class NamlaRuntime {
 
         const verdict4 = loopGate.evaluateGate(gate4Input, evidencePool, recoveryPolicy);
         if (verdict4.status !== "PASS") {
-          return this.handleGateFailure(request.missionId, verdict4, kernel, evidencePool);
+          return this.handleGateFailure(request.missionId, executionMode, verdict4, kernel, evidencePool);
         }
 
         // --------------------------------------------- 5. COLONY A & B STAGE ---
@@ -277,7 +283,8 @@ export class NamlaRuntime {
           dualExec.executionA,
           boundContext,
           kernel,
-          request.simulatedColonyACode
+          request.simulatedColonyACode,
+          { mode: executionMode }
         );
 
         let resB: ColonyExecutionResult = this.colonyExecutor.executeWorkPackage(
@@ -285,7 +292,8 @@ export class NamlaRuntime {
           dualExec.executionB,
           boundContext,
           kernel,
-          request.simulatedColonyBCode
+          request.simulatedColonyBCode,
+          { mode: executionMode }
         );
 
         evidencePool.push(...resA.evidenceRecords, ...resB.evidenceRecords);
@@ -318,11 +326,11 @@ export class NamlaRuntime {
             );
             allExecutions.push(rerunExec.executionA, rerunExec.executionB);
 
-            resA = this.colonyExecutor.executeWorkPackage(targetWp, rerunExec.executionA, boundContext, kernel, request.simulatedColonyACode);
-            resB = this.colonyExecutor.executeWorkPackage(targetWp, rerunExec.executionB, boundContext, kernel, request.simulatedColonyBCode);
+            resA = this.colonyExecutor.executeWorkPackage(targetWp, rerunExec.executionA, boundContext, kernel, request.simulatedColonyACode, { mode: executionMode });
+            resB = this.colonyExecutor.executeWorkPackage(targetWp, rerunExec.executionB, boundContext, kernel, request.simulatedColonyBCode, { mode: executionMode });
             evidencePool.push(...resA.evidenceRecords, ...resB.evidenceRecords);
           } else {
-            return this.handleGateFailure(request.missionId, verdict5, kernel, evidencePool);
+            return this.handleGateFailure(request.missionId, executionMode, verdict5, kernel, evidencePool);
           }
         }
 
@@ -354,7 +362,7 @@ export class NamlaRuntime {
 
         const verdict6 = loopGate.evaluateGate(gate6Input, evidencePool, recoveryPolicy);
         if (verdict6.status !== "PASS") {
-          return this.handleGateFailure(request.missionId, verdict6, kernel, evidencePool);
+          return this.handleGateFailure(request.missionId, executionMode, verdict6, kernel, evidencePool);
         }
 
         // --------------------------------------------------- 7. LEGGO STAGE ---
@@ -362,7 +370,7 @@ export class NamlaRuntime {
         const previousCandidate = integratedCandidates.length > 0 ? integratedCandidates[integratedCandidates.length - 1] : undefined;
         const leggoRes = this.leggoIntegrator.integrate(targetWp, comparison, resA, resB, boundContext, kernel, previousCandidate);
         if (!leggoRes.success || !leggoRes.integratedCandidate) {
-          return this.buildResponse(request.missionId, "FAILED", kernel, evidencePool, leggoRes.reasonCode);
+          return this.buildResponse(request.missionId, executionMode, "FAILED", kernel, evidencePool, leggoRes.reasonCode);
         }
 
         if (leggoRes.evidenceRecord) {
@@ -386,7 +394,7 @@ export class NamlaRuntime {
 
         const verdict7 = loopGate.evaluateGate(gate7Input, evidencePool, recoveryPolicy);
         if (verdict7.status !== "PASS") {
-          return this.handleGateFailure(request.missionId, verdict7, kernel, evidencePool);
+          return this.handleGateFailure(request.missionId, executionMode, verdict7, kernel, evidencePool);
         }
 
         // Mark execution PASSED and update execution list
@@ -404,6 +412,7 @@ export class NamlaRuntime {
     if (!schedule.isComplete || integratedCandidates.length === 0) {
       return this.buildResponse(
         request.missionId,
+        executionMode,
         "FAILED",
         kernel,
         evidencePool,
@@ -421,7 +430,7 @@ export class NamlaRuntime {
     }
 
     if (!proMaxRes.success) {
-      return this.buildResponse(request.missionId, "FAILED", kernel, evidencePool, proMaxRes.reasonCode);
+      return this.buildResponse(request.missionId, executionMode, "FAILED", kernel, evidencePool, proMaxRes.reasonCode);
     }
 
     // NAMLA LOOP Gate 8
@@ -441,7 +450,7 @@ export class NamlaRuntime {
 
     const verdict8 = loopGate.evaluateGate(gate8Input, evidencePool, recoveryPolicy);
     if (verdict8.status !== "PASS") {
-      return this.handleGateFailure(request.missionId, verdict8, kernel, evidencePool);
+      return this.handleGateFailure(request.missionId, executionMode, verdict8, kernel, evidencePool);
     }
 
     // ----------------------------------------------------- 9. NAMLA LAB STAGE ---
@@ -455,7 +464,7 @@ export class NamlaRuntime {
     );
 
     if (!labRes.success || !labRes.deliveryPackage) {
-      return this.buildResponse(request.missionId, "FAILED", kernel, evidencePool, labRes.reasonCode);
+      return this.buildResponse(request.missionId, executionMode, "FAILED", kernel, evidencePool, labRes.reasonCode);
     }
 
     if (labRes.evidenceRecord) {
@@ -479,7 +488,7 @@ export class NamlaRuntime {
 
     const verdict9 = loopGate.evaluateGate(gate9Input, evidencePool, recoveryPolicy);
     if (verdict9.status !== "PASS") {
-      return this.handleGateFailure(request.missionId, verdict9, kernel, evidencePool);
+      return this.handleGateFailure(request.missionId, executionMode, verdict9, kernel, evidencePool);
     }
 
     // ----------------------------------------------------- 10. DELIVERY STAGE ---
@@ -488,6 +497,7 @@ export class NamlaRuntime {
     return {
       success: true,
       missionId: request.missionId,
+      executionMode,
       finalState: currentState,
       deliveryPackage: labRes.deliveryPackage,
       evidenceRecords: evidencePool,
@@ -498,6 +508,7 @@ export class NamlaRuntime {
 
   private handleGateFailure(
     missionId: string,
+    executionMode: ExecutionMode,
     verdict: GateVerdict,
     kernel: TrustedKernel,
     evidencePool: readonly EvidenceRecord[]
@@ -509,6 +520,7 @@ export class NamlaRuntime {
 
     return this.buildResponse(
       missionId,
+      executionMode,
       finalState,
       kernel,
       evidencePool,
@@ -518,6 +530,7 @@ export class NamlaRuntime {
 
   private buildResponse(
     missionId: string,
+    executionMode: ExecutionMode,
     finalState: MissionState,
     kernel: TrustedKernel,
     evidenceRecords: readonly EvidenceRecord[],
@@ -526,6 +539,7 @@ export class NamlaRuntime {
     return {
       success: finalState === "COMPLETED",
       missionId,
+      executionMode,
       finalState,
       evidenceRecords,
       receipts: kernel.getReceiptLog().list(),

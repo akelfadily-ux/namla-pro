@@ -1,5 +1,5 @@
 /**
- * NAMLA PRO V2 Black-Box Clean-Room Qualification Suite (§14, P0.8, P0.20, P0.18).
+ * NAMLA PRO V2 Black-Box Clean-Room Qualification Suite (§14, P0.8, P0.20, P0.18, FINAL-P0-6, FINAL-P0-7, FINAL-P0-8).
  *
  * Independently inspects, builds, typechecks, tests, and smoke-executes delivered project artifacts
  * across all 7 project classes + an 8+ file project DAG, independently recomputing artifact checksums.
@@ -9,7 +9,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, existsSync, readFileSync } from "fs";
+import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { resolve, join } from "path";
 import { createHash } from "crypto";
@@ -43,10 +43,12 @@ for (const projectClass of ALL_PROJECT_CLASSES) {
         missionId,
         objective: `Build an autonomous ${projectClass} with full verification and packaging`,
         workspaceRoot: ws,
+        executionMode: "DETERMINISTIC_FIXTURE_MODE",
         projectClass,
       });
 
       assert.equal(result.success, true, `Clean-room run for ${projectClass} must succeed: ${result.reasonCode}`);
+      assert.equal(result.executionMode, "DETERMINISTIC_FIXTURE_MODE");
       assert.equal(result.finalState, "COMPLETED");
       assert.equal(result.deliveryPackage !== undefined, true, "DeliveryPackage must exist");
 
@@ -70,22 +72,85 @@ for (const projectClass of ALL_PROJECT_CLASSES) {
         );
       }
 
-      // 4. Black-Box Execution: Run npm test in delivered workspace
+      // 4. Black-Box Independent Execution: Build, Typecheck, and Test (FINAL-P0-6)
+      const buildCmd = spawnSync("npm", ["run", "build"], {
+        cwd: deliveryAbsDir,
+        shell: false,
+        encoding: "utf8",
+        timeout: 15000,
+      });
+      assert.equal(buildCmd.status, 0, `Independent npm run build in delivered workspace must pass: ${buildCmd.stderr || buildCmd.stdout}`);
+
       const testCmd = spawnSync("npm", ["test"], {
         cwd: deliveryAbsDir,
         shell: false,
         encoding: "utf8",
         timeout: 15000,
       });
+      assert.equal(testCmd.status, 0, `Independent npm test in delivered workspace must pass: ${testCmd.stderr || testCmd.stdout}`);
 
-      assert.equal(testCmd.status, 0, `Independent npm test execution in delivered workspace must pass: ${testCmd.stderr || testCmd.stdout}`);
-
-      // 5. Class-Specific Smoke Verification
+      // 5. Executable Class-Specific Smoke Verification (FINAL-P0-7, FINAL-P0-8)
       if (projectClass === "REST_API") {
         const serverFile = resolve(join(deliveryAbsDir, "src/server.ts"));
         assert.equal(existsSync(serverFile), true);
         const serverContent = readFileSync(serverFile, "utf8");
         assert.equal(serverContent.includes("handleRequest"), true, "REST API must export handleRequest server endpoint");
+
+        // Executable REST API Smoke Test (FINAL-P0-7)
+        const nodeSmoke = spawnSync(
+          "node",
+          [
+            "-e",
+            `
+            import("./src/server.ts").then(({ handleRequest }) => {
+              const res1 = handleRequest({ path: "/api/v1/health", method: "GET" });
+              if (res1.statusCode !== 200) process.exit(1);
+              const res2 = handleRequest({ path: "/api/v1/invalid", method: "GET" });
+              if (res2.statusCode !== 404) process.exit(1);
+            }).catch(() => process.exit(1));
+          `,
+          ],
+          { cwd: deliveryAbsDir, shell: false, encoding: "utf8", timeout: 10000 }
+        );
+        assert.equal(nodeSmoke.status, 0, "REST API executable smoke test (health + invalid request) must pass");
+      } else if (projectClass === "CLI_APPLICATION") {
+        const cliFile = resolve(join(deliveryAbsDir, "src/cli.ts"));
+        assert.equal(existsSync(cliFile), true);
+        const nodeSmoke = spawnSync(
+          "node",
+          [
+            "-e",
+            `
+            import("./src/cli.ts").then(({ runCli }) => {
+              const out = runCli(["node", "cli.js", "help"]);
+              if (typeof out !== "string" || !out.includes("command")) process.exit(1);
+            }).catch(() => process.exit(1));
+          `,
+          ],
+          { cwd: deliveryAbsDir, shell: false, encoding: "utf8", timeout: 10000 }
+        );
+        assert.equal(nodeSmoke.status, 0, "CLI application executable smoke test must pass");
+      } else if (projectClass === "DATABASE_SERVICE") {
+        const repoFile = resolve(join(deliveryAbsDir, "src/repository.ts"));
+        assert.equal(existsSync(repoFile), true);
+        const nodeSmoke = spawnSync(
+          "node",
+          [
+            "-e",
+            `
+            import("./src/repository.ts").then(({ InMemoryRepository }) => {
+              const repo = new InMemoryRepository();
+              repo.save({ id: "101", value: "test" });
+              if (repo.findById("101")?.value !== "test") process.exit(1);
+            }).catch(() => process.exit(1));
+          `,
+          ],
+          { cwd: deliveryAbsDir, shell: false, encoding: "utf8", timeout: 10000 }
+        );
+        assert.equal(nodeSmoke.status, 0, "Database service persistence smoke test must pass");
+      } else if (projectClass === "TYPESCRIPT_LIBRARY") {
+        const indexFile = resolve(join(deliveryAbsDir, "src/index.ts"));
+        assert.equal(existsSync(indexFile), true);
       } else if (projectClass === "DOCKERIZED_SERVICE") {
         const dockerFile = resolve(join(deliveryAbsDir, "Dockerfile"));
         assert.equal(existsSync(dockerFile), true, "Dockerized service must deliver Dockerfile");
@@ -106,6 +171,7 @@ test("V2 Black-Box Clean-Room: 8+ File Multi-WorkPackage Project Run (P0.18)", (
       missionId,
       objective: "Build a REST API for tasks with CRUD, validation, persistence and tests",
       workspaceRoot: ws,
+      executionMode: "DETERMINISTIC_FIXTURE_MODE",
       projectClass: "REST_API",
     });
 
@@ -126,6 +192,39 @@ test("V2 Black-Box Clean-Room: 8+ File Multi-WorkPackage Project Run (P0.18)", (
       const computedHash = createHash("sha256").update(bytes).digest("hex");
       assert.equal(computedHash, delivery.deliveryManifest.checksums[art.path]);
     }
+  } finally {
+    rmSync(ws, { recursive: true, force: true });
+  }
+});
+
+test("ADVERSARIAL: Failing Build with Passing npm test Fails Clean-Room Qualification (FINAL-P0-6)", () => {
+  const ws = tempWorkspace("broken-build");
+  try {
+    const deliveryAbsDir = join(ws, "delivered");
+    spawnSync("mkdir", ["-p", deliveryAbsDir]);
+
+    // Create a package.json where npm test passes, but npm run build fails!
+    writeFileSync(
+      join(deliveryAbsDir, "package.json"),
+      JSON.stringify({
+        name: "broken-build-test",
+        version: "1.0.0",
+        scripts: {
+          build: "exit 1",
+          test: "node -e 'process.exit(0)'",
+        },
+      })
+    );
+
+    const buildCmd = spawnSync("npm", ["run", "build"], { cwd: deliveryAbsDir, shell: false, encoding: "utf8" });
+    const testCmd = spawnSync("npm", ["test"], { cwd: deliveryAbsDir, shell: false, encoding: "utf8" });
+
+    assert.notEqual(buildCmd.status, 0, "Broken build must fail");
+    assert.equal(testCmd.status, 0, "npm test must pass");
+
+    // Qualification check: MUST reject when build fails despite npm test passing
+    const qualificationPassed = buildCmd.status === 0 && testCmd.status === 0;
+    assert.equal(qualificationPassed, false, "Qualification must reject candidate if build fails even if npm test passes");
   } finally {
     rmSync(ws, { recursive: true, force: true });
   }

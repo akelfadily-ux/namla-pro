@@ -2,7 +2,7 @@
  * V2 Colony Isolation & Autonomous Execution Tests (P0, P0.4, FINAL-P0-1, FINAL-P0-2, FINAL-P0-3).
  *
  * Verifies strict A/B isolation (separate execution IDs, separate workspaces, separate evidence,
- * no pre-SON solution visibility), explicit executionMode, and structural guard against
+ * no pre-SON solution visibility), explicit executionMode, structural guard against
  * PRODUCTION_MODE deterministic fallbacks, provider proposal parsing, and scope validation.
  *
  * Run: node dist/tools/v2ColonyIsolationTests.js
@@ -17,6 +17,7 @@ import { ColonyExecutor } from "../v2/colony/colonyExecutor";
 import { TrustedKernel } from "../v2/kernel/trustedKernel";
 import { WorkPackage, WorkPackageExecution } from "../v2/types/missionState";
 import { ContractBoundStageContext } from "../v2/types/stageContext";
+import { NamlaRuntime } from "../v2/runtime/namlaRuntime";
 
 function tempWorkspace(tag: string): string {
   return mkdtempSync(resolve(tmpdir(), `namla-v2-colony-${tag}-`));
@@ -394,6 +395,26 @@ test("ColonyExecutor: PRODUCTION_MODE Parses Structured Provider Output & Applie
     const resNoFiles = executor.executeWorkPackage(wp, execA, context, kernel, noFilesOutput, { mode: "PRODUCTION_MODE" });
     assert.equal(resNoFiles.success, false);
     assert.equal(resNoFiles.reasonCode.includes("PROVIDER_NO_PROPOSALS"), true);
+  } finally {
+    rmSync(ws, { recursive: true, force: true });
+  }
+});
+
+test("NamlaRuntime: PRODUCTION_MODE Cannot Fall Back to Deterministic Mode (Item 6)", () => {
+  const ws = tempWorkspace("runtime-prod-fallback");
+  try {
+    const runtime = new NamlaRuntime();
+    const result = runtime.runMission({
+      missionId: "m-runtime-prod-fallback",
+      objective: "Build a TypeScript library",
+      workspaceRoot: ws,
+      executionMode: "PRODUCTION_MODE",
+      projectClass: "TYPESCRIPT_LIBRARY",
+    });
+
+    assert.equal(result.executionMode, "PRODUCTION_MODE");
+    assert.equal(result.success, false);
+    assert.equal(result.finalState !== "COMPLETED", true, "PRODUCTION_MODE without real provider output must not reach COMPLETED");
   } finally {
     rmSync(ws, { recursive: true, force: true });
   }
