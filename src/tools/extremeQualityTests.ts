@@ -211,6 +211,36 @@ test("Extreme Quality Suite — Operation Idempotency and Input Mismatch Protect
   const db = new MemoryDatabaseClient();
   const repo = new PostgresStateRepository(db);
 
+  await repo.createRun({
+    id: "run-eq-1",
+    status: RunStatus.Running,
+    goal: "Test Task",
+    budgetLimits: {},
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+
+  await repo.createTask({
+    id: "task-eq-1",
+    runId: "run-eq-1",
+    title: "Task",
+    description: "Desc",
+    status: TaskStatus.Created,
+    role: "ENGINEER" as any,
+    attempt: 0,
+    maxAttempts: 3,
+    depth: 0,
+    requirements: [],
+    dependencies: [],
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+
+  const taskRef = db.tasks.get("task-eq-1");
+  taskRef.lease_owner = "worker-1";
+  taskRef.lease_token = "token-1";
+  taskRef.lease_expires_at = new Date(Date.now() + 60_000);
+
   const opInput1 = {
     id: "op-eq-1",
     toolName: "filesystem.write",
@@ -220,7 +250,9 @@ test("Extreme Quality Suite — Operation Idempotency and Input Mismatch Protect
     antId: "ant-1",
   };
 
-  const claim1 = await repo.claimOperation(opInput1, "worker-1", 60_000);
+  const authority = { workerId: "worker-1", leaseToken: "token-1" };
+
+  const claim1 = await repo.claimOperation(opInput1, authority, 60_000);
   assert.strictEqual(claim1.status, "CLAIMED");
   assert.ok(claim1.claimToken);
 
@@ -234,7 +266,7 @@ test("Extreme Quality Suite — Operation Idempotency and Input Mismatch Protect
     antId: "ant-1",
   };
 
-  const claim2 = await repo.claimOperation(opInput2, "worker-2", 60_000);
+  const claim2 = await repo.claimOperation(opInput2, authority, 60_000);
   assert.strictEqual(claim2.status, "INPUT_HASH_MISMATCH", "Mismatching input hash on same operation ID is rejected");
 });
 

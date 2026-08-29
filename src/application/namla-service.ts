@@ -91,6 +91,27 @@ export class NamlaService {
   }
 
   async processRun(runId: string, workerId = "worker-1"): Promise<void> {
+    const run = await this.container.state.getRun(runId);
+    if (!run) {
+      throw new ConfigurationError(`Run not found: ${runId}`);
+    }
+
+    if (run.status === RunStatus.Created) {
+      await this.container.state.transitionRun(runId, RunStatus.Created, RunStatus.Planning);
+      await this.container.state.appendEvent({
+        type: "run.started",
+        runId,
+        traceId: `trace-${runId}`,
+        timestamp: new Date(),
+        payload: { goal: run.goal },
+      });
+    }
+
+    const currentRun = await this.container.state.getRun(runId);
+    if (currentRun?.status === RunStatus.Planning) {
+      await this.container.state.transitionRun(runId, RunStatus.Planning, RunStatus.Running);
+    }
+
     // Correct Order: Recover expired executions FIRST before clearing stale lease times
     await this.container.state.recoverExpiredTaskExecutions(runId);
     await this.container.state.recoverExpiredLeases(runId);
@@ -122,6 +143,32 @@ export class NamlaService {
         });
       } finally {
         await this.container.state.releaseTaskLease(claimed.id, workerId, leaseToken);
+      }
+    }
+
+    // Check terminal run state evaluation after runnable task loop
+    const allTasks = await this.container.state.listRunnableTasks(runId);
+    const updatedRun = await this.container.state.getRun(runId);
+    if (updatedRun && updatedRun.status === RunStatus.Running) {
+      const initialPlanningTask = await this.container.state.getTask(runId);
+      if (initialPlanningTask?.status === TaskStatus.Approved) {
+        await this.container.state.transitionRun(runId, RunStatus.Running, RunStatus.Completed);
+        await this.container.state.appendEvent({
+          type: "run.completed",
+          runId,
+          traceId: `trace-${runId}`,
+          timestamp: new Date(),
+          payload: { goal: updatedRun.goal },
+        });
+      } else if (initialPlanningTask?.status === TaskStatus.Failed) {
+        await this.container.state.transitionRun(runId, RunStatus.Running, RunStatus.Failed);
+        await this.container.state.appendEvent({
+          type: "run.failed",
+          runId,
+          traceId: `trace-${runId}`,
+          timestamp: new Date(),
+          payload: { goal: updatedRun.goal, reason: "Initial planning task failed" },
+        });
       }
     }
   }

@@ -502,46 +502,80 @@ export class PostgresStateRepository implements StateRepository {
     estimatedCostUsd: number,
     estimatedTokens: number,
   ): Promise<{ reserved: boolean; reservationId?: string }> {
-    // Acquire FOR UPDATE lock on the run row to enforce atomic budget critical section
-    await this.db.query(`SELECT id FROM runs WHERE id = $1 FOR UPDATE`, [runId]);
+    const executeReservation = async (client: DatabaseClient) => {
+      // Acquire FOR UPDATE lock on the run row inside explicit transaction block
+      await client.query(`SELECT id FROM runs WHERE id = $1 FOR UPDATE`, [runId]);
 
-    const limits = await this.getBudgetLimits(runId);
-    const usage = await this.getBudgetUsage(runId);
+      const limitsRes = await client.query(`SELECT budget_limits FROM runs WHERE id = $1`, [runId]);
+      const limits: BudgetLimits = limitsRes.rows.length > 0
+        ? (typeof limitsRes.rows[0].budget_limits === "string" ? JSON.parse(limitsRes.rows[0].budget_limits) : limitsRes.rows[0].budget_limits || {})
+        : {};
 
-    // Sum active unexpired reservations in budget_reservations table
-    const activeRes = await this.db.query(
-      `SELECT COALESCE(SUM(reserved_cost_usd), 0) as reserved_cost, COALESCE(SUM(reserved_tokens), 0) as reserved_tokens
-       FROM budget_reservations
-       WHERE run_id = $1 AND status = 'RESERVED'`,
-      [runId],
-    );
+      const usageRes = await client.query(
+        `SELECT
+          COALESCE(SUM(actual_cost_usd), 0) as cost_usd,
+          COALESCE(SUM(actual_tokens), 0) as tokens
+         FROM budget_reservations
+         WHERE run_id = $1 AND status = 'RECONCILED'`,
+        [runId],
+      );
+      const usageRow = usageRes.rows[0] || {};
+      const currentCost = Number(usageRow.cost_usd || 0);
+      const currentTokens = Number(usageRow.tokens || 0);
 
-    const pendingCost = Number(activeRes.rows[0]?.reserved_cost || 0);
-    const pendingTokens = Number(activeRes.rows[0]?.reserved_tokens || 0);
+      // Sum active unexpired reservations in budget_reservations table
+      const activeRes = await client.query(
+        `SELECT COALESCE(SUM(reserved_cost_usd), 0) as reserved_cost, COALESCE(SUM(reserved_tokens), 0) as reserved_tokens
+         FROM budget_reservations
+         WHERE run_id = $1 AND status = 'RESERVED'`,
+        [runId],
+      );
 
-    const totalCost = usage.costUsd + pendingCost + estimatedCostUsd;
-    const totalTokens = usage.inputTokens + usage.outputTokens + pendingTokens + estimatedTokens;
+      const pendingCost = Number(activeRes.rows[0]?.reserved_cost || 0);
+      const pendingTokens = Number(activeRes.rows[0]?.reserved_tokens || 0);
 
-    if (limits.maxCostUsd !== undefined && totalCost > limits.maxCostUsd) {
-      return { reserved: false };
+      const totalCost = currentCost + pendingCost + estimatedCostUsd;
+      const totalTokens = currentTokens + pendingTokens + estimatedTokens;
+
+      if (limits.maxCostUsd !== undefined && totalCost > limits.maxCostUsd) {
+        return { reserved: false };
+      }
+
+      if (limits.maxTokens !== undefined && totalTokens > limits.maxTokens) {
+        return { reserved: false };
+      }
+
+      const reservationId = randomUUID();
+      const now = new Date();
+
+      // Persist budget reservation record
+      await client.query(
+        `INSERT INTO budget_reservations (
+          id, run_id, kind, reserved_cost_usd, reserved_tokens, status, created_at
+        ) VALUES ($1, $2, 'MODEL', $3, $4, 'RESERVED', $5)`,
+        [reservationId, runId, estimatedCostUsd, estimatedTokens, now],
+      );
+
+      return { reserved: true, reservationId };
+    };
+
+    // If db supports transaction execution via client checkout, wrap inside BEGIN...COMMIT
+    if ((this.db as any).pool && typeof (this.db as any).pool.connect === "function") {
+      const client = await (this.db as any).pool.connect();
+      try {
+        await client.query("BEGIN");
+        const result = await executeReservation(client);
+        await client.query("COMMIT");
+        return result;
+      } catch (err) {
+        await client.query("ROLLBACK");
+        throw err;
+      } finally {
+        if (typeof client.release === "function") client.release();
+      }
     }
 
-    if (limits.maxTokens !== undefined && totalTokens > limits.maxTokens) {
-      return { reserved: false };
-    }
-
-    const reservationId = randomUUID();
-    const now = new Date();
-
-    // Persist budget reservation record
-    await this.db.query(
-      `INSERT INTO budget_reservations (
-        id, run_id, kind, reserved_cost_usd, reserved_tokens, status, created_at
-      ) VALUES ($1, $2, 'MODEL', $3, $4, 'RESERVED', $5)`,
-      [reservationId, runId, estimatedCostUsd, estimatedTokens, now],
-    );
-
-    return { reserved: true, reservationId };
+    return executeReservation(this.db);
   }
 
   async reconcileBudget(
@@ -607,18 +641,29 @@ export class PostgresStateRepository implements StateRepository {
 
   async claimOperation(
     op: Partial<OperationRecord> & { id: OperationId; toolName: string; inputHash: string; runId: RunId; taskId: TaskId; antId: AntId },
-    workerId: WorkerId,
+    authority: { workerId: WorkerId; leaseToken: string },
     leaseDurationMs = 60_000,
-  ): Promise<{ status: "CLAIMED" | "COMPLETED" | "RUNNING_OTHER_LEASE" | "INPUT_HASH_MISMATCH"; record?: OperationRecord; claimToken?: string }> {
+  ): Promise<{ status: "CLAIMED" | "COMPLETED" | "RUNNING_OTHER_LEASE" | "INPUT_HASH_MISMATCH" | "TASK_AUTHORITY_LOST"; record?: OperationRecord; claimToken?: string }> {
     const claimToken = randomUUID();
     const expiresAt = new Date(Date.now() + leaseDurationMs);
     const now = new Date();
 
-    // Atomic SQL Upsert and claim using conditional ON CONFLICT DO UPDATE with identity matching
+    const authWorker = authority.workerId;
+    const authTokens = authority.leaseToken;
+
+    // Strict atomic SQL claim requiring active, non-null, unexpired task lease ownership
     const res = await this.db.query<any>(
       `INSERT INTO operations (
         operation_id, id, run_id, task_id, ant_id, operation_type, tool_name, input_hash, status, lease_owner, owner, claim_token, lease_expires_at, created_at
-      ) VALUES ($1, $1, $2, $3, $4, $5, $5, $6, 'RUNNING', $7, $7, $8, $9, $10)
+      )
+      SELECT $1, $1, $2, $3, $4, $5, $5, $6, 'RUNNING', $7, $7, $8, $9, $10
+      FROM tasks
+      WHERE tasks.id = $3
+        AND tasks.run_id = $2
+        AND tasks.lease_owner = $7
+        AND tasks.lease_token = $11
+        AND tasks.lease_expires_at IS NOT NULL
+        AND tasks.lease_expires_at > NOW()
       ON CONFLICT (operation_id) DO UPDATE SET
         status = 'RUNNING',
         lease_owner = EXCLUDED.lease_owner,
@@ -632,8 +677,35 @@ export class PostgresStateRepository implements StateRepository {
         AND operations.tool_name = EXCLUDED.tool_name
         AND operations.input_hash = EXCLUDED.input_hash
       RETURNING *`,
-      [op.id, op.runId, op.taskId, op.antId, op.toolName, op.inputHash, workerId, claimToken, expiresAt, now],
+      [op.id, op.runId, op.taskId, op.antId, op.toolName, op.inputHash, authWorker, claimToken, expiresAt, now, authTokens],
     );
+
+    if (res.rows && res.rows.length === 0) {
+      // First verify if task authority is active. If task authority is lost/expired, return TASK_AUTHORITY_LOST regardless of existing operations
+      const task = await this.getTask(op.taskId);
+      const isLeaseActive = task?.leaseExpiresAt ? new Date(task.leaseExpiresAt) > now : false;
+      if (
+        !task ||
+        !task.leaseOwner ||
+        task.leaseOwner !== authWorker ||
+        (authTokens !== null && task.leaseToken !== authTokens) ||
+        !isLeaseActive
+      ) {
+        return { status: "TASK_AUTHORITY_LOST" };
+      }
+
+      const existingOp = await this.getOperationRecord(op.id);
+      if (!existingOp) {
+        return { status: "TASK_AUTHORITY_LOST" };
+      }
+      if (existingOp.inputHash && existingOp.inputHash !== op.inputHash) {
+        return { status: "INPUT_HASH_MISMATCH", record: existingOp };
+      }
+      if (existingOp.status === OperationStatus.Completed) {
+        return { status: "COMPLETED", record: existingOp };
+      }
+      return { status: "RUNNING_OTHER_LEASE", record: existingOp };
+    }
 
     if (res.rows && res.rows.length > 0) {
       const r = res.rows[0];
@@ -656,7 +728,6 @@ export class PostgresStateRepository implements StateRepository {
       return { status: "CLAIMED", record, claimToken };
     }
 
-    // Fail closed if state record cannot be retrieved or claimed
     const record = await this.getOperationRecord(op.id);
     if (!record) {
       throw new Error(`STATE INVARIANT FAILURE: Operation ${op.id} claim produced no record and cannot be retrieved`);
@@ -699,21 +770,6 @@ export class PostgresStateRepository implements StateRepository {
       [error, operationId, workerId, claimToken],
     );
     return (res.rows && res.rows.length > 0) || Boolean(res.rowCount);
-  }
-
-  async getOperationResult<T>(
-    operationId: OperationId,
-  ): Promise<T | null> {
-    const record = await this.getOperationRecord(operationId);
-    if (!record || record.status !== OperationStatus.Completed) return null;
-    return record.result as T;
-  }
-
-  async saveOperationResult<T>(
-    operationId: OperationId,
-    value: T,
-  ): Promise<void> {
-    await this.completeOperation(operationId, "system", "legacy-token", value);
   }
 
   private mapTaskRow(r: PostgresTaskRow & { lease_token?: string }): TaskRecord {

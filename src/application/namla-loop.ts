@@ -69,6 +69,17 @@ export class NamlaLoop {
       );
     }
 
+    const executionStartTime = new Date();
+    await this.state.saveAntExecution({
+      antId: task.assignedAntId || (task.role ? `ant-${String(task.role).toLowerCase()}` : "ant-worker"),
+      runId: task.runId,
+      taskId: task.id,
+      role: task.role,
+      attempt: task.attempt,
+      startedAt: executionStartTime,
+      status: TaskStatus.Running,
+    });
+
     try {
       if (abortController.signal.aborted) {
         throw new Error(`Worker lease lost before execution start for task ${task.id}`);
@@ -84,14 +95,14 @@ export class NamlaLoop {
         throw new Error(`Worker lease lost during execution for task ${task.id}`);
       }
 
-      // Persist AntExecution record
+      // Mark AntExecution as complete upon successful executor execution
       await this.state.saveAntExecution({
         antId: task.assignedAntId || (task.role ? `ant-${String(task.role).toLowerCase()}` : "ant-worker"),
         runId: task.runId,
         taskId: task.id,
         role: task.role,
         attempt: task.attempt,
-        startedAt: new Date(),
+        startedAt: executionStartTime,
         finishedAt: new Date(),
         status: TaskStatus.Testing,
       });
@@ -246,6 +257,18 @@ export class NamlaLoop {
     authority: TaskExecutionAuthority,
   ): Promise<void> {
     const shouldRetry = task.attempt + 1 < task.maxAttempts;
+
+    // Persist AntExecution failure status
+    await this.state.saveAntExecution({
+      antId: task.assignedAntId || (task.role ? `ant-${String(task.role).toLowerCase()}` : "ant-worker"),
+      runId: task.runId,
+      taskId: task.id,
+      role: task.role,
+      attempt: task.attempt,
+      startedAt: new Date(),
+      finishedAt: new Date(),
+      status: shouldRetry ? TaskStatus.Retrying : TaskStatus.Failed,
+    });
 
     await this.state.appendEvent({
       type: shouldRetry ? "task.retrying" : "task.failed",

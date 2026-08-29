@@ -64,6 +64,7 @@ const SUITES: readonly string[] = [
   "dist/tools/applicationEngineTests.js",
   "dist/tools/stateSchedulerTests.js",
   "dist/tools/postgresIntegrationTests.js",
+  "dist/tools/realPostgresIntegrationTests.js",
   "dist/tools/isolatedWorkspaceSmokeTests.js",
   "dist/tools/goldenRuntimeE2ETests.js",
   "dist/tools/applicationIntegrationTests.js",

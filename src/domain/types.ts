@@ -145,6 +145,15 @@ export interface AntExecution {
   status: TaskStatus;
 }
 
+export type GitOperation =
+  | { kind: "status" }
+  | { kind: "log"; count?: number }
+  | { kind: "diff"; target?: string }
+  | { kind: "commit"; message: string }
+  | { kind: "branch"; name: string }
+  | { kind: "checkout"; branch: string; create?: boolean }
+  | { kind: "forbidden"; action: "pull" | "merge" | "rebase" | "cherry-pick" | "am" };
+
 export interface PermissionRequest {
   capability: string;
   resource?: string;

@@ -50,14 +50,6 @@ class MockStateRepository {
     return this.operations.get(opId) ?? null;
   }
 
-  async getOperationResult<T>(opId: string): Promise<T | null> {
-    const op = this.operations.get(opId);
-    return (op && op.status === "COMPLETED") ? op.result : null;
-  }
-
-  async saveOperationResult<T>(opId: string, val: T): Promise<void> {
-    this.completeOperation(opId, "system", "legacy-token", val);
-  }
 
   async getTask(taskId: string): Promise<any> {
     const t = this.tasks.get(taskId);

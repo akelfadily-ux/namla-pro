@@ -101,7 +101,7 @@ test("PostgresStateRepository integration semantics", async (t) => {
       antId: "ant-1",
     };
 
-    const claim1 = await repo.claimOperation(op, "worker-1");
+    const claim1 = await repo.claimOperation(op, { workerId: "worker-1", leaseToken: "token-1" });
     assert.equal(claim1.status, "CLAIMED");
     assert.ok(claim1.claimToken);
 

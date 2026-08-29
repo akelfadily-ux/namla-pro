@@ -7,7 +7,16 @@ import {
 import { RunId } from "../domain/types";
 import { BudgetController } from "./budget-controller";
 
+import { ConfigurationError } from "../domain/errors";
+
+export enum ProviderBillingState {
+  UNBILLED_FAILURE = "UNBILLED_FAILURE",
+  BILLED_FAILURE = "BILLED_FAILURE",
+  UNKNOWN_BILLING_FAILURE = "UNKNOWN_BILLING_FAILURE",
+}
+
 export interface ModelPricing {
+  version: string;
   provider: string;
   model: string;
   inputUsdPerToken: number;
@@ -18,9 +27,9 @@ export interface ModelPricing {
 export class ModelGateway {
   private readonly adapters = new Map<string, ModelAdapter>();
   private readonly pricingCatalog = new Map<string, ModelPricing>([
-    ["openai:gpt-4", { provider: "openai", model: "gpt-4", inputUsdPerToken: 0.00003, outputUsdPerToken: 0.00006, maxOutputTokens: 2000 }],
-    ["openai:gpt-3.5-turbo", { provider: "openai", model: "gpt-3.5-turbo", inputUsdPerToken: 0.0000015, outputUsdPerToken: 0.000002, maxOutputTokens: 2000 }],
-    ["anthropic:claude-3-opus", { provider: "anthropic", model: "claude-3-opus", inputUsdPerToken: 0.000015, outputUsdPerToken: 0.000075, maxOutputTokens: 2000 }],
+    ["openai:gpt-4", { version: "2024-01-01", provider: "openai", model: "gpt-4", inputUsdPerToken: 0.00003, outputUsdPerToken: 0.00006, maxOutputTokens: 2000 }],
+    ["openai:gpt-3.5-turbo", { version: "2024-01-01", provider: "openai", model: "gpt-3.5-turbo", inputUsdPerToken: 0.0000015, outputUsdPerToken: 0.000002, maxOutputTokens: 2000 }],
+    ["anthropic:claude-3-opus", { version: "2024-01-01", provider: "anthropic", model: "claude-3-opus", inputUsdPerToken: 0.000015, outputUsdPerToken: 0.000075, maxOutputTokens: 2000 }],
   ]);
 
   constructor(
@@ -59,13 +68,14 @@ export class ModelGateway {
     }
 
     const modelName = request.model || "gpt-4";
-    const pricing = this.pricingCatalog.get(`${provider}:${modelName}`) || {
-      provider,
-      model: modelName,
-      inputUsdPerToken: 0.00003,
-      outputUsdPerToken: 0.00006,
-      maxOutputTokens: 2000,
-    };
+    const pricingKey = `${provider}:${modelName}`;
+    const pricing = this.pricingCatalog.get(pricingKey);
+
+    if (!pricing) {
+      throw new ConfigurationError(
+        `Versioned pricing catalog fail-closed: Unknown model '${modelName}' for provider '${provider}'`,
+      );
+    }
 
     // Model/provider-aware conservative cost estimation
     const inputChars = (request.system?.length || 0) + (request.input?.length || 0);
@@ -99,12 +109,31 @@ export class ModelGateway {
     } catch (error) {
       const errMsg = error instanceof Error ? error.message : "Model generation failed";
 
-      // Release reservation on pre-dispatch / unbilled provider failure
-      if (reservation.reservationId && typeof this.state.releaseBudgetReservation === "function") {
-        try {
-          await this.state.releaseBudgetReservation(reservation.reservationId, errMsg);
-        } catch {
-          /* ignore release errors */
+      // Classify provider billing state
+      const billingState: ProviderBillingState =
+        (error as any)?.billingState ?? ProviderBillingState.UNBILLED_FAILURE;
+
+      if (reservation.reservationId) {
+        if (billingState === ProviderBillingState.UNBILLED_FAILURE) {
+          // Release reservation to $0 cost on unbilled failure
+          if (typeof this.state.releaseBudgetReservation === "function") {
+            try {
+              await this.state.releaseBudgetReservation(reservation.reservationId, errMsg);
+            } catch (relErr) {
+              throw new Error(`ACCOUNTING_BLOCKED: Failed to release budget reservation ${reservation.reservationId}: ${relErr instanceof Error ? relErr.message : String(relErr)}`);
+            }
+          }
+        } else {
+          // BILLED_FAILURE or UNKNOWN_BILLING_FAILURE: Reconcile reservation with full estimated cost to prevent uncounted API drain
+          try {
+            await this.state.reconcileBudget(
+              reservation.reservationId,
+              estimatedCost,
+              estimatedInputTokens + estimatedOutputTokens,
+            );
+          } catch (recErr) {
+            throw new Error(`ACCOUNTING_BLOCKED: Failed to reconcile budget reservation ${reservation.reservationId}: ${recErr instanceof Error ? recErr.message : String(recErr)}`);
+          }
         }
       }
 
@@ -114,7 +143,7 @@ export class ModelGateway {
           runId,
           traceId: `trace-${runId}`,
           timestamp: new Date(),
-          payload: { provider, model: request.model, error: errMsg },
+          payload: { provider, model: request.model, error: errMsg, billingState },
         });
       } catch {
         /* telemetry failure isolated */
@@ -131,7 +160,7 @@ export class ModelGateway {
           response.usage.inputTokens + response.usage.outputTokens,
         );
       } catch (error) {
-        throw new Error(`ACCOUNTING CRITICAL FAULT: Failed to reconcile budget reservation ${reservation.reservationId}: ${error instanceof Error ? error.message : String(error)}`);
+        throw new Error(`ACCOUNTING_BLOCKED: Failed to reconcile budget reservation ${reservation.reservationId}: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
 

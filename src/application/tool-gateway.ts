@@ -34,8 +34,8 @@ export class ToolGateway {
     rawInput: unknown,
     context: ToolExecutionContext,
     timeoutMs = 60_000,
-    workerId = "worker-1",
   ): Promise<O> {
+    const effectiveWorkerId = context.authority?.workerId ?? "worker-1";
     const adapter = this.tools.get(toolName);
 
     if (!adapter) {
@@ -51,6 +51,36 @@ export class ToolGateway {
     for (const req of reqs) {
       this.policy.authorize({ permissions: context.permissions }, req);
     }
+
+    if (!context.authority || !context.authority.workerId || !context.authority.leaseToken) {
+      throw new ToolExecutionError(
+        `TASK_AUTHORITY_LOST for ${context.taskId}: Tool execution requires valid task authority (workerId and leaseToken)`,
+        false,
+      );
+    }
+
+    const workerId = context.authority.workerId;
+
+    // 1. Prove active task lease authority BEFORE claiming operation or performing side effects
+    const isPrivileged = ToolGateway.PRIVILEGED_PREFIXES.some((p) => toolName.startsWith(p));
+    if (isPrivileged) {
+      const task = await this.state.getTask(context.taskId);
+      const isLeaseActive = task?.leaseExpiresAt ? new Date(task.leaseExpiresAt) > new Date() : false;
+      if (
+        !task ||
+        !task.leaseOwner ||
+        task.leaseOwner !== workerId ||
+        task.leaseToken !== context.authority.leaseToken ||
+        !isLeaseActive
+      ) {
+        throw new ToolExecutionError(
+          `TASK_AUTHORITY_LOST for ${context.taskId}: worker ${workerId} with lease token ${context.authority.leaseToken} does not hold an active unexpired task lease`,
+          false,
+        );
+      }
+    }
+
+    // 2. Fingerprint input and claim operation atomically with task authority check
     const inputHash = fingerprintOperation({
       runId: context.runId,
       taskId: context.taskId,
@@ -67,35 +97,22 @@ export class ToolGateway {
         taskId: context.taskId,
         antId: context.antId,
       },
-      workerId,
+      context.authority,
       timeoutMs,
     );
+
+    if (claim.status === "TASK_AUTHORITY_LOST") {
+      throw new ToolExecutionError(
+        `TASK_AUTHORITY_LOST for ${context.taskId}: worker ${context.authority?.workerId} with lease token ${context.authority?.leaseToken} does not hold an active unexpired task lease`,
+        false,
+      );
+    }
 
     if (claim.status === "INPUT_HASH_MISMATCH") {
       throw new ToolExecutionError(
         `Operation ID ${context.operationId} was previously used with different input hash or context`,
         false,
       );
-    }
-
-    // Verify task lease ownership and unexpired lease BEFORE claiming operation or performing side effects
-    const isPrivileged = ToolGateway.PRIVILEGED_PREFIXES.some((p) => toolName.startsWith(p));
-    if (isPrivileged) {
-      const task = await this.state.getTask(context.taskId);
-      const isLeaseActive = task?.leaseExpiresAt ? new Date(task.leaseExpiresAt) > new Date() : false;
-      if (
-        !task ||
-        !task.leaseOwner ||
-        !context.authority ||
-        task.leaseOwner !== context.authority.workerId ||
-        task.leaseToken !== context.authority.leaseToken ||
-        !isLeaseActive
-      ) {
-        throw new ToolExecutionError(
-          `Task lease authority lost or expired for ${context.taskId}: worker ${context.authority?.workerId} with lease token ${context.authority?.leaseToken} does not hold an active unexpired task lease`,
-          false,
-        );
-      }
     }
 
     if (claim.status === "COMPLETED") {

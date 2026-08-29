@@ -219,12 +219,7 @@ test("PostgresStateRepository & Scheduler atomic state logic", async (t) => {
     const db = new MockDatabase();
     const repo = new PostgresStateRepository(db);
 
-    const initial = await repo.getOperationResult<{ output: string }>("op-123");
+    const initial = await repo.getOperationRecord("op-123");
     assert.equal(initial, null);
-
-    await repo.saveOperationResult("op-123", { output: "success" });
-
-    const cached = await repo.getOperationResult<{ output: string }>("op-123");
-    assert.deepEqual(cached, { output: "success" });
   });
 });

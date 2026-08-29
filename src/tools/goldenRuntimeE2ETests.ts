@@ -166,11 +166,38 @@ test("Deterministic Golden Runtime E2E Suite", async () => {
       },
     };
 
+    const todoServerCode = `
+const http = require("http");
+function createTodoServer() {
+  const todos = [];
+  return http.createServer((req, res) => {
+    if (req.method === "POST" && req.url === "/todos") {
+      let body = "";
+      req.on("data", chunk => body += chunk);
+      req.on("end", () => {
+        const todo = JSON.parse(body || "{}");
+        todo.id = String(todos.length + 1);
+        todos.push(todo);
+        res.writeHead(201, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(todo));
+      });
+    } else if (req.method === "GET" && req.url === "/todos") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(todos));
+    } else {
+      res.writeHead(404);
+      res.end();
+    }
+  });
+}
+module.exports = { createTodoServer };
+`;
+
     const modelAdapter: ModelAdapter = {
       provider: "openai",
       generate: async <T>(req: any) => ({
-        value: req.validate ? req.validate("export function todoApi() { return { status: 200 }; }") : ("export function todoApi() { return { status: 200 }; }" as unknown as T),
-        usage: { inputTokens: 100, outputTokens: 100, estimatedCostUsd: 0.01 },
+        value: req.validate ? req.validate(todoServerCode) : (todoServerCode as unknown as T),
+        usage: { inputTokens: 150, outputTokens: 250, estimatedCostUsd: 0.015 },
         provider: "openai",
         model: "gpt-4",
       }),
@@ -179,43 +206,67 @@ test("Deterministic Golden Runtime E2E Suite", async () => {
     const buildGate: Gate = {
       name: "BuildGate",
       evaluate: async (ctx) => {
-        const fileExists = existsSync(join(ctx.workspacePath, "src", "server.ts"));
+        const filePath = join(ctx.workspacePath, "src", "server.js");
+        const fileExists = existsSync(filePath);
+        let syntaxValid = false;
+        if (fileExists) {
+          try {
+            require(filePath);
+            syntaxValid = true;
+          } catch {
+            syntaxValid = false;
+          }
+        }
+        const passed = fileExists && syntaxValid;
         return {
           gate: "BuildGate",
-          passed: fileExists,
-          reason: fileExists ? "Server source file generated and compiled" : "Missing src/server.ts",
-          evidence: [fileExists ? "src/server.ts present" : "absent"],
+          passed,
+          reason: passed ? "Server source file generated and successfully loaded by Node" : "Missing or invalid src/server.js",
+          evidence: [fileExists ? "src/server.js present" : "absent", syntaxValid ? "Node require syntax check passed" : "syntax failed"],
           requiredFixes: [],
         };
       },
     };
 
     const supervisor = {
-      review: async () => ({
-        approved: true,
-        reason: "Todo REST API code physically written to isolated workspace and verified by BuildGate",
-        risks: [],
-        requiredFixes: [],
-      }),
+      review: async (input: any) => {
+        const gateEvidence = input.gateEvidence || [];
+        const buildGatePassed = gateEvidence.some((g: any) => g.gate === "BuildGate" && g.passed);
+        return {
+          approved: buildGatePassed,
+          reason: buildGatePassed
+            ? "Todo REST API code physically written from model output provenance and verified by BuildGate"
+            : "BuildGate failed evidence check",
+          risks: [],
+          requiredFixes: [],
+        };
+      },
     };
 
     const executor = {
       execute: async (task: any) => {
-        // Execute tool call via container tool gateway during execution
+        // Generate code via ModelGateway to guarantee exact model output provenance
+        const modelResp = await container.models.generate(task.runId, "openai", {
+          system: "You are an expert engineer",
+          input: "Generate Todo REST API",
+          validate: (v: any) => String(v),
+        });
+
         const toolCtx = {
           runId: task.runId,
           taskId: task.id,
           antId: "ant-engineer",
           traceId: `trace-${task.runId}`,
           operationId: `op-${task.id}`,
-          permissions: [`filesystem.write:${join(tmpWorkspace, "src", "server.ts")}`],
+          permissions: [`filesystem.write:${join(tmpWorkspace, "src", "server.js")}`],
           authority: { workerId: "worker-e2e", leaseToken: task.leaseToken || "token-e2e" },
         };
 
-        await container.tools.execute("filesystem.write", { relativePath: "src/server.ts", content: "export function todoApi() { return { status: 200 }; }" }, toolCtx);
+        // Write EXACT model output provenance to isolated workspace
+        await container.tools.execute("filesystem.write", { relativePath: "src/server.js", content: modelResp.value }, toolCtx);
 
         return {
-          artifacts: [{ id: "art-server", runId: task.runId, taskId: task.id, type: "code", name: "src/server.ts", metadata: {}, createdAt: new Date() }],
+          artifacts: [{ id: "art-server", runId: task.runId, taskId: task.id, type: "code", name: "src/server.js", metadata: {}, createdAt: new Date() }],
           workspacePath: tmpWorkspace,
         };
       },
@@ -249,17 +300,47 @@ test("Deterministic Golden Runtime E2E Suite", async () => {
       input: "Generate Todo REST API",
       validate: (v: any) => String(v),
     });
-    assert.equal(modelResponse.value, "export function todoApi() { return { status: 200 }; }");
+    assert.equal(modelResponse.value, todoServerCode);
 
     // 3. Process Run (Namla Loop: EXECUTE -> TEST -> VERIFY -> REVIEW -> APPROVE)
     await service.processRun(summary.id, "worker-e2e");
 
-    // 4. Verify physical workspace file exists
-    const producedPath = join(tmpWorkspace, "src", "server.ts");
+    // 4. Verify physical workspace file exists with model output provenance
+    const producedPath = join(tmpWorkspace, "src", "server.js");
     assert.equal(existsSync(producedPath), true, "File must physically exist in isolated workspace");
-    assert.equal(readFileSync(producedPath, "utf8"), "export function todoApi() { return { status: 200 }; }");
+    const writtenCode = readFileSync(producedPath, "utf8");
+    assert.equal(writtenCode.includes("createTodoServer"), true, "File must contain model generated Todo server code");
 
-    // 5. Verify task status APPROVED
+    // 5. Perform real HTTP REST Acceptance Tests against running in-process server
+    const { createTodoServer } = require(producedPath);
+    const server = createTodoServer();
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as any).port;
+
+    try {
+      // Test POST /todos
+      const postRes = await fetch(`http://127.0.0.1:${port}/todos`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: "Golden E2E Task" }),
+      });
+      assert.equal(postRes.status, 201, "POST /todos must respond 201 Created");
+      const createdTodo = (await postRes.json()) as any;
+      assert.equal(createdTodo.id, "1");
+      assert.equal(createdTodo.title, "Golden E2E Task");
+
+      // Test GET /todos
+      const getRes = await fetch(`http://127.0.0.1:${port}/todos`);
+      assert.equal(getRes.status, 200, "GET /todos must respond 200 OK");
+      const todoList = (await getRes.json()) as any;
+      assert.equal(Array.isArray(todoList), true);
+      assert.equal(todoList.length, 1);
+      assert.equal(todoList[0].title, "Golden E2E Task");
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+
+    // 6. Verify task status APPROVED
     const tasks = Array.from(db.tasks.values());
     assert.equal(tasks.length, 1);
     assert.equal(tasks[0].status, TaskStatus.Approved);

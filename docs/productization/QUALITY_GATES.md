@@ -22,7 +22,7 @@
 | Supervisor      | UNIT TESTED | UNIT TESTED | MOCK TESTED | MOCK TESTED | UNIT TESTED | MOCK TESTED | UNIT TESTED | MOCK TESTED | `src/application/supervisor.ts` |
 | Artifacts       | UNIT TESTED | UNIT TESTED | MOCK TESTED | MOCK TESTED | UNIT TESTED | MOCK TESTED | UNIT TESTED | MOCK TESTED | `src/infrastructure/persistence/postgresStateRepository.ts` |
 | Observability   | UNIT TESTED | UNIT TESTED | MOCK TESTED | MOCK TESTED | UNIT TESTED | MOCK TESTED | UNIT TESTED | MOCK TESTED | `src/application/tool-gateway.ts` |
-| Golden E2E      | UNIT TESTED | UNIT TESTED | MOCK TESTED | MOCK TESTED | UNIT TESTED | MOCK TESTED | UNIT TESTED | MOCK TESTED | `src/tools/goldenRuntimeE2ETests.js` |
+| Golden E2E      | UNIT TESTED | UNIT TESTED | MOCK TESTED | MOCK TESTED | UNIT TESTED | MOCK TESTED | UNIT TESTED | MOCK TESTED | `src/tools/goldenRuntimeE2ETests.ts` |
 | Security        | UNIT TESTED | UNIT TESTED | MOCK TESTED | MOCK TESTED | UNIT TESTED | MOCK TESTED | UNIT TESTED | MOCK TESTED | `src/tools/extremeQualityTests.ts` |
 
 ---

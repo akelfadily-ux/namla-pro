@@ -119,9 +119,9 @@ export interface StateRepository {
 
   claimOperation(
     operation: Partial<OperationRecord> & { id: OperationId; toolName: string; inputHash: string; runId: RunId; taskId: TaskId; antId: AntId },
-    workerId: WorkerId,
+    authority: { workerId: WorkerId; leaseToken: string },
     leaseDurationMs?: number,
-  ): Promise<{ status: "CLAIMED" | "COMPLETED" | "RUNNING_OTHER_LEASE" | "INPUT_HASH_MISMATCH"; record?: OperationRecord; claimToken?: string }>;
+  ): Promise<{ status: "CLAIMED" | "COMPLETED" | "RUNNING_OTHER_LEASE" | "INPUT_HASH_MISMATCH" | "TASK_AUTHORITY_LOST"; record?: OperationRecord; claimToken?: string }>;
 
   completeOperation<T>(
     operationId: OperationId,
@@ -136,15 +136,6 @@ export interface StateRepository {
     claimToken: string,
     error: string,
   ): Promise<boolean>;
-
-  getOperationResult<T>(
-    operationId: OperationId,
-  ): Promise<T | null>;
-
-  saveOperationResult<T>(
-    operationId: OperationId,
-    value: T,
-  ): Promise<void>;
 }
 
 export interface ModelUsage {
