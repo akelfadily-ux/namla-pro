@@ -15,7 +15,7 @@ import { buildSafeChildEnv } from "../../cognitive/safeProviderRequest";
 import { CapabilityScope, PlanContract } from "../types/contracts";
 import { ArtifactIdentity, EnvironmentIdentity, EvidenceRecord } from "../types/evidence";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
-import { resolve, join, dirname } from "path";
+import { resolve, join, dirname, isAbsolute } from "path";
 import { createHash } from "crypto";
 import { spawnSync } from "child_process";
 
@@ -99,6 +99,15 @@ export class TrustedKernel {
     workPackageId?: string,
     executionId?: string
   ): { readonly success: boolean; readonly artifact?: ArtifactIdentity; readonly reasonCode: string } {
+    if (isAbsolute(relativePath) || relativePath.includes(":") || relativePath.includes("%")) {
+      this.receiptLog.create({
+        summary: "KERNEL_FILE_WRITE: FORBIDDEN",
+        status: "blocked",
+        details: { relativePath, reason: "Absolute or environment-expanded path forbidden" },
+      });
+      return { success: false, reasonCode: "PATH_TRAVERSAL_REFUSED" };
+    }
+
     const absolutePath = resolve(join(this.workspaceRoot, relativePath));
     if (!absolutePath.startsWith(this.workspaceRoot)) {
       this.receiptLog.create({
@@ -148,6 +157,10 @@ export class TrustedKernel {
   }
 
   public safeReadWorkspaceFile(relativePath: string): { readonly success: boolean; readonly content?: string; readonly reasonCode: string } {
+    if (isAbsolute(relativePath) || relativePath.includes(":") || relativePath.includes("%")) {
+      return { success: false, reasonCode: "PATH_TRAVERSAL_REFUSED" };
+    }
+
     const absolutePath = resolve(join(this.workspaceRoot, relativePath));
     if (!absolutePath.startsWith(this.workspaceRoot)) {
       return { success: false, reasonCode: "PATH_TRAVERSAL_REFUSED" };
