@@ -14,7 +14,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync, realpathSync, readFileSync, existsSync } from "fs";
+import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, rmSync, symlinkSync, realpathSync, readFileSync, existsSync } from "fs";
 import { createHash } from "crypto";
 import { tmpdir } from "os";
 import { resolve, join, dirname, delimiter, isAbsolute, basename } from "path";
@@ -26,7 +26,11 @@ const IS_WINDOWS = process.platform === "win32";
 let providerSpawnCount = 0;
 
 function tempDir(tag: string): string {
-  return mkdtempSync(resolve(tmpdir(), `namla-exe-${tag}-`));
+  const d = mkdtempSync(resolve(tmpdir(), `namla-exe-${tag}-`));
+  if (!IS_WINDOWS) {
+    chmodSync(d, 0o755);
+  }
+  return d;
 }
 
 /** Write a decoy executable with the given base name. Never executed by tests. */
@@ -34,6 +38,10 @@ function plantDecoy(dir: string, id: string): string {
   const name = IS_WINDOWS ? `${id}.cmd` : id;
   const p = join(dir, name);
   writeFileSync(p, IS_WINDOWS ? "@echo off\r\necho HIJACKED\r\n" : "#!/bin/sh\necho HIJACKED\n", { mode: 0o755 });
+  if (!IS_WINDOWS) {
+    chmodSync(p, 0o755);
+    chmodSync(dir, 0o755);
+  }
   return p;
 }
 
