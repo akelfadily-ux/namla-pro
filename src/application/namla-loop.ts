@@ -72,9 +72,9 @@ export class NamlaLoop {
       );
     }
 
-    const logicalAntId = task.assignedAntId ?? (task.role ? `ant-${String(task.role).toLowerCase()}` : null);
+    const logicalAntId = task.assignedAntId;
     if (!logicalAntId) {
-      throw new Error(`CONFIGURATION_ERROR: Task ${task.id} requires an assigned Ant identity or valid AntRole`);
+      throw new Error(`CONFIGURATION_ERROR: Task ${task.id} requires an explicit assignedAntId`);
     }
 
     const executionStartTime = new Date();
@@ -267,9 +267,9 @@ export class NamlaLoop {
   ): Promise<void> {
     const shouldRetry = task.attempt + 1 < task.maxAttempts;
 
-    const logicalAntId = task.assignedAntId ?? (task.role ? `ant-${String(task.role).toLowerCase()}` : null);
+    const logicalAntId = task.assignedAntId;
     if (!logicalAntId) {
-      throw new Error(`CONFIGURATION_ERROR: Task ${task.id} requires an assigned Ant identity or valid AntRole for failure recording`);
+      throw new Error(`CONFIGURATION_ERROR: Task ${task.id} requires an explicit assignedAntId for failure recording`);
     }
 
     // Persist AntExecution failure status using updateAntExecution to preserve original startedAt

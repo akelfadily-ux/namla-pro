@@ -297,6 +297,58 @@ test("Extreme Quality Suite — PolicyEngine Resource Scoping and Path Security"
     policy.authorize(antPolicy, { capability: "filesystem.write", resource: forbiddenFile });
   }, PermissionDeniedError, "Path outside scoped directory is denied");
 
+  // End-to-end structured Git security E2E test via ToolGateway
+  let adapterExecuted = false;
+  const mockGitAdapter: import("../domain/contracts").ToolAdapter<any, any> = {
+    name: "git",
+    validateInput: (i) => i,
+    getPermissionRequests: (input) => [
+      {
+        capability: "git",
+        resource: input.branch ?? "main",
+        gitOperation: { kind: "forbidden", action: input.action },
+      },
+    ],
+    execute: async () => {
+      adapterExecuted = true;
+      return { ok: true };
+    },
+  };
+
+  const mockState: any = {
+    getTask: async () => ({
+      id: "task-git-1",
+      leaseOwner: "worker-git",
+      leaseToken: "token-git",
+      leaseExpiresAt: new Date(Date.now() + 60_000),
+    }),
+    claimOperation: async () => ({ status: "CLAIMED", claimToken: "ct-1" }),
+    completeOperation: async () => true,
+    appendEvent: async () => {},
+  };
+
+  const gateway = new (require("../application/tool-gateway").ToolGateway)([mockGitAdapter], mockState, policy);
+  const toolCtx = {
+    runId: "run-git-1",
+    taskId: "task-git-1",
+    antId: "ant-git-1",
+    traceId: "trace-git-1",
+    operationId: "op-git-1",
+    permissions: ["*"], // Wildcard permissions MUST NOT override human-only Git denies
+    authority: { workerId: "worker-git", leaseToken: "token-git" },
+  };
+
+  const forbiddenActions: Array<"pull" | "merge" | "rebase" | "cherry-pick" | "am"> = ["pull", "merge", "rebase", "cherry-pick", "am"];
+  (async () => {
+    for (const action of forbiddenActions) {
+      adapterExecuted = false;
+      await assert.rejects(async () => {
+        await gateway.execute("git", { action, branch: "main" }, toolCtx);
+      }, PermissionDeniedError, `Structured Git operation '${action}' MUST be denied even with '*' permissions`);
+      assert.strictEqual(adapterExecuted, false, `GitAdapter.execute MUST NEVER be called for forbidden Git operation '${action}'`);
+    }
+  })();
+
   // Human-only Git operation policy test & shell command variant matrix
   const gitPolicy = { permissions: ["*"] };
   const forbiddenShellVariants = [

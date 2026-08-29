@@ -9,6 +9,9 @@ export interface CreateRunInput {
   budget?: {
     maxCostUsd?: number;
     maxTokens?: number;
+    maxConcurrency?: number;
+    maxAgents?: number;
+    maxDepth?: number;
   };
 }
 
@@ -31,6 +34,15 @@ export class NamlaService {
       if (input.budget.maxTokens !== undefined && (typeof input.budget.maxTokens !== "number" || input.budget.maxTokens < 0)) {
         throw new ConfigurationError("CreateRunInput.budget.maxTokens must be a non-negative number");
       }
+      if (input.budget.maxConcurrency !== undefined && (typeof input.budget.maxConcurrency !== "number" || input.budget.maxConcurrency < 1)) {
+        throw new ConfigurationError("CreateRunInput.budget.maxConcurrency must be a positive number >= 1");
+      }
+      if (input.budget.maxAgents !== undefined && (typeof input.budget.maxAgents !== "number" || input.budget.maxAgents < 1)) {
+        throw new ConfigurationError("CreateRunInput.budget.maxAgents must be a positive number >= 1");
+      }
+      if (input.budget.maxDepth !== undefined && (typeof input.budget.maxDepth !== "number" || input.budget.maxDepth < 0)) {
+        throw new ConfigurationError("CreateRunInput.budget.maxDepth must be a non-negative number");
+      }
     }
   }
 
@@ -50,6 +62,9 @@ export class NamlaService {
       budgetLimits: {
         maxCostUsd: input.budget?.maxCostUsd,
         maxTokens: input.budget?.maxTokens,
+        maxConcurrency: input.budget?.maxConcurrency,
+        maxAgents: input.budget?.maxAgents,
+        maxDepth: input.budget?.maxDepth,
       },
       createdAt: now,
       updatedAt: now,
@@ -62,6 +77,7 @@ export class NamlaService {
       description: input.goal,
       status: TaskStatus.Created,
       role: AntRole.Planner,
+      assignedAntId: `ant-planner-${initialTaskId.slice(0, 8)}`,
       attempt: 0,
       maxAttempts: 3,
       depth: 0,
@@ -97,8 +113,13 @@ export class NamlaService {
     };
   }
 
-  async recoverAccountingState(runId: string, reconciliationAuthority: string, evidenceRef: string): Promise<{ recovered: boolean }> {
-    const res = await this.container.state.recoverAccountingState(runId, reconciliationAuthority, evidenceRef);
+  async recoverAccountingState(
+    runId: string,
+    mode: import("../domain/types").AccountingRecoveryMode,
+    reconciliationAuthority: string,
+    evidenceRef: string,
+  ): Promise<{ recovered: boolean }> {
+    const res = await this.container.state.recoverAccountingState(runId, mode, reconciliationAuthority, evidenceRef);
     return { recovered: res.recovered };
   }
 
@@ -140,7 +161,10 @@ export class NamlaService {
         break; // Max concurrency limit reached
       }
 
-      const leasedTask = await this.container.state.claimTaskLease(task.id, workerId);
+      const leasedTask = await this.container.state.claimTaskLease(task.id, workerId, 120_000, {
+        maxConcurrency: run.budgetLimits.maxConcurrency,
+        maxAgents: run.budgetLimits.maxAgents,
+      });
       if (!leasedTask) continue;
 
       if (!leasedTask.leaseToken) {

@@ -130,6 +130,12 @@ export interface TaskRecord {
   updatedAt: Date;
 }
 
+export enum AccountingRecoveryMode {
+  PROVIDER_RECONCILED = "PROVIDER_RECONCILED",
+  HUMAN_RECONCILED = "HUMAN_RECONCILED",
+  CONSERVATIVE_MAX_WRITE_OFF = "CONSERVATIVE_MAX_WRITE_OFF",
+}
+
 export enum AntExecutionStatus {
   Started = "STARTED",
   Succeeded = "SUCCEEDED",
@@ -168,6 +174,7 @@ export type GitOperation =
 export interface PermissionRequest {
   capability: string;
   resource?: string;
+  gitOperation?: GitOperation;
 }
 
 export interface Artifact {

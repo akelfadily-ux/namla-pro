@@ -49,7 +49,12 @@ export interface StateRepository {
 
   setAccountingState(runId: RunId, state: RunAccountingState, reason?: string): Promise<void>;
 
-  recoverAccountingState(runId: RunId, reconciliationAuthority: string, evidenceRef: string): Promise<{ recovered: boolean; previousState: RunAccountingState }>;
+  recoverAccountingState(
+    runId: RunId,
+    mode: import("./types").AccountingRecoveryMode,
+    reconciliationAuthority: string,
+    evidenceRef: string,
+  ): Promise<{ recovered: boolean; previousState: RunAccountingState }>;
 
   transitionRun(
     runId: RunId,
@@ -85,6 +90,7 @@ export interface StateRepository {
     taskId: TaskId,
     workerId: WorkerId,
     leaseDurationMs?: number,
+    limits?: { maxConcurrency?: number; maxAgents?: number },
   ): Promise<TaskRecord | null>;
 
   renewTaskLease(

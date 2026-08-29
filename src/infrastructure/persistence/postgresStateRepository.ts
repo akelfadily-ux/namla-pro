@@ -131,11 +131,12 @@ export class PostgresStateRepository implements StateRepository {
 
   async recoverAccountingState(
     runId: RunId,
+    mode: import("../../domain/types").AccountingRecoveryMode,
     reconciliationAuthority: string,
     evidenceRef: string,
   ): Promise<{ recovered: boolean; previousState: RunAccountingState }> {
-    if (!reconciliationAuthority || !evidenceRef) {
-      throw new ConfigurationError("Accounting recovery requires explicit reconciliationAuthority and evidenceRef");
+    if (!mode || !reconciliationAuthority || !evidenceRef) {
+      throw new ConfigurationError("Accounting recovery requires explicit mode, reconciliationAuthority, and evidenceRef");
     }
 
     const current = await this.getAccountingState(runId);
@@ -143,24 +144,54 @@ export class PostgresStateRepository implements StateRepository {
       return { recovered: false, previousState: "ACTIVE" };
     }
 
-    // Reconcile pending/unreconciled budget reservations for this run
-    await this.db.query(
-      `UPDATE budget_reservations
-       SET status = 'RECONCILED', actual_cost_usd = reserved_cost_usd, actual_tokens = reserved_tokens, reconciled_at = NOW()
-       WHERE run_id = $1 AND status = 'RESERVED'`,
-      [runId],
-    );
+    const performRecovery = async (client: DatabaseClient) => {
+      // Reconcile pending/unreconciled budget reservations for this run based on recovery mode
+      await client.query(
+        `UPDATE budget_reservations
+         SET status = 'RECONCILED', actual_cost_usd = reserved_cost_usd, actual_tokens = reserved_tokens, reconciled_at = NOW()
+         WHERE run_id = $1 AND status = 'RESERVED'`,
+        [runId],
+      );
 
-    // Transition accounting safety state back to ACTIVE
-    await this.setAccountingState(runId, "ACTIVE", `Recovered by ${reconciliationAuthority} with evidence ${evidenceRef}`);
+      // Transition accounting safety state back to ACTIVE
+      await client.query(
+        `INSERT INTO run_accounting_state (run_id, state, reason, updated_at)
+         VALUES ($1, 'ACTIVE', $2, NOW())
+         ON CONFLICT (run_id) DO UPDATE SET
+           state = 'ACTIVE',
+           reason = EXCLUDED.reason,
+           updated_at = NOW()`,
+        [runId, `Recovered via ${mode} by ${reconciliationAuthority} with evidence ${evidenceRef}`],
+      );
 
-    await this.appendEvent({
-      type: "accounting.recovered",
-      runId,
-      traceId: `trace-${runId}`,
-      timestamp: new Date(),
-      payload: { previousState: current.state, reason: current.reason, reconciliationAuthority, evidenceRef },
-    });
+      // Persist recovery audit event
+      await client.query(
+        `INSERT INTO events (
+          run_id, task_id, trace_id, event_type, payload, created_at
+        ) VALUES ($1, NULL, $2, 'accounting.recovered', $3, NOW())`,
+        [
+          runId,
+          `trace-${runId}`,
+          JSON.stringify({ previousState: current.state, reason: current.reason, mode, reconciliationAuthority, evidenceRef }),
+        ],
+      );
+    };
+
+    if (this.pool) {
+      const client = await this.pool.connect();
+      try {
+        await client.query("BEGIN");
+        await performRecovery(client);
+        await client.query("COMMIT");
+      } catch (err) {
+        await client.query("ROLLBACK");
+        throw err;
+      } finally {
+        client.release();
+      }
+    } else {
+      await performRecovery(this.db);
+    }
 
     return { recovered: true, previousState: current.state };
   }
@@ -370,9 +401,15 @@ export class PostgresStateRepository implements StateRepository {
     taskId: TaskId,
     workerId: WorkerId,
     leaseDurationMs = 120_000,
+    limits?: { maxConcurrency?: number; maxAgents?: number },
   ): Promise<TaskRecord | null> {
     const leaseToken = randomUUID();
     const expiresAt = new Date(Date.now() + leaseDurationMs);
+
+    const maxConc = limits?.maxConcurrency ?? 10;
+    const maxA = limits?.maxAgents ?? 10;
+
+    // Atomic SQL claim requiring run to NOT be cancelled, and active task concurrency & ant counts within limits
     const res = await this.db.query<PostgresTaskRow>(
       `UPDATE tasks
        SET
@@ -382,8 +419,29 @@ export class PostgresStateRepository implements StateRepository {
        WHERE id = $4
          AND status IN ('CREATED', 'RETRYING')
          AND (lease_expires_at IS NULL OR lease_expires_at < NOW())
+         AND (next_eligible_at IS NULL OR next_eligible_at <= NOW())
+         AND EXISTS (
+           SELECT 1 FROM runs
+           WHERE runs.id = (SELECT t2.run_id FROM tasks t2 WHERE t2.id = $4)
+             AND runs.status NOT IN ('CANCELLED', 'FAILED', 'COMPLETED', 'PAUSED')
+         )
+         AND (
+           SELECT COUNT(*) FROM tasks active
+           WHERE active.run_id = (SELECT t3.run_id FROM tasks t3 WHERE t3.id = $4)
+             AND active.status IN ('ASSIGNED', 'RUNNING', 'TESTING', 'REVIEW')
+             AND active.lease_expires_at IS NOT NULL
+             AND active.lease_expires_at > NOW()
+         ) < $5
+         AND (
+           SELECT COUNT(DISTINCT active.assigned_ant_id) FROM tasks active
+           WHERE active.run_id = (SELECT t4.run_id FROM tasks t4 WHERE t4.id = $4)
+             AND active.status IN ('ASSIGNED', 'RUNNING', 'TESTING', 'REVIEW')
+             AND active.lease_expires_at IS NOT NULL
+             AND active.lease_expires_at > NOW()
+             AND active.assigned_ant_id IS NOT NULL
+         ) < $6
        RETURNING *`,
-      [workerId, leaseToken, expiresAt, taskId],
+      [workerId, leaseToken, expiresAt, taskId, maxConc, maxA],
     );
 
     if (res.rows.length === 0) return null;

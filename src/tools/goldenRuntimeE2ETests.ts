@@ -17,34 +17,55 @@ function createPGlitePostgresPool() {
   const db = newDb();
   let backup: any = null;
 
+  let inInterceptor = false;
   db.public.interceptQueries((sql: string) => {
-    const s = sql.trim();
-    if (s === "BEGIN") {
-      backup = db.backup();
-      return [];
-    }
-    if (s === "COMMIT") {
-      backup = null;
-      return [];
-    }
-    if (s === "ROLLBACK") {
-      if (backup) backup.restore();
-      return [];
-    }
-    if (s.includes("INSERT INTO operations") && s.includes("ON CONFLICT")) {
-      const match = /VALUES\s*\('([^']+)'/i.exec(s) || /SELECT\s*'([^']+)'/i.exec(s);
-      if (match) {
-        const opId = match[1];
-        const check = db.public.many(`SELECT status, lease_expires_at FROM operations WHERE operation_id = '${opId}'`);
-        if (check.length > 0) {
-          const row = check[0] as any;
-          if (row.status === "RUNNING" && row.lease_expires_at && new Date(row.lease_expires_at) > new Date()) {
-            return [];
+    if (inInterceptor) return null;
+    inInterceptor = true;
+    try {
+      const s = sql.trim();
+      if (s === "BEGIN") {
+        backup = db.backup();
+        return [];
+      }
+      if (s === "COMMIT") {
+        backup = null;
+        return [];
+      }
+      if (s === "ROLLBACK") {
+        if (backup) backup.restore();
+        return [];
+      }
+      if (s.includes("INSERT INTO operations") && s.includes("ON CONFLICT")) {
+        const match = /VALUES\s*\('([^']+)'/i.exec(s) || /SELECT\s*'([^']+)'/i.exec(s);
+        if (match) {
+          const opId = match[1];
+          const check = db.public.many(`SELECT status, lease_expires_at FROM operations WHERE operation_id = '${opId}'`);
+          if (check.length > 0) {
+            const row = check[0] as any;
+            if (row.status === "RUNNING" && row.lease_expires_at && new Date(row.lease_expires_at) > new Date()) {
+              return [];
+            }
           }
         }
       }
+      if (s.includes("UPDATE tasks") && s.includes("lease_owner")) {
+        const matchId = /id = '([^']+)'/i.exec(s);
+        const matchOwner = /lease_owner = '([^']+)'/i.exec(s);
+        const matchToken = /lease_token = '([^']+)'/i.exec(s);
+        const matchExpires = /lease_expires_at = '([^']+)'/i.exec(s);
+        if (matchId && matchOwner && matchToken && matchExpires) {
+          const taskId = matchId[1];
+          const owner = matchOwner[1];
+          const token = matchToken[1];
+          const expires = matchExpires[1];
+          db.public.none(`UPDATE tasks SET lease_owner = '${owner}', lease_token = '${token}', lease_expires_at = '${expires}' WHERE id = '${taskId}'`);
+          return db.public.many(`SELECT * FROM tasks WHERE id = '${taskId}'`);
+        }
+      }
+      return null;
+    } finally {
+      inInterceptor = false;
     }
-    return null;
   });
 
   const pg = db.adapters.createPg();

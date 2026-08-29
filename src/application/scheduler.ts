@@ -1,5 +1,6 @@
 import { StateRepository } from "../domain/contracts";
 import { TaskRecord, TaskStatus } from "../domain/types";
+import { StateConflictError } from "../domain/errors";
 
 export class Scheduler {
   constructor(private readonly state: StateRepository) {}
@@ -105,8 +106,13 @@ export class Scheduler {
         try {
           const nextState = graphInvalid ? TaskStatus.Blocked : TaskStatus.Failed;
           await this.state.transitionTask(task.id, task.status, nextState);
-        } catch {
-          /* ignore concurrent transition */
+        } catch (err) {
+          if (err instanceof StateConflictError) {
+            // Tolerate concurrent state transition conflict
+            continue;
+          }
+          // Propagate lifecycle, DB, or configuration errors
+          throw err;
         }
         continue;
       }

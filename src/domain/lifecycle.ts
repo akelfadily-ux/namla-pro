@@ -63,6 +63,7 @@ const transitions: Record<TaskStatus, readonly TaskStatus[]> = {
 
   [TaskStatus.Retrying]: [
     TaskStatus.Assigned,
+    TaskStatus.Blocked,
     TaskStatus.Failed,
     TaskStatus.Cancelled,
   ],

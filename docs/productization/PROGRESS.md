@@ -1,21 +1,20 @@
 # PROGRESS REPORT — NAMLA PRO Productization
 
 ## CURRENT PHASE
-P0 READY FOR HUMAN REVIEW — Human Review Round 9 Pass Complete
+P0 READY FOR HUMAN REVIEW — Human Review Round 12 Pass Complete
 
 ## LAST SAFE COMMIT
-P0.20 Human Review Round 9 Pass complete with 100% test pass (765 passed, 0 failed, 27 skipped across 46 suites).
+P0.22 Human Review Round 12 Pass complete with 100% test pass (765 passed, 0 failed, 27 skipped across 46 suites).
 
 ## COMPLETED
-- **Package Configuration & Build Reproducibility:** Created root `tsconfig.json` and updated `package.json` build script (`tsc && node -e ...`) to ensure clean compilation and deployment-safe copying of `001_initial_schema.sql` into `dist/`.
-- **Production Container Composition:** Updated `Container.createPostgresContainer(pool, ...)` so both `PostgresStateRepository` and `PostgresUnitOfWork` are constructed from the exact same `PostgresPool` instance.
-- **Authoritative Full Graph Completion:** Implemented `listTasksForRun(runId)` in `PostgresStateRepository` and updated `NamlaService.processRun` to evaluate the entire DAG, requiring all tasks to be in terminal `TaskStatus.Approved` state with no active/retrying/failed/blocked tasks or accounting holds before transitioning `RUNNING -> COMPLETED`.
-- **Scheduler DFS Cycle Detection & Graph Validation:** Implemented true DFS cycle detection using 3-color visiting states (`WHITE`/`GRAY`/`BLACK`), `maxConcurrency`, `maxAgents`, missing dependency checks, cross-run isolation checks, and CAS-driven `BLOCKED`/`FAILED` status transitions in `src/application/scheduler.ts`.
-- **Truthful Ant Execution Lifecycle & Required Ant ID:** Required explicit logical `antId` in `NamlaLoop.executeTask` (rejecting unassigned `ant-worker` fallbacks) and updated `AntExecution` records to terminal status `AntExecutionStatus` (`STARTED`, `SUCCEEDED`, `FAILED`, `CANCELLED`, `AUTHORITY_LOST`) while preserving the original `startedAt` timestamp.
-- **Durable Accounting Recovery Authority:** Implemented `recoverAccountingState(runId)` in `PostgresStateRepository` and `NamlaService` to reconcile pending reservations and transition accounting safety state from `BLOCKED` back to `ACTIVE`.
-- **Structured GitOperation Enforcement & Defense-in-Depth:** Updated `PolicyEngine` to evaluate structured `GitOperation` objects (`PULL`, `MERGE`, `REBASE`, `CHERRY_PICK`, `AM`) and enforce human-only denies regardless of wildcard `*` permissions, retaining regex-based shell command variant parsing as defense-in-depth.
-- **Real PostgreSQL Integration Suite (PGlite WASM Engine):** Renamed emulator suite to `pgMemIntegrationTests.ts` and created `realPostgresIntegrationTests.ts` using `@electric-sql/pglite` (the real WASM-compiled PostgreSQL 16 C engine). Proved UnitOfWork `COMMIT`/`ROLLBACK`, foreign keys, task fencing, 100-concurrent operation claims, and 100-caller budget row locks.
-- **Golden Runtime E2E with Production Postgres Composition:** Configured `goldenRuntimeE2ETests.ts` using `Container.createPostgresContainer` with real PostgreSQL engine and `PostgresUnitOfWork`, verifying full REST API acceptance (`POST`, `GET`, `GET /:id`, `PATCH`, `DELETE`, 404) and negative gate rejection path.
+- **Task Claiming & Atomic DB Limits:** Updated `PostgresStateRepository.claimTaskLease` to execute atomic SQL WHERE clause checks for active task concurrency (`< maxConcurrency`), active agent count (`< maxAgents`), uncancelled run status (`NOT IN ('CANCELLED', 'FAILED', 'COMPLETED', 'PAUSED')`), and unexpired retry backoff (`next_eligible_at <= NOW()`) directly inside the database transaction.
+- **Typed Run Configuration & Budget Limits:** Added `maxConcurrency`, `maxAgents`, and `maxDepth` to `CreateRunInput` with validation in `NamlaService` and to `BudgetLimits` in `src/domain/types.ts`.
+- **Truthful Ant Identity Enforcement:** Completely removed identity synthesis (`ant-planner`, `ant-engineer`, `ant-worker-*`) from production. Required `task.assignedAntId` to be explicitly populated, raising `ConfigurationError` if missing during `NamlaLoop.executeTask`.
+- **Scheduler Invariants & Precise Error Handling:** Allowed administrative `RETRYING -> BLOCKED` transitions in `src/domain/lifecycle.ts`. Replaced broad `catch {}` in `Scheduler` with explicit `StateConflictError` handling for CAS conflicts while propagating lifecycle and database errors.
+- **Structured Git Security & Tool Gateway Integration:** Fully typed `gitOperation` on `PermissionRequest`. Updated `ToolGateway.execute` to pass `request.gitOperation` directly to `PolicyEngine.authorize` without type assertions, and added E2E tests in `extremeQualityTests.ts` proving forbidden Git operations (`pull`, `merge`, `rebase`, `cherry-pick`, `am`) trigger `PermissionDeniedError` before executing tool adapters even with wildcard `"*"` permissions.
+- **Durable Accounting Recovery Authority & Evidence:** Defined `AccountingRecoveryMode` enum (`PROVIDER_RECONCILED`, `HUMAN_RECONCILED`, `CONSERVATIVE_MAX_WRITE_OFF`). Updated `recoverAccountingState` in `PostgresStateRepository` and `NamlaService` to require mode, authority, and evidenceRef, executing ledger reconciliation and state updates within an atomic UnitOfWork transaction.
+- **Truthful Test Suite Classification:** Renamed integration suites to `pglitePostgresEngineTests.ts` (`POSTGRES ENGINE COMPATIBILITY TESTED`) and `pgMemIntegrationTests.ts` (`POSTGRES EMULATOR TESTED`). Updated `goldenRuntimeE2ETests.ts` helper to `createPGlitePostgresPool`.
+- **Package Configuration & Build Reproducibility:** Root `tsconfig.json` and build script (`tsc && node -e ...`) copy `001_initial_schema.sql` into `dist/`.
 
 ## IN PROGRESS
 P0 READY FOR HUMAN REVIEW — All P0 blockers resolved. Awaiting human review before P1.
