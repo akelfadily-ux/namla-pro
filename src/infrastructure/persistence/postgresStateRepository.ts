@@ -19,6 +19,7 @@ import { StateRepository, EventRecord, PostgresPool, PostgresQueryClient, RunAcc
 import { randomUUID } from "crypto";
 import { assertRunTransition, assertTaskTransition } from "../../domain/lifecycle";
 import { StateConflictError, ConfigurationError } from "../../domain/errors";
+import { isTrustedRecoveryAuthority } from "../../bootstrap/trustedRecoveryBootstrap";
 
 export interface PostgresRunRow {
   id: string;
@@ -148,6 +149,11 @@ export class PostgresStateRepository implements StateRepository {
 
     if (!mode || !reconciliationAuthority || !reconciliationAuthority.identity || !evidence) {
       throw new ConfigurationError("Accounting recovery requires explicit mode, reconciliationAuthority identity, and typed evidence");
+    }
+
+    // Must originate from trusted recovery authority boundary
+    if (!isTrustedRecoveryAuthority(reconciliationAuthority)) {
+      throw new ConfigurationError(`Unauthenticated recovery attempt denied: authority '${reconciliationAuthority.identity}' is not a trusted recovery authority`);
     }
 
     // Require explicit capability permission boundary

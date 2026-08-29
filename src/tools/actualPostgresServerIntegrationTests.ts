@@ -231,10 +231,19 @@ test("Actual PostgreSQL Server Integration & Multi-Session Concurrency Suite", {
     await repo.createRun({ id: runId, status: RunStatus.Running, goal: "Acc Test", budgetLimits: {}, createdAt: new Date(), updatedAt: new Date() });
     await repo.setAccountingState(runId, "BLOCKED_UNKNOWN_BILLING", "Unbilled failure");
 
-    const authority = { identity: "admin-1", permissions: ["accounting:recover"] };
-    const validEvidence = { type: "HUMAN_ADMIN_AUDIT" as const, adminIdentity: "admin-1", approvalTicket: "TICKET-1", reconciledCostUsd: 0.50, reconciledTokens: 100 };
+    const { mintTrustedRecoveryAuthority } = require("../bootstrap/trustedRecoveryBootstrap");
 
-    const result = await repo.recoverAccountingState(runId, AccountingRecoveryMode.HUMAN_RECONCILED, authority, validEvidence);
+    // Unauthenticated/untrusted caller authority MUST be rejected
+    const untrustedAuthority = { identity: "admin-fake", permissions: ["accounting:recover"] };
+    const validEvidence = { type: "HUMAN_ADMIN_AUDIT" as const, adminIdentity: "admin-fake", approvalTicket: "TICKET-1", reconciledCostUsd: 0.50, reconciledTokens: 100 };
+
+    await assert.rejects(async () => {
+      await repo.recoverAccountingState(runId, AccountingRecoveryMode.HUMAN_RECONCILED, untrustedAuthority as any, validEvidence);
+    }, "Unauthenticated caller claiming admin identity MUST be rejected");
+
+    // Trusted recovery authority succeeds
+    const trustedAuthority = mintTrustedRecoveryAuthority({ adminIdentity: "admin-real" });
+    const result = await repo.recoverAccountingState(runId, AccountingRecoveryMode.HUMAN_RECONCILED, trustedAuthority, validEvidence);
     assert.equal(result.recovered, true);
 
     const state = await repo.getAccountingState(runId);

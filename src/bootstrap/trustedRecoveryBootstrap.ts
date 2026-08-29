@@ -1,0 +1,34 @@
+import { ConfigurationError } from "../domain/errors";
+
+const TRUSTED_RECOVERY_BRAND = Symbol("TrustedRecoveryAuthority");
+
+export interface TrustedRecoveryAuthority {
+  readonly identity: string;
+  readonly permissions: readonly string[];
+  readonly [TRUSTED_RECOVERY_BRAND]: true;
+}
+
+export function mintTrustedRecoveryAuthority(input: {
+  adminIdentity: string;
+  permissions?: readonly string[];
+  adminSecretToken?: string;
+}): TrustedRecoveryAuthority {
+  if (!input.adminIdentity || typeof input.adminIdentity !== "string" || input.adminIdentity.trim().length === 0) {
+    throw new ConfigurationError("mintTrustedRecoveryAuthority requires a non-empty adminIdentity");
+  }
+
+  const permissions = input.permissions ?? ["accounting:recover"];
+
+  const authority: TrustedRecoveryAuthority = Object.freeze({
+    identity: input.adminIdentity,
+    permissions: Object.freeze([...permissions]),
+    [TRUSTED_RECOVERY_BRAND]: true as const,
+  });
+
+  return authority;
+}
+
+export function isTrustedRecoveryAuthority(authority: unknown): authority is TrustedRecoveryAuthority {
+  if (!authority || typeof authority !== "object") return false;
+  return (authority as any)[TRUSTED_RECOVERY_BRAND] === true;
+}
