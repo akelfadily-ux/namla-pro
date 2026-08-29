@@ -1,11 +1,11 @@
 /**
- * PROTOCOL Engine (§04, §09, P0.14, FINAL-P0-9).
+ * PROTOCOL Engine (§04, §09, P0.14, FINAL-P0-9, Item 2).
  *
  * Validates draft plans and freezes canonical PlanContract bytes.
- * Generates bounded WorkPackages and derives real project verification test contracts based on project type.
+ * Generates bounded WorkPackages and derives explicit typed verification test contracts.
  */
 
-import { DraftPlan, PlanContract, TestRequirement } from "../types/contracts";
+import { DraftPlan, PlanContract, TestRequirement, TestRequirementType } from "../types/contracts";
 import { WorkPackage } from "../types/missionState";
 import { PreFreezeStageContext } from "../types/stageContext";
 import { createHash } from "crypto";
@@ -53,11 +53,12 @@ export class ProtocolEngine {
     const version = "v1.0.0";
     const frozenAt = Date.now();
 
-    // Derive required verification test commands dynamically from project contract/type (FINAL-P0-9)
+    // Derive explicit typed verification test requirements (Item 2)
     const lowerObj = draftPlan.objective.toLowerCase();
     const requiredTests: TestRequirement[] = [
       {
         id: "test-verif-suite",
+        type: "TEST",
         name: "Unit & Integration Test Suite",
         command: "npm test",
         expectedExitCode: 0,
@@ -74,6 +75,7 @@ export class ProtocolEngine {
     ) {
       requiredTests.push({
         id: "test-verif-build",
+        type: "BUILD",
         name: "Project Build Contract",
         command: "npm run build",
         expectedExitCode: 0,

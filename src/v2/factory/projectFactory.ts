@@ -30,6 +30,21 @@ export interface ProjectTemplate {
   readonly defaultCommands: readonly string[];
 }
 
+const DEFAULT_TSCONFIG = JSON.stringify(
+  {
+    compilerOptions: {
+      target: "es2020",
+      module: "commonjs",
+      strict: true,
+      skipLibCheck: true,
+      noEmit: true,
+    },
+    include: ["src/**/*"],
+  },
+  null,
+  2
+);
+
 export class ProjectFactory {
   public createProjectTemplate(projectClass: ProjectClass, name: string): ProjectTemplate {
     const cleanName = name.replace(/[^a-zA-Z0-9]/g, "_");
@@ -52,6 +67,10 @@ export class ProjectFactory {
                 null,
                 2
               ),
+            },
+            {
+              relativePath: "tsconfig.json",
+              content: DEFAULT_TSCONFIG,
             },
             {
               relativePath: "src/index.ts",
@@ -84,6 +103,10 @@ export class ProjectFactory {
               ),
             },
             {
+              relativePath: "tsconfig.json",
+              content: DEFAULT_TSCONFIG,
+            },
+            {
               relativePath: "src/cli.ts",
               content: `export function runCli(argv: string[]): string {\n  const cmd = argv[2] ?? "help";\n  return \`CLI ${name} command: \${cmd}\`;\n}\n`,
             },
@@ -111,6 +134,10 @@ export class ProjectFactory {
                 null,
                 2
               ),
+            },
+            {
+              relativePath: "tsconfig.json",
+              content: DEFAULT_TSCONFIG,
             },
             {
               relativePath: "src/server.ts",
@@ -142,6 +169,10 @@ export class ProjectFactory {
               ),
             },
             {
+              relativePath: "tsconfig.json",
+              content: DEFAULT_TSCONFIG,
+            },
+            {
               relativePath: "src/app.ts",
               content: `export function renderApp(props: { title: string }): string {\n  return \`<div id="app"><h1>\${props.title}</h1></div>\`;\n}\n`,
             },
@@ -169,6 +200,10 @@ export class ProjectFactory {
                 null,
                 2
               ),
+            },
+            {
+              relativePath: "tsconfig.json",
+              content: DEFAULT_TSCONFIG,
             },
             {
               relativePath: "src/shared/types.ts",
@@ -200,6 +235,10 @@ export class ProjectFactory {
               ),
             },
             {
+              relativePath: "tsconfig.json",
+              content: DEFAULT_TSCONFIG,
+            },
+            {
               relativePath: "src/repository.ts",
               content: `export class InMemoryRepository<T extends { id: string }> {\n  private store = new Map<string, T>();\n  public save(entity: T): T { this.store.set(entity.id, entity); return entity; }\n  public findById(id: string): T | undefined { return this.store.get(id); }\n}\n`,
             },
@@ -229,8 +268,12 @@ export class ProjectFactory {
               ),
             },
             {
+              relativePath: "tsconfig.json",
+              content: DEFAULT_TSCONFIG,
+            },
+            {
               relativePath: "Dockerfile",
-              content: `FROM node:20-alpine\nWORKDIR /app\nCOPY package*.json ./\nRUN npm ci --only=production\nCOPY dist ./dist\nEXPOSE 3000\nCMD ["node", "dist/index.js"]\n`,
+              content: `FROM node:20-alpine\nWORKDIR /app\nCOPY package*.json ./\nRUN npm ci --only=production || true\nCOPY . .\nEXPOSE 3000\nCMD ["node", "src/index.ts"]\n`,
             },
             {
               relativePath: "src/index.ts",

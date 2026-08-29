@@ -4,6 +4,8 @@
 
 export type RiskClass = "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
 
+export type TestRequirementType = "BUILD" | "TYPECHECK" | "TEST" | "INTEGRATION_TEST" | "SMOKE" | "DOCKER_BUILD";
+
 export interface AcceptanceCriterion {
   readonly id: string;
   readonly description: string;
@@ -40,6 +42,7 @@ export interface CapabilityScope {
 
 export interface TestRequirement {
   readonly id: string;
+  readonly type?: TestRequirementType;
   readonly name: string;
   readonly command: string;
   readonly expectedExitCode: number;
