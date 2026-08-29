@@ -93,6 +93,7 @@ export interface StateRepository {
     workerId: WorkerId,
     leaseDurationMs?: number,
     limits?: { maxConcurrency?: number; maxAgents?: number },
+    workerCapabilities?: readonly string[],
   ): Promise<TaskRecord | null>;
 
   renewTaskLease(
@@ -168,6 +169,8 @@ export interface StateRepository {
     claimToken: string,
     error: string,
   ): Promise<boolean>;
+
+  hasUnresolvedOperations(runId: RunId): Promise<boolean>;
 }
 
 export interface ModelUsage {

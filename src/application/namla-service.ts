@@ -253,6 +253,12 @@ export class NamlaService {
           }
         }
 
+        // Verify zero unresolved RUNNING or PENDING operations remain for this run
+        const unresolvedOps = await this.container.state.hasUnresolvedOperations(runId);
+        if (unresolvedOps) {
+          return; // Operations still running; leave Run in RUNNING status
+        }
+
         await this.container.state.transitionRun(runId, RunStatus.Running, RunStatus.Completed);
         await this.container.state.appendEvent({
           type: "run.completed",

@@ -24,7 +24,9 @@
     "test:p0:posix": "node --test dist/tools/workspaceSecurityTests.js dist/tools/trustedExecutableTests.js dist/tools/processTreeTests.js dist/tools/ciInvariantTests.js",
     "test:p0:sandbox-capability": "node dist/tools/sandboxCapabilityReport.js",
     "test:p0:container-sandbox": "node dist/tools/verifyContainerSandbox.js",
-    "test:p0:bisect-docker": "node dist/tools/bisectDockerStages.js"
+    "test:p0:bisect-docker": "node dist/tools/bisectDockerStages.js",
+    "test:postgres-release": "node dist/tools/postgresReleaseRunner.js",
+    "test:golden-postgres-release": "node --test dist/tools/goldenPostgresServerE2ETests.js"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",

@@ -455,6 +455,7 @@ export class PostgresStateRepository implements StateRepository {
     workerId: WorkerId,
     leaseDurationMs = 120_000,
     limits?: { maxConcurrency?: number; maxAgents?: number },
+    workerCapabilities?: readonly string[],
   ): Promise<TaskRecord | null> {
     const leaseToken = randomUUID();
     const expiresAt = new Date(Date.now() + leaseDurationMs);
@@ -468,6 +469,17 @@ export class PostgresStateRepository implements StateRepository {
       if (taskRes.rows.length === 0) return null;
       const targetTask = taskRes.rows[0];
       const runId = targetTask.run_id;
+
+      // 1b. Enforce worker capability matching at database claim boundary
+      const reqs: string[] = typeof targetTask.requirements === "string" ? JSON.parse(targetTask.requirements) : targetTask.requirements || [];
+      if (reqs.length > 0) {
+        if (!workerCapabilities) return null;
+        const workerCapSet = new Set(workerCapabilities);
+        const satisfiesAll = reqs.every((r) => workerCapSet.has(r));
+        if (!satisfiesAll) {
+          return null; // Worker lacks required capabilities for this task
+        }
+      }
 
       // 2. Lock the run row for explicit transaction-scoped claim serialization per run
       await client.query(`SELECT id FROM runs WHERE id = $1 FOR UPDATE`, [runId]);
@@ -1018,6 +1030,15 @@ export class PostgresStateRepository implements StateRepository {
       [JSON.stringify(value), operationId, workerId, claimToken],
     );
     return (res.rows && res.rows.length > 0) || Boolean(res.rowCount);
+  }
+
+  async hasUnresolvedOperations(runId: RunId): Promise<boolean> {
+    const res = await this.db.query(
+      `SELECT 1 FROM operations
+       WHERE run_id = $1 AND status IN ('RUNNING', 'PENDING')`,
+      [runId],
+    );
+    return res.rows.length > 0;
   }
 
   async failOperation(

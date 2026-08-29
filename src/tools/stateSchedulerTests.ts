@@ -31,10 +31,16 @@ class MockDatabase {
       return { rows: r ? [r] : [] };
     }
 
-    if (s.startsWith("SELECT * FROM TASKS WHERE ID =")) {
+    if (s.includes("SELECT * FROM TASKS WHERE ID =") || s.includes("SELECT REQUIREMENTS FROM TASKS WHERE ID =")) {
       const id = params[0];
       const task = this.tasks.get(id);
       return { rows: task ? [task] : [] };
+    }
+
+    if (s.includes("SELECT ID FROM RUNS WHERE ID =") || s.includes("SELECT STATUS FROM RUNS WHERE ID =")) {
+      const id = params[0];
+      const r = this.runs.get(id);
+      return { rows: r ? [r] : [] };
     }
 
     if (s.startsWith("INSERT INTO TASKS")) {
@@ -68,12 +74,13 @@ class MockDatabase {
         if (ant !== null) task.assigned_ant_id = ant;
         return { rows: [task] };
       }
-      if (s.includes("SET LEASE_OWNER = $1")) {
-        const [workerId, expiresAt, taskId] = params;
+      if (s.includes("LEASE_OWNER = $1")) {
+        const [workerId, leaseToken, expiresAt, taskId] = params;
         const task = this.tasks.get(taskId);
         if (!task) return { rows: [] };
         if (task.lease_expires_at && task.lease_expires_at >= new Date()) return { rows: [] };
         task.lease_owner = workerId;
+        task.lease_token = leaseToken;
         task.lease_expires_at = expiresAt;
         return { rows: [task] };
       }
@@ -88,10 +95,16 @@ class MockDatabase {
       }
     }
 
-    if (s.startsWith("SELECT * FROM TASKS WHERE RUN_ID =")) {
+    if (s.includes("SELECT * FROM TASKS WHERE RUN_ID =")) {
       const runId = params[0];
-      const rows = Array.from(this.tasks.values()).filter(t => t.run_id === runId && (t.status === TaskStatus.Created || t.status === TaskStatus.Retrying));
+      const rows = Array.from(this.tasks.values()).filter(t => t.run_id === runId);
       return { rows: rows as any };
+    }
+
+    if (s.includes("SELECT ASSIGNED_ANT_ID FROM TASKS")) {
+      const runId = params[0];
+      const rows = Array.from(this.tasks.values()).filter(t => t.run_id === runId && t.lease_expires_at && t.lease_expires_at > new Date());
+      return { rows: rows as any, rowCount: rows.length };
     }
 
     if (s.startsWith("SELECT * FROM OPERATIONS WHERE OPERATION_ID =")) {
@@ -221,5 +234,54 @@ test("PostgresStateRepository & Scheduler atomic state logic", async (t) => {
 
     const initial = await repo.getOperationRecord("op-123");
     assert.equal(initial, null);
+  });
+
+  await t.test("worker capability matching denies claim if capabilities are missing", async () => {
+    const db = new MockDatabase();
+    const repo = new PostgresStateRepository(db);
+    const scheduler = new Scheduler(repo);
+
+    const now = new Date();
+    await repo.createRun({
+      id: "run-cap-1",
+      status: RunStatus.Created,
+      goal: "Test Capabilities",
+      budgetLimits: {},
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    await repo.createTask({
+      id: "task-docker",
+      runId: "run-cap-1",
+      title: "Docker Build Task",
+      description: "Requires docker capability",
+      status: TaskStatus.Created,
+      role: AntRole.DevOps,
+      attempt: 0,
+      maxAttempts: 3,
+      depth: 0,
+      requirements: ["docker"],
+      dependencies: [],
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    // Scheduler filtering with worker lacking docker capability
+    const runnableNoCap = await scheduler.getRunnable("run-cap-1", "worker-1", ["shell", "git"]);
+    assert.equal(runnableNoCap.length, 0, "Worker lacking docker capability is filtered out by Scheduler");
+
+    // Scheduler filtering with worker possessing docker capability
+    const runnableWithCap = await scheduler.getRunnable("run-cap-1", "worker-1", ["shell", "docker"]);
+    assert.equal(runnableWithCap.length, 1);
+    assert.equal(runnableWithCap[0].id, "task-docker");
+
+    // Database claim enforcement: worker lacking docker capability is denied claim
+    const claimDenied = await repo.claimTaskLease("task-docker", "worker-1", 60_000, {}, ["shell", "git"]);
+    assert.equal(claimDenied, null, "Database claim Task requiring docker is denied for worker lacking docker");
+
+    // Database claim enforcement: worker possessing docker capability succeeds
+    const claimGranted = await repo.claimTaskLease("task-docker", "worker-1", 60_000, {}, ["shell", "docker"]);
+    assert.ok(claimGranted, "Database claim succeeds when worker possesses required capabilities");
   });
 });

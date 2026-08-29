@@ -8,6 +8,7 @@ export class Scheduler {
   async getRunnable(
     runId: string,
     workerId?: string,
+    workerCapabilities?: readonly string[],
   ): Promise<TaskRecord[]> {
     const run = await this.state.getRun(runId);
     if (!run || run.status === "CANCELLED" || run.status === "FAILED" || run.status === "COMPLETED" || run.status === "PAUSED") {
@@ -33,6 +34,8 @@ export class Scheduler {
     const activeAnts = new Set(activeTasks.map((t) => t.assignedAntId).filter(Boolean));
     const maxAgents = run.budgetLimits.maxAgents ?? 10;
 
+    let skippedByCapabilities = false;
+
     for (const task of candidates) {
       if (
         task.status !== TaskStatus.Created &&
@@ -45,6 +48,15 @@ export class Scheduler {
       const maxDepth = run.budgetLimits.maxDepth ?? 10;
       if (task.depth > maxDepth) {
         continue;
+      }
+
+      // Rule 1b: Worker capability prefilter
+      if (task.requirements && task.requirements.length > 0 && workerCapabilities) {
+        const capSet = new Set(workerCapabilities);
+        if (!task.requirements.every((r) => capSet.has(r))) {
+          skippedByCapabilities = true;
+          continue;
+        }
       }
 
       // Max agents check
@@ -125,9 +137,9 @@ export class Scheduler {
       }
     }
 
-    // Unschedulable / Deadlock Detection: if there are CREATED or RETRYING tasks but none are runnable due to cycle or failed dependencies
+    // Unschedulable / Deadlock Detection: if there are CREATED or RETRYING tasks but none are runnable due to cycle or failed dependencies (excluding capability mismatches)
     const pendingTasks = candidates.filter((t) => t.status === TaskStatus.Created || t.status === TaskStatus.Retrying);
-    if (pendingTasks.length > 0 && runnable.length === 0 && activeTasks.length === 0) {
+    if (pendingTasks.length > 0 && runnable.length === 0 && activeTasks.length === 0 && !skippedByCapabilities) {
       // Mark blocked/unschedulable tasks
       for (const t of pendingTasks) {
         try {
