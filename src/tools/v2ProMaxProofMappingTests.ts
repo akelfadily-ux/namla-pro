@@ -1,17 +1,19 @@
 /**
- * V2 ProMax Proof Mapping & Evidence Verification Tests (P0.1).
+ * V2 ProMax Proof Mapping & Evidence Verification Tests (P0.1, P0.15, P0.16, P0.17).
  *
  * Verifies that ProMax requires evidence-backed proof mapping for every verified criterion,
- * executes real verification commands via TrustedKernel, and leaves unsupported criteria unverified.
+ * independently recomputes SHA-256 hashes from raw file bytes to detect post-acceptance mutation,
+ * checks stale evidence in evidencePool, and executes real verification commands.
  *
  * Run: node dist/tools/v2ProMaxProofMappingTests.js
  */
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "fs";
+import { mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
-import { resolve } from "path";
+import { resolve, join } from "path";
+import { createHash } from "crypto";
 import { ProMaxVerifier } from "../v2/promax/proMaxVerifier";
 import { TrustedKernel } from "../v2/kernel/trustedKernel";
 import { IntegratedCandidate } from "../v2/types/missionState";
@@ -27,18 +29,21 @@ test("ProMaxVerifier: Generates Proof Mappings and Verifies Observed Evidence", 
     const kernel = new TrustedKernel({ workspaceRoot: ws });
     const verifier = new ProMaxVerifier();
 
-    // Write file into workspace
-    kernel.safeWriteWorkspaceFile("src/index.ts", "export const x = 1;", "m-promax");
+    const leggoRelPath = "workspaces/v2-missions/m-promax/leggo-integrated";
+    const content = "export const x = 1;\n";
+    const sha256 = createHash("sha256").update(content).digest("hex");
+
+    kernel.safeWriteWorkspaceFile(`${leggoRelPath}/src/index.ts`, content, "m-promax");
 
     const candidate: IntegratedCandidate = {
       candidateId: "cand-1",
       missionId: "m-promax",
       integratedArtifacts: [
-        { artifactId: "art-1", path: "src/index.ts", sha256: "hash1", sizeBytes: 19, missionId: "m-promax" },
+        { artifactId: "art-1", path: "src/index.ts", sha256, sizeBytes: content.length, missionId: "m-promax" },
       ],
       resolvedConflicts: [],
       sourceTraceability: { "src/index.ts": "COLONY_A" },
-      workspacePath: "workspaces/v2-missions/m-promax/leggo-integrated",
+      workspacePath: leggoRelPath,
     };
 
     const context: ContractBoundStageContext = {
@@ -61,7 +66,7 @@ test("ProMaxVerifier: Generates Proof Mappings and Verifies Observed Evidence", 
         tasks: [],
         dependencies: [],
         allowedCapabilities: [],
-        requiredTests: [],
+        requiredTests: [{ id: "t1", name: "Version Check", command: "npm --version", expectedExitCode: 0 }],
         securityRequirements: [{ id: "sec-1", rule: "NO_SECRET_LEAKAGE", failClosed: true }],
         expectedArtifacts: [],
         evidenceRequirements: [],
@@ -74,34 +79,109 @@ test("ProMaxVerifier: Generates Proof Mappings and Verifies Observed Evidence", 
     const result = verifier.verifyCandidate(candidate, context, kernel, []);
 
     assert.equal(result.success, true);
-    assert.equal(result.proofMappings.length >= 2, true, "Proof mappings must exist for artifacts, security, and criteria");
+    assert.equal(result.proofMappings.length >= 2, true, "Proof mappings must exist");
 
     const acMapping = result.proofMappings.find((m) => m.criterionId === "ac-1");
     assert.equal(acMapping !== undefined, true);
     assert.equal(acMapping?.status, "VERIFIED");
-    assert.equal(acMapping?.evidenceRef.length! > 0, true, "EvidenceRef must not be empty");
+    assert.equal(acMapping?.evidenceRef.length! > 0, true);
   } finally {
     rmSync(ws, { recursive: true, force: true });
   }
 });
 
-test("ProMaxVerifier: Stale Evidence Fails Verification and Leaves Criteria Unverified", () => {
+test("ProMaxVerifier: P0.16 Artifact Mutation / Substitution is Detected and Fails Verification", () => {
+  const ws = tempWorkspace("artifact-mutation");
+  try {
+    const kernel = new TrustedKernel({ workspaceRoot: ws });
+    const verifier = new ProMaxVerifier();
+
+    const leggoRelPath = "workspaces/v2-missions/m-mut/leggo-integrated";
+    const originalContent = "export const x = 1;\n";
+    const originalHash = createHash("sha256").update(originalContent).digest("hex");
+
+    // 1. Create accepted artifact identity with original hash
+    kernel.safeWriteWorkspaceFile(`${leggoRelPath}/src/index.ts`, originalContent, "m-mut");
+
+    const candidate: IntegratedCandidate = {
+      candidateId: "cand-mut",
+      missionId: "m-mut",
+      integratedArtifacts: [
+        { artifactId: "art-1", path: "src/index.ts", sha256: originalHash, sizeBytes: originalContent.length, missionId: "m-mut" },
+      ],
+      resolvedConflicts: [],
+      sourceTraceability: { "src/index.ts": "COLONY_A" },
+      workspacePath: leggoRelPath,
+    };
+
+    // 2. Mutate file on disk AFTER candidate creation!
+    const mutatedContent = "export const x = 999; // MUTATED PAYLOAD\n";
+    writeFileSync(resolve(join(ws, leggoRelPath, "src/index.ts")), mutatedContent, "utf8");
+
+    const context: ContractBoundStageContext = {
+      missionId: "m-mut",
+      authoritativeInputs: [],
+      policyVersions: ["v1.0.0"],
+      budgets: { virtualTicks: 100, providerCalls: 10, maxFixAttempts: 3 },
+      evidenceRefs: [],
+      missionStateRef: "VERIFYING",
+      contractPhase: "CONTRACT_BOUND",
+      frozenPlanContract: {
+        contractId: "c1",
+        version: "v1.0.0",
+        contractHash: "h1",
+        objective: "Build module",
+        acceptanceCriteria: [],
+        constraints: [],
+        tasks: [],
+        dependencies: [],
+        allowedCapabilities: [],
+        requiredTests: [],
+        securityRequirements: [],
+        expectedArtifacts: [],
+        evidenceRequirements: [],
+        riskClassification: "LOW",
+        completionConditions: [],
+        frozenAt: Date.now(),
+      },
+    };
+
+    // 3. ProMax MUST recompute SHA-256 and detect mismatch
+    const result = verifier.verifyCandidate(candidate, context, kernel, []);
+
+    assert.equal(result.success, false, "ProMax MUST fail verification when artifact content is mutated");
+    assert.equal(result.assessment.contractSatisfied, false);
+    assert.equal(result.assessment.failedCriteria.some((f) => f.includes("Artifact substitution detected")), true);
+
+    const mutMapping = result.proofMappings.find((m) => m.criterionId === "artifact-src/index.ts");
+    assert.equal(mutMapping?.status, "FAILED");
+    assert.equal(mutMapping?.observation.includes("ARTIFACT SUBSTITUTION DETECTED"), true);
+  } finally {
+    rmSync(ws, { recursive: true, force: true });
+  }
+});
+
+test("ProMaxVerifier: P0.17 Stale Evidence Fails Verification and Leaves Criteria Unverified", () => {
   const ws = tempWorkspace("stale-evidence");
   try {
     const kernel = new TrustedKernel({ workspaceRoot: ws });
     const verifier = new ProMaxVerifier();
 
-    kernel.safeWriteWorkspaceFile("src/index.ts", "export const x = 1;", "m-stale");
+    const leggoRelPath = "workspaces/v2-missions/m-stale/leggo-integrated";
+    const content = "export const x = 1;\n";
+    const sha256 = createHash("sha256").update(content).digest("hex");
+
+    kernel.safeWriteWorkspaceFile(`${leggoRelPath}/src/index.ts`, content, "m-stale");
 
     const candidate: IntegratedCandidate = {
       candidateId: "cand-2",
       missionId: "m-stale",
       integratedArtifacts: [
-        { artifactId: "art-1", path: "src/index.ts", sha256: "hash1", sizeBytes: 19, missionId: "m-stale" },
+        { artifactId: "art-1", path: "src/index.ts", sha256, sizeBytes: content.length, missionId: "m-stale" },
       ],
       resolvedConflicts: [],
       sourceTraceability: { "src/index.ts": "COLONY_A" },
-      workspacePath: "workspaces/v2-missions/m-stale/leggo-integrated",
+      workspacePath: leggoRelPath,
     };
 
     const context: ContractBoundStageContext = {

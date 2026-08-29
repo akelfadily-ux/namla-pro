@@ -1,5 +1,5 @@
 /**
- * NAMLA PRO V2 Canonical Runtime (§03, §04, §05, §08, §18, P0.5, P0.6).
+ * NAMLA PRO V2 Canonical Runtime (§03, §04, §05, §08, §18, P0.5, P0.6, P0.18).
  *
  * Single orchestration entry point running the canonical V2 pipeline:
  * Objective → EER → LOOP → PLAN → LOOP → PROTOCOL → LOOP → PRO → LOOP →
@@ -107,11 +107,11 @@ export class NamlaRuntime {
       missionId: request.missionId,
     };
 
-    if (request.projectClass) {
-      const template = this.projectFactory.createProjectTemplate(request.projectClass, request.missionId);
-      for (const f of template.files) {
-        kernel.safeWriteWorkspaceFile(f.relativePath, f.content, request.missionId);
-      }
+    // Always initialize workspace with ProjectFactory templates
+    const projectClass = request.projectClass ?? "TYPESCRIPT_LIBRARY";
+    const template = this.projectFactory.createProjectTemplate(projectClass, request.missionId);
+    for (const f of template.files) {
+      kernel.safeWriteWorkspaceFile(f.relativePath, f.content, request.missionId);
     }
 
     // ------------------------------------------------------------- 1. EER STAGE ---
@@ -359,7 +359,8 @@ export class NamlaRuntime {
 
         // --------------------------------------------------- 7. LEGGO STAGE ---
         currentState = "INTEGRATING";
-        const leggoRes = this.leggoIntegrator.integrate(targetWp, comparison, resA, resB, boundContext, kernel);
+        const previousCandidate = integratedCandidates.length > 0 ? integratedCandidates[integratedCandidates.length - 1] : undefined;
+        const leggoRes = this.leggoIntegrator.integrate(targetWp, comparison, resA, resB, boundContext, kernel, previousCandidate);
         if (!leggoRes.success || !leggoRes.integratedCandidate) {
           return this.buildResponse(request.missionId, "FAILED", kernel, evidencePool, leggoRes.reasonCode);
         }
@@ -414,7 +415,7 @@ export class NamlaRuntime {
 
     // -------------------------------------------------------- 8. PROMAX STAGE ---
     currentState = "VERIFYING";
-    const proMaxRes = this.proMaxVerifier.verifyCandidate(primaryCandidate, boundContext, kernel);
+    const proMaxRes = this.proMaxVerifier.verifyCandidate(primaryCandidate, boundContext, kernel, evidencePool);
     if (proMaxRes.evidenceRecord) {
       evidencePool.push(proMaxRes.evidenceRecord);
     }
