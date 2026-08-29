@@ -270,7 +270,7 @@ test("Extreme Quality Suite — Operation Idempotency and Input Mismatch Protect
   assert.strictEqual(claim2.status, "INPUT_HASH_MISMATCH", "Mismatching input hash on same operation ID is rejected");
 });
 
-test("Extreme Quality Suite — PolicyEngine Resource Scoping and Path Security", () => {
+test("Extreme Quality Suite — PolicyEngine Resource Scoping and Path Security", async () => {
   const policy = new PolicyEngine();
 
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "eq-policy-test-"));
@@ -339,15 +339,13 @@ test("Extreme Quality Suite — PolicyEngine Resource Scoping and Path Security"
   };
 
   const forbiddenActions: Array<"pull" | "merge" | "rebase" | "cherry-pick" | "am"> = ["pull", "merge", "rebase", "cherry-pick", "am"];
-  (async () => {
-    for (const action of forbiddenActions) {
-      adapterExecuted = false;
-      await assert.rejects(async () => {
-        await gateway.execute("git", { action, branch: "main" }, toolCtx);
-      }, PermissionDeniedError, `Structured Git operation '${action}' MUST be denied even with '*' permissions`);
-      assert.strictEqual(adapterExecuted, false, `GitAdapter.execute MUST NEVER be called for forbidden Git operation '${action}'`);
-    }
-  })();
+  for (const action of forbiddenActions) {
+    adapterExecuted = false;
+    await assert.rejects(async () => {
+      await gateway.execute("git", { action, branch: "main" }, toolCtx);
+    }, PermissionDeniedError, `Structured Git operation '${action}' MUST be denied even with '*' permissions`);
+    assert.strictEqual(adapterExecuted, false, `GitAdapter.execute MUST NEVER be called for forbidden Git operation '${action}'`);
+  }
 
   // Human-only Git operation policy test & shell command variant matrix
   const gitPolicy = { permissions: ["*"] };

@@ -73,7 +73,7 @@ function createRealPostgresHarness() {
   return { pool, db };
 }
 
-test("Real PostgreSQL Integration Suite — Driver, Migrations, CAS & Concurrency", async (t) => {
+test("pg-mem Emulator Suite — Driver, Migrations, CAS & Concurrency", async (t) => {
   const { pool } = createRealPostgresHarness();
 
   // Apply real production migrations

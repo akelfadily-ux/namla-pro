@@ -136,6 +136,34 @@ export enum AccountingRecoveryMode {
   CONSERVATIVE_MAX_WRITE_OFF = "CONSERVATIVE_MAX_WRITE_OFF",
 }
 
+export interface ProviderReconciliationEvidence {
+  type: "PROVIDER_INVOICE" | "PROVIDER_USAGE_API";
+  providerName: string;
+  invoiceOrUsageRef: string;
+  actualCostUsd: number;
+  actualTokens: number;
+}
+
+export interface HumanReconciliationEvidence {
+  type: "HUMAN_ADMIN_AUDIT";
+  adminIdentity: string;
+  approvalTicket: string;
+  reconciledCostUsd: number;
+  reconciledTokens: number;
+}
+
+export interface ConservativeWriteOffEvidence {
+  type: "CONSERVATIVE_MAX_WRITE_OFF_AUDIT";
+  reason: string;
+  maxReservedCostUsd: number;
+  maxReservedTokens: number;
+}
+
+export type AccountingRecoveryEvidence =
+  | ProviderReconciliationEvidence
+  | HumanReconciliationEvidence
+  | ConservativeWriteOffEvidence;
+
 export enum AntExecutionStatus {
   Started = "STARTED",
   Succeeded = "SUCCEEDED",

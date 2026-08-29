@@ -1,20 +1,19 @@
 # PROGRESS REPORT — NAMLA PRO Productization
 
 ## CURRENT PHASE
-P0 READY FOR HUMAN REVIEW — Human Review Round 12 Pass Complete
+P0 READY FOR HUMAN REVIEW — Human Review Round 13 Pass Complete (Extreme Quality P0.23)
 
 ## LAST SAFE COMMIT
-P0.22 Human Review Round 12 Pass complete with 100% test pass (765 passed, 0 failed, 27 skipped across 46 suites).
+P0.23 Human Review Round 13 Pass complete with 100% test pass.
 
 ## COMPLETED
-- **Task Claiming & Atomic DB Limits:** Updated `PostgresStateRepository.claimTaskLease` to execute atomic SQL WHERE clause checks for active task concurrency (`< maxConcurrency`), active agent count (`< maxAgents`), uncancelled run status (`NOT IN ('CANCELLED', 'FAILED', 'COMPLETED', 'PAUSED')`), and unexpired retry backoff (`next_eligible_at <= NOW()`) directly inside the database transaction.
-- **Typed Run Configuration & Budget Limits:** Added `maxConcurrency`, `maxAgents`, and `maxDepth` to `CreateRunInput` with validation in `NamlaService` and to `BudgetLimits` in `src/domain/types.ts`.
-- **Truthful Ant Identity Enforcement:** Completely removed identity synthesis (`ant-planner`, `ant-engineer`, `ant-worker-*`) from production. Required `task.assignedAntId` to be explicitly populated, raising `ConfigurationError` if missing during `NamlaLoop.executeTask`.
-- **Scheduler Invariants & Precise Error Handling:** Allowed administrative `RETRYING -> BLOCKED` transitions in `src/domain/lifecycle.ts`. Replaced broad `catch {}` in `Scheduler` with explicit `StateConflictError` handling for CAS conflicts while propagating lifecycle and database errors.
-- **Structured Git Security & Tool Gateway Integration:** Fully typed `gitOperation` on `PermissionRequest`. Updated `ToolGateway.execute` to pass `request.gitOperation` directly to `PolicyEngine.authorize` without type assertions, and added E2E tests in `extremeQualityTests.ts` proving forbidden Git operations (`pull`, `merge`, `rebase`, `cherry-pick`, `am`) trigger `PermissionDeniedError` before executing tool adapters even with wildcard `"*"` permissions.
-- **Durable Accounting Recovery Authority & Evidence:** Defined `AccountingRecoveryMode` enum (`PROVIDER_RECONCILED`, `HUMAN_RECONCILED`, `CONSERVATIVE_MAX_WRITE_OFF`). Updated `recoverAccountingState` in `PostgresStateRepository` and `NamlaService` to require mode, authority, and evidenceRef, executing ledger reconciliation and state updates within an atomic UnitOfWork transaction.
-- **Truthful Test Suite Classification:** Renamed integration suites to `pglitePostgresEngineTests.ts` (`POSTGRES ENGINE COMPATIBILITY TESTED`) and `pgMemIntegrationTests.ts` (`POSTGRES EMULATOR TESTED`). Updated `goldenRuntimeE2ETests.ts` helper to `createPGlitePostgresPool`.
-- **Package Configuration & Build Reproducibility:** Root `tsconfig.json` and build script (`tsc && node -e ...`) copy `001_initial_schema.sql` into `dist/`.
+- **Per-Run Claim Serialization & Atomic DB Limits:** Updated `PostgresStateRepository.claimTaskLease` to execute transaction-scoped per-Run row locking (`SELECT id FROM runs WHERE id = $1 FOR UPDATE`) and count ALL active unexpired task leases across all statuses, eliminating the lease-acquired-but-not-counted window and enforcing `maxConcurrency` and `maxAgents` atomically inside the locked transaction.
+- **Strict Limit Validation & Safe Integer Bounds:** Implemented `Number.isSafeInteger()` (for concurrency, maxAgents, depth, tokens) and `Number.isFinite()` (for cost) validation with explicit safe upper bounds in `NamlaService` and `BudgetController`.
+- **Ant Identity Allocation:** Introduced `AntAllocator` domain interface and `DefaultAntAllocator` implementation, eliminating string synthesis in `NamlaService.createRun`. Added `setRunRootTask` to `StateRepository` contract.
+- **Accounting Recovery Redesign with Typed Evidence:** Defined typed evidence schemas (`ProviderReconciliationEvidence`, `HumanReconciliationEvidence`, `ConservativeWriteOffEvidence`), enforced `accounting:recover` capability checks, and performed locked TOCTOU revalidation inside transactions.
+- **Scheduler Advisory State & Deadlock Detection:** Updated Scheduler to update `activeAnts` set during candidate selection and mark unschedulable tasks `BLOCKED` when cycles/failed dependencies prevent progress.
+- **Structured Git Security Test Callback Fix:** Converted structured Git E2E test in `extremeQualityTests.ts` to `async` and directly awaited forbidden action checks.
+- **Truthful Test Suite Classification:** Renamed emulator and engine suites truthfully (`pgMemIntegrationTests.ts`, `pglitePostgresEngineTests.ts`) and created `actualPostgresServerIntegrationTests.ts` for multi-session PostgreSQL concurrency testing.
 
 ## IN PROGRESS
 P0 READY FOR HUMAN REVIEW — All P0 blockers resolved. Awaiting human review before P1.

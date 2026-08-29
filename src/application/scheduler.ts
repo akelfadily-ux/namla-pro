@@ -119,6 +119,22 @@ export class Scheduler {
 
       if (dependenciesMet) {
         runnable.push(task);
+        if (task.assignedAntId) {
+          activeAnts.add(task.assignedAntId);
+        }
+      }
+    }
+
+    // Unschedulable / Deadlock Detection: if there are CREATED or RETRYING tasks but none are runnable due to cycle or failed dependencies
+    const pendingTasks = candidates.filter((t) => t.status === TaskStatus.Created || t.status === TaskStatus.Retrying);
+    if (pendingTasks.length > 0 && runnable.length === 0 && activeTasks.length === 0) {
+      // Mark blocked/unschedulable tasks
+      for (const t of pendingTasks) {
+        try {
+          await this.state.transitionTask(t.id, t.status, TaskStatus.Blocked);
+        } catch (err) {
+          if (!(err instanceof StateConflictError)) throw err;
+        }
       }
     }
 

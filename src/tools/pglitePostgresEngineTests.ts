@@ -32,7 +32,7 @@ function createRealPostgresPool() {
   return { pool, db };
 }
 
-test("Real PostgreSQL Integration Suite — PGlite Driver, Migrations, CAS & Concurrency", async (t) => {
+test("PGlite WASM Engine Compatibility Suite — Driver, Migrations, CAS & Concurrency", async (t) => {
   await t.test("UnitOfWork COMMIT and ROLLBACK on real DB", async () => {
     const { pool, db } = createRealPostgresPool();
     const runner = new MigrationRunner({

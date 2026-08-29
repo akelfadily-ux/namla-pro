@@ -43,6 +43,8 @@ export interface PostgresPool extends PostgresQueryClient {
 export interface StateRepository {
   createRun(run: RunRecord): Promise<void>;
 
+  setRunRootTask(runId: RunId, rootTaskId: TaskId): Promise<void>;
+
   getRun(runId: RunId): Promise<RunRecord | null>;
 
   getAccountingState(runId: RunId): Promise<{ state: RunAccountingState; reason?: string }>;
@@ -52,8 +54,8 @@ export interface StateRepository {
   recoverAccountingState(
     runId: RunId,
     mode: import("./types").AccountingRecoveryMode,
-    reconciliationAuthority: string,
-    evidenceRef: string,
+    reconciliationAuthority: { identity: string; permissions: readonly string[] },
+    evidence: import("./types").AccountingRecoveryEvidence,
   ): Promise<{ recovered: boolean; previousState: RunAccountingState }>;
 
   transitionRun(
@@ -234,6 +236,10 @@ export interface ToolAdapter<I = unknown, O = unknown> {
     context: ToolExecutionContext,
     signal: AbortSignal,
   ): Promise<O>;
+}
+
+export interface AntAllocator {
+  allocate(role: import("./types").AntRole, runId: RunId, taskId?: TaskId): AntId;
 }
 
 export interface EventPublisher {

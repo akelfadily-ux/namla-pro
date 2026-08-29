@@ -61,7 +61,25 @@ class MemoryDatabase {
       return { rows: [row as any], rowCount: 1 };
     }
 
-    if (s.startsWith("UPDATE TASKS SET LEASE_OWNER = $1")) {
+    if (s.includes("SELECT * FROM TASKS WHERE ID = $1")) {
+      const id = params[0];
+      const task = this.tasks.get(id);
+      return { rows: task ? [task] : [] };
+    }
+
+    if (s.includes("SELECT ID FROM RUNS WHERE ID = $1 FOR UPDATE") || s.includes("SELECT STATUS FROM RUNS WHERE ID = $1")) {
+      const id = params[0];
+      const r = this.runs.get(id);
+      return { rows: r ? [r] : [] };
+    }
+
+    if (s.includes("SELECT ASSIGNED_ANT_ID FROM TASKS")) {
+      const runId = params[0];
+      const rows = Array.from(this.tasks.values()).filter(t => t.run_id === runId && t.lease_expires_at && t.lease_expires_at > new Date());
+      return { rows: rows as any, rowCount: rows.length };
+    }
+
+    if (s.includes("UPDATE TASKS SET LEASE_OWNER = $1")) {
       const [workerId, leaseToken, expiresAt, taskId] = params;
       const task = this.tasks.get(taskId);
       if (!task) return { rows: [], rowCount: 0 };

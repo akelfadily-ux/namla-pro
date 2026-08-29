@@ -2,6 +2,8 @@ import { randomUUID } from "crypto";
 import { Container } from "../bootstrap/container";
 import { TaskRecord, TaskStatus, AntRole, RunRecord, RunStatus } from "../domain/types";
 import { ConfigurationError } from "../domain/errors";
+import { AntAllocator } from "../domain/contracts";
+import { DefaultAntAllocator } from "./ant-allocator";
 
 export interface CreateRunInput {
   goal: string;
@@ -21,27 +23,45 @@ export interface RunSummary {
 }
 
 export class NamlaService {
-  constructor(private readonly container: Container) {}
+  private readonly antAllocator: AntAllocator;
+
+  constructor(
+    private readonly container: Container,
+    antAllocator?: AntAllocator,
+  ) {
+    this.antAllocator = antAllocator ?? new DefaultAntAllocator();
+  }
 
   validateCreateRunInput(input: CreateRunInput): void {
     if (!input.goal || typeof input.goal !== "string" || input.goal.trim().length === 0) {
       throw new ConfigurationError("CreateRunInput.goal must be a non-empty string");
     }
     if (input.budget) {
-      if (input.budget.maxCostUsd !== undefined && (typeof input.budget.maxCostUsd !== "number" || input.budget.maxCostUsd < 0)) {
-        throw new ConfigurationError("CreateRunInput.budget.maxCostUsd must be a non-negative number");
+      const b = input.budget;
+      if (b.maxCostUsd !== undefined) {
+        if (typeof b.maxCostUsd !== "number" || !Number.isFinite(b.maxCostUsd) || b.maxCostUsd < 0 || b.maxCostUsd > 1_000_000) {
+          throw new ConfigurationError("CreateRunInput.budget.maxCostUsd must be a finite non-negative number <= 1,000,000");
+        }
       }
-      if (input.budget.maxTokens !== undefined && (typeof input.budget.maxTokens !== "number" || input.budget.maxTokens < 0)) {
-        throw new ConfigurationError("CreateRunInput.budget.maxTokens must be a non-negative number");
+      if (b.maxTokens !== undefined) {
+        if (typeof b.maxTokens !== "number" || !Number.isSafeInteger(b.maxTokens) || b.maxTokens < 0 || b.maxTokens > 1_000_000_000) {
+          throw new ConfigurationError("CreateRunInput.budget.maxTokens must be a safe integer >= 0 and <= 1,000,000,000");
+        }
       }
-      if (input.budget.maxConcurrency !== undefined && (typeof input.budget.maxConcurrency !== "number" || input.budget.maxConcurrency < 1)) {
-        throw new ConfigurationError("CreateRunInput.budget.maxConcurrency must be a positive number >= 1");
+      if (b.maxConcurrency !== undefined) {
+        if (typeof b.maxConcurrency !== "number" || !Number.isSafeInteger(b.maxConcurrency) || b.maxConcurrency < 1 || b.maxConcurrency > 1_000) {
+          throw new ConfigurationError("CreateRunInput.budget.maxConcurrency must be a safe integer between 1 and 1,000");
+        }
       }
-      if (input.budget.maxAgents !== undefined && (typeof input.budget.maxAgents !== "number" || input.budget.maxAgents < 1)) {
-        throw new ConfigurationError("CreateRunInput.budget.maxAgents must be a positive number >= 1");
+      if (b.maxAgents !== undefined) {
+        if (typeof b.maxAgents !== "number" || !Number.isSafeInteger(b.maxAgents) || b.maxAgents < 1 || b.maxAgents > 1_000) {
+          throw new ConfigurationError("CreateRunInput.budget.maxAgents must be a safe integer between 1 and 1,000");
+        }
       }
-      if (input.budget.maxDepth !== undefined && (typeof input.budget.maxDepth !== "number" || input.budget.maxDepth < 0)) {
-        throw new ConfigurationError("CreateRunInput.budget.maxDepth must be a non-negative number");
+      if (b.maxDepth !== undefined) {
+        if (typeof b.maxDepth !== "number" || !Number.isSafeInteger(b.maxDepth) || b.maxDepth < 0 || b.maxDepth > 100) {
+          throw new ConfigurationError("CreateRunInput.budget.maxDepth must be a safe integer between 0 and 100");
+        }
       }
     }
   }
@@ -70,6 +90,8 @@ export class NamlaService {
       updatedAt: now,
     };
 
+    const assignedAntId = this.antAllocator.allocate(AntRole.Planner, runId, initialTaskId);
+
     const initialTask: TaskRecord = {
       id: initialTaskId,
       runId,
@@ -77,7 +99,7 @@ export class NamlaService {
       description: input.goal,
       status: TaskStatus.Created,
       role: AntRole.Planner,
-      assignedAntId: `ant-planner-${initialTaskId.slice(0, 8)}`,
+      assignedAntId,
       attempt: 0,
       maxAttempts: 3,
       depth: 0,
@@ -87,16 +109,15 @@ export class NamlaService {
       updatedAt: now,
     };
 
-    // Execute task creation first, then run record with rootTaskId to satisfy FK constraints
+    // Execute task creation first, then run record with rootTaskId to satisfy FK constraints via public setRunRootTask contract
     await this.container.unitOfWork.transaction(async (txState) => {
       // 1. Create run without rootTaskId first
       await txState.createRun({ ...runRecord, rootTaskId: undefined });
       // 2. Create initial task
       await txState.createTask(initialTask);
-      // 3. Update run with rootTaskId
-      if (typeof (txState as any).db?.query === "function") {
-        await (txState as any).db.query("UPDATE runs SET root_task_id = $1 WHERE id = $2", [initialTaskId, runId]);
-      }
+      // 3. Update run with rootTaskId through explicit StateRepository contract
+      await txState.setRunRootTask(runId, initialTaskId);
+
       await txState.appendEvent({
         type: "run.created",
         runId,
@@ -116,10 +137,10 @@ export class NamlaService {
   async recoverAccountingState(
     runId: string,
     mode: import("../domain/types").AccountingRecoveryMode,
-    reconciliationAuthority: string,
-    evidenceRef: string,
+    reconciliationAuthority: { identity: string; permissions: readonly string[] },
+    evidence: import("../domain/types").AccountingRecoveryEvidence,
   ): Promise<{ recovered: boolean }> {
-    const res = await this.container.state.recoverAccountingState(runId, mode, reconciliationAuthority, evidenceRef);
+    const res = await this.container.state.recoverAccountingState(runId, mode, reconciliationAuthority, evidence);
     return { recovered: res.recovered };
   }
 
@@ -223,6 +244,15 @@ export class NamlaService {
           },
         });
       } else if (allApproved) {
+        // Verify root task artifacts and gate evidence before final completion
+        const rootTaskId = updatedRun.rootTaskId;
+        if (rootTaskId) {
+          const rootTask = allTasks.find((t) => t.id === rootTaskId);
+          if (!rootTask || rootTask.status !== TaskStatus.Approved) {
+            return;
+          }
+        }
+
         await this.container.state.transitionRun(runId, RunStatus.Running, RunStatus.Completed);
         await this.container.state.appendEvent({
           type: "run.completed",

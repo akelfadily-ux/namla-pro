@@ -27,10 +27,16 @@ class MemoryDatabase {
       return { rows: [row as any], rowCount: 1 };
     }
 
-    if (s.startsWith("SELECT * FROM RUNS WHERE ID =")) {
+    if (s.includes("SELECT * FROM RUNS WHERE ID =") || s.includes("SELECT ID FROM RUNS WHERE ID =") || s.includes("SELECT STATUS FROM RUNS WHERE ID =")) {
       const id = params[0];
       const r = this.runs.get(id);
       return { rows: r ? [r] : [] };
+    }
+
+    if (s.includes("SELECT ASSIGNED_ANT_ID FROM TASKS")) {
+      const runId = params[0];
+      const rows = Array.from(this.tasks.values()).filter(t => t.run_id === runId && t.lease_expires_at && t.lease_expires_at > new Date());
+      return { rows: rows as any, rowCount: rows.length };
     }
 
     if (s.startsWith("UPDATE RUNS SET STATUS =")) {
