@@ -58,6 +58,14 @@ export const KERNEL_RESERVED_PRODUCERS: ReadonlySet<string> = new Set([
   "PROMAX_ASSESSMENT_RECEIPT",
 ]);
 
+/**
+ * Branded permit token for trusted verifier qualification proof creation (P0-RA1).
+ * Opaque class instance validated strictly via TrustedKernel's private WeakSet.
+ */
+export class TrustedVerifierPermit {
+  private readonly brand = Symbol("TrustedVerifierPermit");
+}
+
 export class TrustedKernel {
   private readonly safetyGuard: SafetyGuard;
   private readonly receiptLog: ReceiptLog;
@@ -65,6 +73,7 @@ export class TrustedKernel {
   private readonly humanAuthorizationGranted: boolean;
   private securityGateSeam: SecurityGateSeam;
   private evidenceCounter = 0;
+  private readonly activeVerifierPermits = new WeakSet<TrustedVerifierPermit>();
 
   constructor(options: TrustedKernelOptions) {
     this.workspaceRoot = getCanonicalWorkspaceRoot(options.workspaceRoot);
@@ -408,15 +417,47 @@ export class TrustedKernel {
     );
   }
 
+
   /**
-   * Narrow typed method for ProMax artifact verification checks (P0-RA1).
+   * Single authoritative entry point to run ProMax verification with an unforgeable verifier permit token (P0-RA1).
+   */
+  public runProMaxVerification<TCandidate, TContext, TResult>(
+    verifier: { verifyCandidate(candidate: TCandidate, context: TContext, kernel: TrustedKernel, permit: TrustedVerifierPermit, evidencePool?: readonly EvidenceRecord[]): TResult },
+    candidate: TCandidate,
+    context: TContext,
+    evidencePool: readonly EvidenceRecord[] = []
+  ): TResult {
+    const permit = new TrustedVerifierPermit();
+    this.activeVerifierPermits.add(permit);
+    try {
+      return verifier.verifyCandidate(candidate, context, this, permit, evidencePool);
+    } finally {
+      this.activeVerifierPermits.delete(permit);
+    }
+  }
+
+  private validateVerifierPermit(permit: TrustedVerifierPermit): void {
+    if (!permit || !this.activeVerifierPermits.has(permit)) {
+      this.receiptLog.create({
+        summary: "EMIT_QUALIFICATION_PROOF: FORBIDDEN",
+        status: "blocked",
+        details: { reason: "Invalid or missing TrustedVerifierPermit token" },
+      });
+      throw new Error("UNAUTHORIZED_VERIFIER_PERMIT: Privileged evidence emission requires an active, kernel-minted TrustedVerifierPermit token");
+    }
+  }
+
+  /**
+   * Dedicated method for ProMax artifact check evidence emission requiring valid TrustedVerifierPermit token (P0-RA1).
    */
   public emitArtifactCheckEvidence(
+    permit: TrustedVerifierPermit,
     missionId: string,
     stageId: string,
     details: Record<string, unknown>,
     artifactIdentity?: ArtifactIdentity
   ): EvidenceRecord {
+    this.validateVerifierPermit(permit);
     return this.createInternalEvidenceRecord(
       "PROMAX_ARTIFACT_CHECK",
       missionId,
@@ -430,14 +471,16 @@ export class TrustedKernel {
   }
 
   /**
-   * Narrow typed method for ProMax artifact substitution detection (P0-RA1).
+   * Dedicated method for ProMax artifact substitution detection requiring valid TrustedVerifierPermit token (P0-RA1).
    */
   public emitArtifactSubstitutionEvidence(
+    permit: TrustedVerifierPermit,
     missionId: string,
     stageId: string,
     details: Record<string, unknown>,
     artifactIdentity?: ArtifactIdentity
   ): EvidenceRecord {
+    this.validateVerifierPermit(permit);
     return this.createInternalEvidenceRecord(
       "PROMAX_ARTIFACT_SUBSTITUTION_DETECTED",
       missionId,
@@ -451,13 +494,15 @@ export class TrustedKernel {
   }
 
   /**
-   * Narrow typed method for ProMax contract-wide assessment receipts (P0-RA1).
+   * Dedicated method for ProMax contract-wide assessment receipts requiring valid TrustedVerifierPermit token (P0-RA1).
    */
   public emitProMaxAssessmentReceipt(
+    permit: TrustedVerifierPermit,
     missionId: string,
     stageId: string,
     details: Record<string, unknown>
   ): EvidenceRecord {
+    this.validateVerifierPermit(permit);
     return this.createInternalEvidenceRecord(
       "PROMAX_ASSESSMENT_RECEIPT",
       missionId,
@@ -472,9 +517,10 @@ export class TrustedKernel {
 
   /**
    * Dedicated method for authorized semantic verifiers to emit unforgeable QUALIFICATION_PROOF evidence.
-   * Public emitEvidence API strictly CANNOT mint QUALIFICATION_PROOF under any producer name.
+   * Requires a valid, active TrustedVerifierPermit token created during runProMaxVerification (P0-RA1).
    */
   public emitVerifierQualificationProof(
+    permit: TrustedVerifierPermit,
     producer: string,
     missionId: string,
     stageId: string,
@@ -483,6 +529,7 @@ export class TrustedKernel {
     workPackageId?: string,
     executionId?: string
   ): EvidenceRecord {
+    this.validateVerifierPermit(permit);
     return this.createInternalEvidenceRecord(
       producer,
       missionId,
@@ -497,12 +544,15 @@ export class TrustedKernel {
 
   /**
    * Dedicated method for SECURITY_VERIFIER to emit unforgeable QUALIFICATION_PROOF evidence.
+   * Requires a valid, active TrustedVerifierPermit token created during runProMaxVerification (P0-RA1).
    */
   public emitSecurityQualificationProof(
+    permit: TrustedVerifierPermit,
     missionId: string,
     stageId: string,
     details: Record<string, unknown>
   ): EvidenceRecord {
+    this.validateVerifierPermit(permit);
     return this.createInternalEvidenceRecord(
       "SECURITY_VERIFIER",
       missionId,

@@ -17,7 +17,7 @@
 
 import { IntegratedCandidate, ProMaxAssessment } from "../types/missionState";
 import { ContractBoundStageContext } from "../types/stageContext";
-import { TrustedKernel } from "../kernel/trustedKernel";
+import { TrustedKernel, TrustedVerifierPermit } from "../kernel/trustedKernel";
 import { ArtifactIdentity, EvidenceRecord, ProofKind } from "../types/evidence";
 import { TestRequirement } from "../types/contracts";
 import { ProjectClass } from "../factory/projectFactory";
@@ -133,6 +133,7 @@ export class ProMaxVerifier {
     candidate: IntegratedCandidate,
     context: ContractBoundStageContext,
     kernel: TrustedKernel,
+    permit: TrustedVerifierPermit,
     evidencePool: readonly EvidenceRecord[] = []
   ): ProMaxResult {
     const verifiedCriteria: string[] = [];
@@ -197,7 +198,7 @@ export class ProMaxVerifier {
           artifactCheckPassed = false;
           failedCriteria.push(`Artifact substitution detected for ${art.path}: expected ${art.sha256}, got ${recomputedSha256}`);
 
-          const subEv = kernel.emitArtifactSubstitutionEvidence(context.missionId, "PROMAX", {
+          const subEv = kernel.emitArtifactSubstitutionEvidence(permit, context.missionId, "PROMAX", {
             path: art.path,
             expectedSha256: art.sha256,
             observedSha256: recomputedSha256,
@@ -216,7 +217,7 @@ export class ProMaxVerifier {
             candidateSnapshotHash,
           });
         } else {
-          const ev = kernel.emitArtifactCheckEvidence(context.missionId, "PROMAX", {
+          const ev = kernel.emitArtifactCheckEvidence(permit, context.missionId, "PROMAX", {
             path: art.path,
             expectedSha256: art.sha256,
             observedSha256: recomputedSha256,
@@ -255,7 +256,7 @@ export class ProMaxVerifier {
         }
       }
 
-      const secEv = kernel.emitSecurityQualificationProof(context.missionId, "PROMAX", {
+      const secEv = kernel.emitSecurityQualificationProof(permit, context.missionId, "PROMAX", {
         securityRequirementId: secReq.id,
         rule: secReq.rule,
         passed: !secFailed,
@@ -278,7 +279,7 @@ export class ProMaxVerifier {
       // Bind QUALIFICATION_PROOF explicitly to declared target criteria (P0-C11)
       if (!secFailed && secReq.provesCriterionIds) {
         for (const targetCriterionId of secReq.provesCriterionIds) {
-          const acSecEv = kernel.emitSecurityQualificationProof(context.missionId, "PROMAX", {
+          const acSecEv = kernel.emitSecurityQualificationProof(permit, context.missionId, "PROMAX", {
             criterionId: targetCriterionId,
             securityRequirementId: secReq.id,
             rule: secReq.rule,
@@ -338,7 +339,7 @@ export class ProMaxVerifier {
           failedCriteria.push(`Verifier ${verifierRes.verifier} produced VERIFIED result without source execution evidenceRef`);
         } else {
           for (const targetCriterionId of reqTest.provesCriterionIds) {
-            const proofEv = kernel.emitVerifierQualificationProof(verifierRes.verifier, context.missionId, "PROMAX", {
+            const proofEv = kernel.emitVerifierQualificationProof(permit, verifierRes.verifier, context.missionId, "PROMAX", {
               criterionId: targetCriterionId,
               testRequirementId: reqTest.id,
               verifier: verifierRes.verifier,
@@ -563,6 +564,7 @@ export class ProMaxVerifier {
     };
 
     const evidenceRecord = kernel.emitProMaxAssessmentReceipt(
+      permit,
       context.missionId,
       "PROMAX",
       {

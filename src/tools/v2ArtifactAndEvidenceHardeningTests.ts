@@ -202,7 +202,7 @@ test("HARDENING-4 & HARDENING-14: Artifact Deletion/Tampering Detected by ProMax
     // 1. Modify file afterwards
     writeFileSync(join(ws, "workspaces/v2-missions/m-tamp/leggo-integrated/src/index.ts"), "export const modified = true;");
 
-    const resMod = verifier.verifyCandidate(candidate, context, kernel, []);
+    const resMod = kernel.runProMaxVerification(verifier, candidate, context, []);
     assert.equal(resMod.success, false);
     assert.equal(resMod.reasonCode, "PROMAX_VERIFICATION_FAILED");
 
@@ -213,7 +213,7 @@ test("HARDENING-4 & HARDENING-14: Artifact Deletion/Tampering Detected by ProMax
     // 2. Delete file afterwards
     unlinkSync(join(ws, "workspaces/v2-missions/m-tamp/leggo-integrated/src/index.ts"));
 
-    const resDel = verifier.verifyCandidate(candidate, context, kernel, []);
+    const resDel = kernel.runProMaxVerification(verifier, candidate, context, []);
     assert.equal(resDel.success, false);
     assert.equal(resDel.reasonCode, "PROMAX_VERIFICATION_FAILED");
   } finally {
@@ -283,7 +283,7 @@ test("HARDENING-5: Stale Evidence Causality Rejection across Missions", () => {
       },
     };
 
-    const res = verifier.verifyCandidate(candidate, context, kernel, [foreignEvidence]);
+    const res = kernel.runProMaxVerification(verifier, candidate, context, [foreignEvidence]);
     assert.equal(res.success, false);
     assert.equal(res.assessment.evidenceFreshnessVerified, false);
   } finally {

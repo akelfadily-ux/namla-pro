@@ -95,7 +95,7 @@ test("ProMaxVerifier: Generates Proof Mappings and Verifies Observed Evidence", 
       proofKind: "QUALIFICATION_PROOF",
     });
 
-    const result = verifier.verifyCandidate(candidate, context, kernel, [cmdRes.evidenceRecord!, acEv]);
+    const result = kernel.runProMaxVerification(verifier, candidate, context, [cmdRes.evidenceRecord!, acEv]);
 
     assert.equal(result.success, true);
     assert.equal(result.proofMappings.length >= 2, true, "Proof mappings must exist");
@@ -166,7 +166,7 @@ test("ProMaxVerifier: P0.16 Artifact Mutation / Substitution is Detected and Fai
     };
 
     // 3. ProMax MUST recompute SHA-256 and detect mismatch
-    const result = verifier.verifyCandidate(candidate, context, kernel, []);
+    const result = kernel.runProMaxVerification(verifier, candidate, context, []);
 
     assert.equal(result.success, false, "ProMax MUST fail verification when artifact content is mutated");
     assert.equal(result.assessment.contractSatisfied, false);
@@ -248,7 +248,7 @@ test("ProMaxVerifier: P0.17 Stale Evidence Fails Verification and Leaves Criteri
       },
     ];
 
-    const result = verifier.verifyCandidate(candidate, context, kernel, staleEvidence);
+    const result = kernel.runProMaxVerification(verifier, candidate, context, staleEvidence);
 
     assert.equal(result.success, false, "Stale evidence must cause ProMax verification failure");
     assert.equal(result.assessment.evidenceFreshnessVerified, false);
