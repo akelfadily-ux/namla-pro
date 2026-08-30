@@ -13,6 +13,8 @@ import { resolveTrustedExecutable, TrustedExecutableId } from "../../cognitive/t
 import { buildSafeChildEnv } from "../../cognitive/safeProviderRequest";
 import { CapabilityScope, PlanContract } from "../types/contracts";
 import { ArtifactIdentity, EnvironmentIdentity, EvidenceRecord, ProofKind } from "../types/evidence";
+import { IntegratedCandidate } from "../types/missionState";
+import { StageContextBase } from "../types/stageContext";
 import {
   getCanonicalWorkspaceRoot,
   resolveWorkspacePath,
@@ -60,10 +62,15 @@ export const KERNEL_RESERVED_PRODUCERS: ReadonlySet<string> = new Set([
 
 /**
  * Branded permit token for trusted verifier qualification proof creation (P0-RA1).
- * Opaque class instance validated strictly via TrustedKernel's private WeakSet.
+ * Opaque class instance validated strictly via TrustedKernel's private WeakSet and session binding.
  */
 export class TrustedVerifierPermit {
   private readonly brand = Symbol("TrustedVerifierPermit");
+  constructor(
+    public readonly missionId: string,
+    public readonly candidateSnapshotHash: string,
+    public readonly sessionId: string
+  ) {}
 }
 
 export class TrustedKernel {
@@ -420,31 +427,176 @@ export class TrustedKernel {
 
   /**
    * Single authoritative entry point to run ProMax verification with an unforgeable verifier permit token (P0-RA1).
+   * Validates that verifier is an instanceof ProMaxVerifier (rejecting arbitrary caller objects).
    */
-  public runProMaxVerification<TCandidate, TContext, TResult>(
-    verifier: { verifyCandidate(candidate: TCandidate, context: TContext, kernel: TrustedKernel, permit: TrustedVerifierPermit, evidencePool?: readonly EvidenceRecord[]): TResult },
+  public runProMaxVerification<TCandidate extends IntegratedCandidate, TContext extends StageContextBase>(
     candidate: TCandidate,
     context: TContext,
-    evidencePool: readonly EvidenceRecord[] = []
-  ): TResult {
-    const permit = new TrustedVerifierPermit();
+    evidencePool: readonly EvidenceRecord[] = [],
+    verifier?: any
+  ): import("../promax/proMaxVerifier").ProMaxResult {
+    const { ProMaxVerifier, computeCandidateSnapshotHash } = require("../promax/proMaxVerifier");
+    const activeVerifier = verifier ?? new ProMaxVerifier();
+    if (!(activeVerifier instanceof ProMaxVerifier)) {
+      this.receiptLog.create({
+        summary: "RUN_PROMAX_VERIFICATION: FORBIDDEN",
+        status: "blocked",
+        details: { reason: "Verifier object is not an authorized ProMaxVerifier instance" },
+      });
+      throw new Error("UNAUTHORIZED_VERIFIER_INSTANCE: runProMaxVerification requires an authorized ProMaxVerifier instance");
+    }
+
+    const candidateSnapshotHash = computeCandidateSnapshotHash(candidate.integratedArtifacts);
+    const sessionId = `sess-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const permit = new TrustedVerifierPermit(context.missionId, candidateSnapshotHash, sessionId);
+
     this.activeVerifierPermits.add(permit);
     try {
-      return verifier.verifyCandidate(candidate, context, this, permit, evidencePool);
+      return activeVerifier.verifyCandidate(candidate, context, this, permit, evidencePool);
     } finally {
       this.activeVerifierPermits.delete(permit);
     }
   }
 
-  private validateVerifierPermit(permit: TrustedVerifierPermit): void {
+  private validateVerifierPermit(
+    permit: TrustedVerifierPermit,
+    expectedMissionId: string,
+    expectedSnapshotHash?: string
+  ): void {
     if (!permit || !this.activeVerifierPermits.has(permit)) {
       this.receiptLog.create({
         summary: "EMIT_QUALIFICATION_PROOF: FORBIDDEN",
         status: "blocked",
-        details: { reason: "Invalid or missing TrustedVerifierPermit token" },
+        details: { reason: "Invalid, expired, or missing TrustedVerifierPermit token" },
       });
       throw new Error("UNAUTHORIZED_VERIFIER_PERMIT: Privileged evidence emission requires an active, kernel-minted TrustedVerifierPermit token");
     }
+
+    if (permit.missionId !== expectedMissionId) {
+      this.receiptLog.create({
+        summary: "EMIT_QUALIFICATION_PROOF: MISSION_MISMATCH",
+        status: "blocked",
+        details: { permitMissionId: permit.missionId, expectedMissionId },
+      });
+      throw new Error(`PERMIT_MISSION_MISMATCH: Permit missionId (${permit.missionId}) does not match context missionId (${expectedMissionId})`);
+    }
+
+    if (expectedSnapshotHash && permit.candidateSnapshotHash !== expectedSnapshotHash) {
+      this.receiptLog.create({
+        summary: "EMIT_QUALIFICATION_PROOF: SNAPSHOT_MISMATCH",
+        status: "blocked",
+        details: { permitSnapshotHash: permit.candidateSnapshotHash, expectedSnapshotHash },
+      });
+      throw new Error("PERMIT_SNAPSHOT_MISMATCH: Permit candidateSnapshotHash does not match context candidateSnapshotHash");
+    }
+  }
+
+  /**
+   * Narrow typed method for TEST_SUITE_VERIFIER qualification proof emission (P0-RA1).
+   */
+  public emitTestQualificationProof(
+    permit: TrustedVerifierPermit,
+    missionId: string,
+    stageId: string,
+    details: Record<string, unknown>
+  ): EvidenceRecord {
+    this.validateVerifierPermit(permit, missionId, typeof details.candidateSnapshotHash === "string" ? details.candidateSnapshotHash : undefined);
+    return this.createInternalEvidenceRecord("TEST_SUITE_VERIFIER", missionId, stageId, details, undefined, undefined, undefined, "QUALIFICATION_PROOF");
+  }
+
+  /**
+   * Narrow typed method for BUILD_VERIFIER qualification proof emission (P0-RA1).
+   */
+  public emitBuildQualificationProof(
+    permit: TrustedVerifierPermit,
+    missionId: string,
+    stageId: string,
+    details: Record<string, unknown>
+  ): EvidenceRecord {
+    this.validateVerifierPermit(permit, missionId, typeof details.candidateSnapshotHash === "string" ? details.candidateSnapshotHash : undefined);
+    return this.createInternalEvidenceRecord("BUILD_VERIFIER", missionId, stageId, details, undefined, undefined, undefined, "QUALIFICATION_PROOF");
+  }
+
+  /**
+   * Narrow typed method for TYPECHECK_VERIFIER qualification proof emission (P0-RA1).
+   */
+  public emitTypecheckQualificationProof(
+    permit: TrustedVerifierPermit,
+    missionId: string,
+    stageId: string,
+    details: Record<string, unknown>
+  ): EvidenceRecord {
+    this.validateVerifierPermit(permit, missionId, typeof details.candidateSnapshotHash === "string" ? details.candidateSnapshotHash : undefined);
+    return this.createInternalEvidenceRecord("TYPECHECK_VERIFIER", missionId, stageId, details, undefined, undefined, undefined, "QUALIFICATION_PROOF");
+  }
+
+  /**
+   * Narrow typed method for SMOKE verifiers qualification proof emission (P0-RA1).
+   */
+  public emitSmokeQualificationProof(
+    permit: TrustedVerifierPermit,
+    verifierName: string,
+    missionId: string,
+    stageId: string,
+    details: Record<string, unknown>
+  ): EvidenceRecord {
+    this.validateVerifierPermit(permit, missionId, typeof details.candidateSnapshotHash === "string" ? details.candidateSnapshotHash : undefined);
+    const AUTHORIZED_SMOKE_VERIFIERS = new Set([
+      "SMOKE_VERIFIER",
+      "REST_API_FUNCTION_LEVEL_SMOKE_VERIFIER",
+      "REST_API_EXECUTABLE_SMOKE_VERIFIER",
+      "CLI_APPLICATION_EXECUTABLE_SMOKE_VERIFIER",
+      "DATABASE_SERVICE_EXECUTABLE_SMOKE_VERIFIER",
+      "WEB_APPLICATION_EXECUTABLE_SMOKE_VERIFIER",
+      "FULLSTACK_APPLICATION_EXECUTABLE_SMOKE_VERIFIER",
+      "TYPESCRIPT_LIBRARY_EXECUTABLE_SMOKE_VERIFIER",
+      "DOCKERIZED_SERVICE_EXECUTABLE_SMOKE_VERIFIER",
+      "IN_MEMORY_REPOSITORY_SMOKE_VERIFIER",
+      "TYPESCRIPT_LIBRARY_EXPORT_SMOKE_VERIFIER",
+    ]);
+    if (!AUTHORIZED_SMOKE_VERIFIERS.has(verifierName)) {
+      throw new Error(`UNAUTHORIZED_SMOKE_VERIFIER: ${verifierName} is not an authorized smoke verifier producer`);
+    }
+    return this.createInternalEvidenceRecord(verifierName, missionId, stageId, details, undefined, undefined, undefined, "QUALIFICATION_PROOF");
+  }
+
+  /**
+   * Narrow typed method for DISTINCT_CONTRACT_INTEGRATION_VERIFIER qualification proof emission (P0-RA1).
+   */
+  public emitIntegrationQualificationProof(
+    permit: TrustedVerifierPermit,
+    missionId: string,
+    stageId: string,
+    details: Record<string, unknown>
+  ): EvidenceRecord {
+    this.validateVerifierPermit(permit, missionId, typeof details.candidateSnapshotHash === "string" ? details.candidateSnapshotHash : undefined);
+    return this.createInternalEvidenceRecord("DISTINCT_CONTRACT_INTEGRATION_VERIFIER", missionId, stageId, details, undefined, undefined, undefined, "QUALIFICATION_PROOF");
+  }
+
+  /**
+   * Narrow typed method for DOCKER_BUILD_VERIFIER qualification proof emission (P0-RA1).
+   */
+  public emitDockerQualificationProof(
+    permit: TrustedVerifierPermit,
+    missionId: string,
+    stageId: string,
+    details: Record<string, unknown>
+  ): EvidenceRecord {
+    this.validateVerifierPermit(permit, missionId, typeof details.candidateSnapshotHash === "string" ? details.candidateSnapshotHash : undefined);
+    return this.createInternalEvidenceRecord("DOCKER_BUILD_VERIFIER", missionId, stageId, details, undefined, undefined, undefined, "QUALIFICATION_PROOF");
+  }
+
+  /**
+   * Dedicated method for SECURITY_VERIFIER to emit unforgeable QUALIFICATION_PROOF evidence.
+   */
+  public emitSecurityQualificationProof(
+    permit: TrustedVerifierPermit,
+    missionId: string,
+    stageId: string,
+    details: Record<string, unknown>
+  ): EvidenceRecord {
+    this.validateVerifierPermit(permit, missionId, typeof details.candidateSnapshotHash === "string" ? details.candidateSnapshotHash : undefined);
+    return this.createInternalEvidenceRecord("SECURITY_VERIFIER", missionId, stageId, details, undefined, undefined, undefined, "QUALIFICATION_PROOF");
   }
 
   /**
@@ -457,7 +609,7 @@ export class TrustedKernel {
     details: Record<string, unknown>,
     artifactIdentity?: ArtifactIdentity
   ): EvidenceRecord {
-    this.validateVerifierPermit(permit);
+    this.validateVerifierPermit(permit, missionId, typeof details.candidateSnapshotHash === "string" ? details.candidateSnapshotHash : undefined);
     return this.createInternalEvidenceRecord(
       "PROMAX_ARTIFACT_CHECK",
       missionId,
@@ -480,7 +632,7 @@ export class TrustedKernel {
     details: Record<string, unknown>,
     artifactIdentity?: ArtifactIdentity
   ): EvidenceRecord {
-    this.validateVerifierPermit(permit);
+    this.validateVerifierPermit(permit, missionId, typeof details.candidateSnapshotHash === "string" ? details.candidateSnapshotHash : undefined);
     return this.createInternalEvidenceRecord(
       "PROMAX_ARTIFACT_SUBSTITUTION_DETECTED",
       missionId,
@@ -502,59 +654,9 @@ export class TrustedKernel {
     stageId: string,
     details: Record<string, unknown>
   ): EvidenceRecord {
-    this.validateVerifierPermit(permit);
+    this.validateVerifierPermit(permit, missionId, typeof details.candidateSnapshotHash === "string" ? details.candidateSnapshotHash : undefined);
     return this.createInternalEvidenceRecord(
       "PROMAX_ASSESSMENT_RECEIPT",
-      missionId,
-      stageId,
-      details,
-      undefined,
-      undefined,
-      undefined,
-      "QUALIFICATION_PROOF"
-    );
-  }
-
-  /**
-   * Dedicated method for authorized semantic verifiers to emit unforgeable QUALIFICATION_PROOF evidence.
-   * Requires a valid, active TrustedVerifierPermit token created during runProMaxVerification (P0-RA1).
-   */
-  public emitVerifierQualificationProof(
-    permit: TrustedVerifierPermit,
-    producer: string,
-    missionId: string,
-    stageId: string,
-    details: Record<string, unknown>,
-    artifactIdentity?: ArtifactIdentity,
-    workPackageId?: string,
-    executionId?: string
-  ): EvidenceRecord {
-    this.validateVerifierPermit(permit);
-    return this.createInternalEvidenceRecord(
-      producer,
-      missionId,
-      stageId,
-      details,
-      artifactIdentity,
-      workPackageId,
-      executionId,
-      "QUALIFICATION_PROOF"
-    );
-  }
-
-  /**
-   * Dedicated method for SECURITY_VERIFIER to emit unforgeable QUALIFICATION_PROOF evidence.
-   * Requires a valid, active TrustedVerifierPermit token created during runProMaxVerification (P0-RA1).
-   */
-  public emitSecurityQualificationProof(
-    permit: TrustedVerifierPermit,
-    missionId: string,
-    stageId: string,
-    details: Record<string, unknown>
-  ): EvidenceRecord {
-    this.validateVerifierPermit(permit);
-    return this.createInternalEvidenceRecord(
-      "SECURITY_VERIFIER",
       missionId,
       stageId,
       details,

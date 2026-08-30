@@ -339,7 +339,7 @@ export class ProMaxVerifier {
           failedCriteria.push(`Verifier ${verifierRes.verifier} produced VERIFIED result without source execution evidenceRef`);
         } else {
           for (const targetCriterionId of reqTest.provesCriterionIds) {
-            const proofEv = kernel.emitVerifierQualificationProof(permit, verifierRes.verifier, context.missionId, "PROMAX", {
+            const proofDetails = {
               criterionId: targetCriterionId,
               testRequirementId: reqTest.id,
               verifier: verifierRes.verifier,
@@ -347,8 +347,23 @@ export class ProMaxVerifier {
               sourceEvidenceRef: verifierRes.evidenceRef,
               candidateSnapshotHash,
               sha256: verifierRes.artifactHash,
-              proofKind: "QUALIFICATION_PROOF",
-            });
+              proofKind: "QUALIFICATION_PROOF" as const,
+            };
+
+            let proofEv: EvidenceRecord;
+            if (verifierRes.verifier === "BUILD_VERIFIER") {
+              proofEv = kernel.emitBuildQualificationProof(permit, context.missionId, "PROMAX", proofDetails);
+            } else if (verifierRes.verifier === "TYPECHECK_VERIFIER") {
+              proofEv = kernel.emitTypecheckQualificationProof(permit, context.missionId, "PROMAX", proofDetails);
+            } else if (verifierRes.verifier === "DISTINCT_CONTRACT_INTEGRATION_VERIFIER" || verifierRes.verifier === "INTEGRATION_VERIFIER") {
+              proofEv = kernel.emitIntegrationQualificationProof(permit, context.missionId, "PROMAX", proofDetails);
+            } else if (verifierRes.verifier === "DOCKER_BUILD_VERIFIER") {
+              proofEv = kernel.emitDockerQualificationProof(permit, context.missionId, "PROMAX", proofDetails);
+            } else if (verifierRes.verifier.includes("SMOKE")) {
+              proofEv = kernel.emitSmokeQualificationProof(permit, verifierRes.verifier, context.missionId, "PROMAX", proofDetails);
+            } else {
+              proofEv = kernel.emitTestQualificationProof(permit, context.missionId, "PROMAX", proofDetails);
+            }
             accumulatedPool.push(proofEv);
 
             proofMappings.push({
