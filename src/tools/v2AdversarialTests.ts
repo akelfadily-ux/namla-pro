@@ -119,13 +119,51 @@ test("P0-C9 REGRESSION: Passing Test For AC-1 Must NOT Prove Unbound AC-2", () =
   }
 });
 
-test("P0-RA8 8-Point Cross-Verifier Permit Confusion & Boundary Matrix", () => {
+test("P0-RA8 8-Point ECMAScript Runtime Permit Confinement & Boundary Matrix", () => {
   const ws = tempWorkspace("ra8-matrix");
   try {
     const kernel = new TrustedKernel({ workspaceRoot: ws });
-    const fakePermit = new (require("../v2/kernel/trustedKernel").TrustedVerifierPermit)("mission-A", "hash-A", "sess-A");
+    const fakePermit = { missionId: "mission-A", candidateSnapshotHash: "hash-A", sessionId: "sess-A" };
 
-    // Setup candidate & context for testing active permit token checks via ProMaxVerifier subclass
+    // 1. ECMAScript private field #activeVerifierPermits cannot be accessed, mutated, or read via JavaScript / as any
+    assert.equal((kernel as any).activeVerifierPermits, undefined, "activeVerifierPermits property MUST be undefined at JS runtime");
+    assert.equal((kernel as any)["#activeVerifierPermits"], undefined, "#activeVerifierPermits indexer MUST be undefined at JS runtime");
+
+    // 2. Direct calls to emitTestQualificationProof with unregistered/fake permit object throw UNAUTHORIZED_VERIFIER_PERMIT
+    assert.throws(
+      () => kernel.emitTestQualificationProof(fakePermit as any, "mission-A", "PROMAX", { candidateSnapshotHash: "hash-A" }),
+      /UNAUTHORIZED_VERIFIER_PERMIT/
+    );
+
+    // 3. Direct calls to emitBuildQualificationProof with fake permit throw UNAUTHORIZED_VERIFIER_PERMIT
+    assert.throws(
+      () => kernel.emitBuildQualificationProof(fakePermit as any, "mission-A", "PROMAX", { candidateSnapshotHash: "hash-A" }),
+      /UNAUTHORIZED_VERIFIER_PERMIT/
+    );
+
+    // 4. Direct call to emitSecurityQualificationProof without active permit throws UNAUTHORIZED_VERIFIER_PERMIT
+    assert.throws(
+      () => kernel.emitSecurityQualificationProof(fakePermit as any, "mission-A", "PROMAX", { candidateSnapshotHash: "hash-A" }),
+      /UNAUTHORIZED_VERIFIER_PERMIT/
+    );
+
+    // 5. Direct call to emitProMaxAssessmentReceipt without active permit throws UNAUTHORIZED_VERIFIER_PERMIT
+    assert.throws(
+      () => kernel.emitProMaxAssessmentReceipt(fakePermit as any, "mission-A", "PROMAX", { candidateSnapshotHash: "hash-A" }),
+      /UNAUTHORIZED_VERIFIER_PERMIT/
+    );
+
+    // 6. Direct call to emitArtifactCheckEvidence without active permit throws UNAUTHORIZED_VERIFIER_PERMIT
+    assert.throws(
+      () => kernel.emitArtifactCheckEvidence(fakePermit as any, "mission-A", "PROMAX", { hash: "abc" }),
+      /UNAUTHORIZED_VERIFIER_PERMIT/
+    );
+
+    // 7. Generic public emitEvidence cannot mint QUALIFICATION_PROOF even if verifier name provided
+    const genericEv = kernel.emitEvidence("TEST_SUITE_VERIFIER", "mission-A", "PROMAX", { candidateSnapshotHash: "hash-A" }, undefined, undefined, undefined, "QUALIFICATION_PROOF");
+    assert.equal(genericEv.proofKind, "TRACEABILITY");
+
+    // 8. Canonical real ProMax verification via kernel.runProMaxVerification succeeds
     const leggoRel = "workspaces/v2-missions/mission-A/leggo-integrated";
     kernel.safeWriteWorkspaceFile(`${leggoRel}/package.json`, JSON.stringify({ name: "ra8", version: "1.0.0", scripts: { build: "node -v", test: "node -v" } }), "mission-A");
     kernel.safeWriteWorkspaceFile(`${leggoRel}/src/index.ts`, "export const x = 1;", "mission-A");
@@ -138,8 +176,6 @@ test("P0-RA8 8-Point Cross-Verifier Permit Confusion & Boundary Matrix", () => {
       sourceTraceability: { "src/index.ts": "COLONY_A" },
       workspacePath: leggoRel,
     };
-    const candHash = computeCandidateSnapshotHash(cand.integratedArtifacts);
-
     const ctx: ContractBoundStageContext = {
       missionId: "mission-A",
       authoritativeInputs: [],
@@ -158,71 +194,6 @@ test("P0-RA8 8-Point Cross-Verifier Permit Confusion & Boundary Matrix", () => {
       },
     };
 
-    // Subclass ProMaxVerifier to test active permit boundary checks inside runProMaxVerification
-    class TestProMaxVerifier extends ProMaxVerifier {
-      public testMissionMismatch = false;
-      public testSnapshotMismatch = false;
-      public testSmokeUnauthorized = false;
-
-      public override verifyCandidate(candidate: IntegratedCandidate, context: ContractBoundStageContext, k: TrustedKernel, permit: any, pool: readonly EvidenceRecord[] = []): any {
-        if (this.testMissionMismatch) {
-          k.emitTestQualificationProof(permit, "WRONG_MISSION_B", "PROMAX", { candidateSnapshotHash: candHash });
-        }
-        if (this.testSnapshotMismatch) {
-          k.emitTestQualificationProof(permit, context.missionId, "PROMAX", { candidateSnapshotHash: "WRONG_SNAPSHOT_HASH" });
-        }
-        if (this.testSmokeUnauthorized) {
-          k.emitSmokeQualificationProof(permit, "UNAUTHORIZED_EVIL_SMOKE_VERIFIER", context.missionId, "PROMAX", { candidateSnapshotHash: candHash });
-        }
-        return super.verifyCandidate(candidate, context, k, permit, pool);
-      }
-    }
-
-    // Test permit validation invariant enforcement directly via kernel active permits
-    const permitA = new (require("../v2/kernel/trustedKernel").TrustedVerifierPermit)("mission-A", candHash, "sess-A");
-    (kernel as any).activeVerifierPermits.add(permitA);
-
-    // 1. Mission A permit used with Mission B details fails PERMIT_MISSION_MISMATCH
-    assert.throws(
-      () => kernel.emitTestQualificationProof(permitA, "mission-B", "PROMAX", { candidateSnapshotHash: candHash }),
-      /PERMIT_MISSION_MISMATCH/
-    );
-
-    // 2. Snapshot A permit used with Snapshot B details fails PERMIT_SNAPSHOT_MISMATCH
-    assert.throws(
-      () => kernel.emitTestQualificationProof(permitA, "mission-A", "PROMAX", { candidateSnapshotHash: "WRONG_SNAPSHOT_HASH" }),
-      /PERMIT_SNAPSHOT_MISMATCH/
-    );
-
-    // 3. Unauthorized smoke verifier string throws UNAUTHORIZED_SMOKE_VERIFIER
-    assert.throws(
-      () => kernel.emitSmokeQualificationProof(permitA, "UNAUTHORIZED_EVIL_SMOKE_VERIFIER", "mission-A", "PROMAX", { candidateSnapshotHash: candHash }),
-      /UNAUTHORIZED_SMOKE_VERIFIER/
-    );
-
-    // 4. Inactive/unregistered fake permit throws UNAUTHORIZED_VERIFIER_PERMIT
-    assert.throws(
-      () => kernel.emitBuildQualificationProof(fakePermit, "mission-A", "PROMAX", { candidateSnapshotHash: candHash }),
-      /UNAUTHORIZED_VERIFIER_PERMIT/
-    );
-
-    // 5. Direct call to emitSecurityQualificationProof without active permit throws UNAUTHORIZED_VERIFIER_PERMIT
-    assert.throws(
-      () => kernel.emitSecurityQualificationProof(fakePermit, "mission-A", "PROMAX", { candidateSnapshotHash: candHash }),
-      /UNAUTHORIZED_VERIFIER_PERMIT/
-    );
-
-    // 6. Direct call to emitProMaxAssessmentReceipt without active permit throws UNAUTHORIZED_VERIFIER_PERMIT
-    assert.throws(
-      () => kernel.emitProMaxAssessmentReceipt(fakePermit, "mission-A", "PROMAX", { candidateSnapshotHash: candHash }),
-      /UNAUTHORIZED_VERIFIER_PERMIT/
-    );
-
-    // 7. Generic public emitEvidence cannot mint QUALIFICATION_PROOF even if verifier name provided
-    const genericEv = kernel.emitEvidence("TEST_SUITE_VERIFIER", "mission-A", "PROMAX", { candidateSnapshotHash: candHash }, undefined, undefined, undefined, "QUALIFICATION_PROOF");
-    assert.equal(genericEv.proofKind, "TRACEABILITY");
-
-    // 8. Canonical real ProMax verification via kernel.runProMaxVerification succeeds
     const resValid = kernel.runProMaxVerification(cand, ctx, []);
     assert.equal(resValid.success, true);
   } finally {
@@ -234,7 +205,7 @@ test("P0-RA6 & P0-RA7 Execution Receipt Authenticity, Permit Confinement & Malic
   const ws = tempWorkspace("ra-matrix");
   try {
     const kernel = new TrustedKernel({ workspaceRoot: ws });
-    const fakePermit = new (require("../v2/kernel/trustedKernel").TrustedVerifierPermit)();
+    const fakePermit = { missionId: "m-ra", candidateSnapshotHash: "hash1", sessionId: "sess1" };
 
     // 1. Reserved producer TRUSTED_KERNEL_COMMAND refused by public emitEvidence
     assert.throws(

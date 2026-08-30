@@ -61,11 +61,17 @@ export const KERNEL_RESERVED_PRODUCERS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Branded permit token for trusted verifier qualification proof creation (P0-RA1).
- * Opaque class instance validated strictly via TrustedKernel's private WeakSet and session binding.
+ * Opaque interface for trusted verifier permit token (P0-RA1).
+ * Unconstructible by external callers (class is module-private).
  */
-export class TrustedVerifierPermit {
-  private readonly brand = Symbol("TrustedVerifierPermit");
+export interface TrustedVerifierPermit {
+  readonly missionId: string;
+  readonly candidateSnapshotHash: string;
+  readonly sessionId: string;
+}
+
+class InternalVerifierPermit implements TrustedVerifierPermit {
+  #brand = Symbol("InternalVerifierPermit");
   constructor(
     public readonly missionId: string,
     public readonly candidateSnapshotHash: string,
@@ -74,13 +80,13 @@ export class TrustedVerifierPermit {
 }
 
 export class TrustedKernel {
+  readonly #activeVerifierPermits = new WeakSet<TrustedVerifierPermit>();
   private readonly safetyGuard: SafetyGuard;
   private readonly receiptLog: ReceiptLog;
   private readonly workspaceRoot: string;
   private readonly humanAuthorizationGranted: boolean;
   private securityGateSeam: SecurityGateSeam;
   private evidenceCounter = 0;
-  private readonly activeVerifierPermits = new WeakSet<TrustedVerifierPermit>();
 
   constructor(options: TrustedKernelOptions) {
     this.workspaceRoot = getCanonicalWorkspaceRoot(options.workspaceRoot);
@@ -440,13 +446,13 @@ export class TrustedKernel {
 
     const candidateSnapshotHash = computeCandidateSnapshotHash(candidate.integratedArtifacts);
     const sessionId = `sess-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const permit = new TrustedVerifierPermit(context.missionId, candidateSnapshotHash, sessionId);
+    const permit = new InternalVerifierPermit(context.missionId, candidateSnapshotHash, sessionId);
 
-    this.activeVerifierPermits.add(permit);
+    this.#activeVerifierPermits.add(permit);
     try {
       return canonicalVerifier.verifyCandidate(candidate, context, this, permit, evidencePool);
     } finally {
-      this.activeVerifierPermits.delete(permit);
+      this.#activeVerifierPermits.delete(permit);
     }
   }
 
@@ -455,7 +461,7 @@ export class TrustedKernel {
     expectedMissionId: string,
     expectedSnapshotHash?: string
   ): void {
-    if (!permit || !this.activeVerifierPermits.has(permit)) {
+    if (!permit || !this.#activeVerifierPermits.has(permit)) {
       this.receiptLog.create({
         summary: "EMIT_QUALIFICATION_PROOF: FORBIDDEN",
         status: "blocked",
