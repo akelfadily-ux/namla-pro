@@ -142,6 +142,7 @@ export class PostgresStateRepository implements StateRepository {
     mode: import("../../domain/types").AccountingRecoveryMode,
     reconciliationAuthority: { identity: string; permissions: readonly string[] },
     evidence: import("../../domain/types").AccountingRecoveryEvidence,
+    _testHookBeforeCommit?: (client: DatabaseClient) => Promise<void>,
   ): Promise<{ recovered: boolean; previousState: RunAccountingState }> {
     if (!this.pool) {
       throw new ConfigurationError("PostgresStateRepository requires a transaction-capable pool for accounting recovery");
@@ -190,121 +191,67 @@ export class PostgresStateRepository implements StateRepository {
         }
       };
 
-      // Execute distinct recovery mode semantics
-      if (mode === "PROVIDER_RECONCILED") {
-        if (evidence.type !== "PROVIDER_INVOICE" && evidence.type !== "PROVIDER_USAGE_API") {
-          throw new ConfigurationError("PROVIDER_RECONCILED mode requires PROVIDER_INVOICE or PROVIDER_USAGE_API evidence");
+      // Model 1: Specific reservation reconciliation if reservationId is supplied
+      if (evidence.reservationId) {
+        let cost = 0;
+        let tokens = 0;
+        if (mode === "PROVIDER_RECONCILED" && (evidence.type === "PROVIDER_INVOICE" || evidence.type === "PROVIDER_USAGE_API")) {
+          cost = evidence.actualCostUsd;
+          tokens = evidence.actualTokens;
+        } else if (mode === "HUMAN_RECONCILED" && evidence.type === "HUMAN_ADMIN_AUDIT") {
+          cost = evidence.reconciledCostUsd;
+          tokens = evidence.reconciledTokens;
         }
-        validateBounds(evidence.actualCostUsd, evidence.actualTokens);
+        validateBounds(cost, tokens);
 
-        // Proportional reconciliation helper ensuring exact sum and individual provenance
-        const reconcileProportionally = async (targetCost: number, targetTokens: number) => {
-          const reservedRows = await client.query<{ id: string; reserved_cost_usd: string | number; reserved_tokens: number }>(
-            `SELECT id, reserved_cost_usd, reserved_tokens FROM budget_reservations WHERE run_id = $1 AND status = 'RESERVED' ORDER BY created_at ASC`,
-            [runId],
-          );
-          const rows = reservedRows.rows || [];
-          if (rows.length === 0) return;
-
-          const totalReservedCost = rows.reduce((sum, r) => sum + Number(r.reserved_cost_usd || 0), 0);
-          const totalReservedTokens = rows.reduce((sum, r) => sum + Number(r.reserved_tokens || 0), 0);
-
-          let allocatedCost = 0;
-          let allocatedTokens = 0;
-
-          for (let i = 0; i < rows.length; i++) {
-            const r = rows[i];
-            const isLast = i === rows.length - 1;
-
-            let rowCost: number;
-            let rowTokens: number;
-
-            if (isLast) {
-              rowCost = Math.round((targetCost - allocatedCost) * 1e6) / 1e6;
-              rowTokens = targetTokens - allocatedTokens;
-            } else {
-              const costFraction = totalReservedCost > 0 ? Number(r.reserved_cost_usd || 0) / totalReservedCost : 1 / rows.length;
-              const tokenFraction = totalReservedTokens > 0 ? Number(r.reserved_tokens || 0) / totalReservedTokens : 1 / rows.length;
-
-              rowCost = Math.round(targetCost * costFraction * 1e6) / 1e6;
-              rowTokens = Math.floor(targetTokens * tokenFraction);
-
-              allocatedCost += rowCost;
-              allocatedTokens += rowTokens;
-            }
-
-            await client.query(
-              `UPDATE budget_reservations
-               SET status = 'RECONCILED', actual_cost_usd = $1, actual_tokens = $2, reconciled_at = NOW()
-               WHERE id = $3`,
-              [rowCost, rowTokens, r.id],
-            );
-          }
-        };
-
-        await reconcileProportionally(evidence.actualCostUsd, evidence.actualTokens);
-      } else if (mode === "HUMAN_RECONCILED") {
-        if (evidence.type !== "HUMAN_ADMIN_AUDIT") {
-          throw new ConfigurationError("HUMAN_RECONCILED mode requires HUMAN_ADMIN_AUDIT evidence");
-        }
-        validateBounds(evidence.reconciledCostUsd, evidence.reconciledTokens);
-
-        const reconcileProportionally = async (targetCost: number, targetTokens: number) => {
-          const reservedRows = await client.query<{ id: string; reserved_cost_usd: string | number; reserved_tokens: number }>(
-            `SELECT id, reserved_cost_usd, reserved_tokens FROM budget_reservations WHERE run_id = $1 AND status = 'RESERVED' ORDER BY created_at ASC`,
-            [runId],
-          );
-          const rows = reservedRows.rows || [];
-          if (rows.length === 0) return;
-
-          const totalReservedCost = rows.reduce((sum, r) => sum + Number(r.reserved_cost_usd || 0), 0);
-          const totalReservedTokens = rows.reduce((sum, r) => sum + Number(r.reserved_tokens || 0), 0);
-
-          let allocatedCost = 0;
-          let allocatedTokens = 0;
-
-          for (let i = 0; i < rows.length; i++) {
-            const r = rows[i];
-            const isLast = i === rows.length - 1;
-
-            let rowCost: number;
-            let rowTokens: number;
-
-            if (isLast) {
-              rowCost = Math.round((targetCost - allocatedCost) * 1e6) / 1e6;
-              rowTokens = targetTokens - allocatedTokens;
-            } else {
-              const costFraction = totalReservedCost > 0 ? Number(r.reserved_cost_usd || 0) / totalReservedCost : 1 / rows.length;
-              const tokenFraction = totalReservedTokens > 0 ? Number(r.reserved_tokens || 0) / totalReservedTokens : 1 / rows.length;
-
-              rowCost = Math.round(targetCost * costFraction * 1e6) / 1e6;
-              rowTokens = Math.floor(targetTokens * tokenFraction);
-
-              allocatedCost += rowCost;
-              allocatedTokens += rowTokens;
-            }
-
-            await client.query(
-              `UPDATE budget_reservations
-               SET status = 'RECONCILED', actual_cost_usd = $1, actual_tokens = $2, reconciled_at = NOW()
-               WHERE id = $3`,
-              [rowCost, rowTokens, r.id],
-            );
-          }
-        };
-
-        await reconcileProportionally(evidence.reconciledCostUsd, evidence.reconciledTokens);
-      } else if (mode === "CONSERVATIVE_MAX_WRITE_OFF") {
-        if (evidence.type !== "CONSERVATIVE_MAX_WRITE_OFF_AUDIT") {
-          throw new ConfigurationError("CONSERVATIVE_MAX_WRITE_OFF mode requires CONSERVATIVE_MAX_WRITE_OFF_AUDIT evidence");
-        }
-        validateBounds(evidence.maxReservedCostUsd, evidence.maxReservedTokens);
-        // Conservatively charge reserved maximums per reservation row
         await client.query(
           `UPDATE budget_reservations
-           SET status = 'RECONCILED', actual_cost_usd = reserved_cost_usd, actual_tokens = reserved_tokens, reconciled_at = NOW()
+           SET status = 'RECONCILED', actual_cost_usd = $1, actual_tokens = $2, reconciled_at = NOW()
+           WHERE id = $3 AND run_id = $4 AND status = 'RESERVED'`,
+          [cost, tokens, evidence.reservationId, runId],
+        );
+      } else {
+        // Model 2: Aggregate Reconciliation Ledger Row.
+        // Settle active RESERVED rows to RECONCILED with 0 cost/tokens to prevent double counting
+        let aggregateCost = 0;
+        let aggregateTokens = 0;
+
+        if (mode === "PROVIDER_RECONCILED") {
+          if (evidence.type !== "PROVIDER_INVOICE" && evidence.type !== "PROVIDER_USAGE_API") {
+            throw new ConfigurationError("PROVIDER_RECONCILED mode requires PROVIDER_INVOICE or PROVIDER_USAGE_API evidence");
+          }
+          aggregateCost = evidence.actualCostUsd;
+          aggregateTokens = evidence.actualTokens;
+        } else if (mode === "HUMAN_RECONCILED") {
+          if (evidence.type !== "HUMAN_ADMIN_AUDIT") {
+            throw new ConfigurationError("HUMAN_RECONCILED mode requires HUMAN_ADMIN_AUDIT evidence");
+          }
+          aggregateCost = evidence.reconciledCostUsd;
+          aggregateTokens = evidence.reconciledTokens;
+        } else if (mode === "CONSERVATIVE_MAX_WRITE_OFF") {
+          if (evidence.type !== "CONSERVATIVE_MAX_WRITE_OFF_AUDIT") {
+            throw new ConfigurationError("CONSERVATIVE_MAX_WRITE_OFF mode requires CONSERVATIVE_MAX_WRITE_OFF_AUDIT evidence");
+          }
+          aggregateCost = evidence.maxReservedCostUsd;
+          aggregateTokens = evidence.maxReservedTokens;
+        }
+        validateBounds(aggregateCost, aggregateTokens);
+
+        // Mark existing RESERVED reservations for this run as RECONCILED with 0 actuals
+        await client.query(
+          `UPDATE budget_reservations
+           SET status = 'RECONCILED', actual_cost_usd = 0, actual_tokens = 0, reconciled_at = NOW()
            WHERE run_id = $1 AND status = 'RESERVED'`,
           [runId],
+        );
+
+        // Insert dedicated Aggregate Reconciliation Ledger row
+        const recLedgerId = randomUUID();
+        await client.query(
+          `INSERT INTO budget_reservations (
+            id, run_id, kind, reserved_cost_usd, reserved_tokens, actual_cost_usd, actual_tokens, status, created_at, reconciled_at
+          ) VALUES ($1, $2, 'RECONCILIATION', $3, $4, $3, $4, 'RECONCILED', NOW(), NOW())`,
+          [recLedgerId, runId, aggregateCost, aggregateTokens],
         );
       }
 
@@ -338,6 +285,11 @@ export class PostgresStateRepository implements StateRepository {
           }),
         ],
       );
+
+      // Fault injection hook before commit
+      if (_testHookBeforeCommit) {
+        await _testHookBeforeCommit(client);
+      }
 
       await client.query("COMMIT");
       return { recovered: true, previousState: currentState };

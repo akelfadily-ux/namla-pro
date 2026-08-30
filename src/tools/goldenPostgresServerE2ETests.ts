@@ -160,7 +160,7 @@ module.exports = { createTodoServer };
           evidence: [
             "cmd: node -c + require(server.js) + createTodoServer() instantiation",
             fileExists ? "src/server.js present" : "absent",
-            output,
+            output.slice(0, 500),
           ],
           requiredFixes: checkPassed ? [] : ["Fix generated server code and exports"],
         };

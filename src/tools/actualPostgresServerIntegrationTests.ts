@@ -99,6 +99,42 @@ test("Actual PostgreSQL Server Integration & Multi-Session Concurrency Suite", {
     }, StateConflictError);
   });
 
+  await t.test("Task Lease Expiry using PostgreSQL NOW() and replacement worker recovery", async () => {
+    const repo = new PostgresStateRepository(pool as any, pool);
+    const runId = randomUUID();
+    const taskId = randomUUID();
+
+    await repo.createRun({ id: runId, status: RunStatus.Running, goal: "Expiry Test", budgetLimits: {}, createdAt: new Date(), updatedAt: new Date() });
+    await repo.createTask({ id: taskId, runId, title: "Expiring Task", description: "Desc", status: TaskStatus.Created, role: AntRole.Engineer, assignedAntId: "ant-exp-1", attempt: 0, maxAttempts: 3, depth: 0, requirements: [], dependencies: [], createdAt: new Date(), updatedAt: new Date() });
+
+    // Worker 1 claims lease with 1ms duration (expires immediately in PostgreSQL NOW())
+    const claimed1 = await repo.claimTaskLease(taskId, "worker-1", 1);
+    assert.ok(claimed1);
+    const token1 = claimed1.leaseToken!;
+
+    // Wait 50ms so NOW() > lease_expires_at
+    await new Promise((r) => setTimeout(r, 50));
+
+    // Stale owner cannot renew after expiry
+    const renewed = await repo.renewTaskLease(taskId, "worker-1", token1, 60_000);
+    assert.equal(renewed, false, "Stale owner renewal MUST fail after lease expiry");
+
+    // Stale owner cannot perform fenced transition
+    await assert.rejects(async () => {
+      await repo.transitionTaskFenced(taskId, TaskStatus.Created, TaskStatus.Assigned, "worker-1", token1);
+    }, StateConflictError, "Stale owner transition MUST fail after lease expiry");
+
+    // Replacement worker can claim after valid expiry
+    const replacementClaim = await repo.claimTaskLease(taskId, "worker-2", 60_000);
+    assert.ok(replacementClaim, "Replacement worker MUST acquire lease after previous lease expires");
+    assert.equal(replacementClaim.leaseOwner, "worker-2");
+
+    // Previous worker remains fenced
+    await assert.rejects(async () => {
+      await repo.transitionTaskFenced(taskId, TaskStatus.Created, TaskStatus.Assigned, "worker-1", token1);
+    }, StateConflictError);
+  });
+
   await t.test("Actual Multi-Session Concurrency Race for maxConcurrency=4", async () => {
     const runId = randomUUID();
     const repo = new PostgresStateRepository(pool as any, pool);
@@ -204,7 +240,7 @@ test("Actual PostgreSQL Server Integration & Multi-Session Concurrency Suite", {
     );
   });
 
-  await t.test("Operation Claim 100-Worker Race on actual PostgreSQL server", async () => {
+  await t.test("Operation Claim 100-Worker Race and Complete/Fail Fencing", async () => {
     const repo = new PostgresStateRepository(pool as any, pool);
     const runId = randomUUID();
     const taskId = randomUUID();
@@ -236,6 +272,52 @@ test("Actual PostgreSQL Server Integration & Multi-Session Concurrency Suite", {
 
     const claimedCount = claims.filter((c) => c.status === "CLAIMED").length;
     assert.equal(claimedCount, 1, "Exactly ONE caller out of 100 claims must win the operation lock");
+
+    const winnerClaim = claims.find((c) => c.status === "CLAIMED")!;
+    const claimToken = winnerClaim.claimToken!;
+
+    // Complete operation with wrong worker fails
+    const wrongWorkerComp = await repo.completeOperation(opInput.id, "wrong-worker", claimToken, { ok: true });
+    assert.equal(wrongWorkerComp, false, "completeOperation MUST fail for wrong worker");
+
+    // Complete operation with wrong claim token fails
+    const wrongTokenComp = await repo.completeOperation(opInput.id, "worker-op", "wrong-claim-token", { ok: true });
+    assert.equal(wrongTokenComp, false, "completeOperation MUST fail for wrong claim token");
+
+    // Fail operation with wrong claim token fails
+    const wrongTokenFail = await repo.failOperation(opInput.id, "worker-op", "wrong-claim-token", "error");
+    assert.equal(wrongTokenFail, false, "failOperation MUST fail for wrong claim token");
+
+    // Valid completion succeeds
+    const validComp = await repo.completeOperation(opInput.id, "worker-op", claimToken, { ok: true });
+    assert.equal(validComp, true, "completeOperation MUST succeed for valid owner and claimToken");
+
+    // Completed operation replay returns COMPLETED
+    const replayClaim = await repo.claimOperation(opInput, authority, 60_000);
+    assert.equal(replayClaim.status, "COMPLETED", "Completed operation claim replay MUST return COMPLETED");
+  });
+
+  await t.test("Stale Task authority cannot claim Operation", async () => {
+    const repo = new PostgresStateRepository(pool as any, pool);
+    const runId = randomUUID();
+    const taskId = randomUUID();
+
+    await repo.createRun({ id: runId, status: RunStatus.Running, goal: "Stale Op Test", budgetLimits: {}, createdAt: new Date(), updatedAt: new Date() });
+    await repo.createTask({ id: taskId, runId, title: "Task", description: "Desc", status: TaskStatus.Created, role: AntRole.Engineer, assignedAntId: "ant-1", attempt: 0, maxAttempts: 3, depth: 0, requirements: [], dependencies: [], createdAt: new Date(), updatedAt: new Date() });
+
+    const opInput = {
+      id: randomUUID(),
+      toolName: "filesystem.write",
+      inputHash: "hash-stale",
+      runId,
+      taskId,
+      antId: "ant-1",
+    };
+
+    // Stale authority (no active task lease in DB)
+    const staleAuth = { workerId: "worker-unleased", leaseToken: "fake-token" };
+    const claimRes = await repo.claimOperation(opInput, staleAuth, 60_000);
+    assert.equal(claimRes.status, "TASK_AUTHORITY_LOST", "Stale task authority MUST be denied operation claim");
   });
 
   await t.test("Actual Concurrency Cost and Token Budget Races", async () => {
@@ -265,13 +347,60 @@ test("Actual PostgreSQL Server Integration & Multi-Session Concurrency Suite", {
     assert.equal(acceptedCount, 4, "With $1.00 / 1000 tokens limit, exactly 4 callers must succeed");
   });
 
-  await t.test("Multi-Reservation Proportional Reconciliation Provenance", async () => {
+  await t.test("Cancellation Race: Independent session cancellation denies claim and operation", async () => {
+    const repo = new PostgresStateRepository(pool as any, pool);
+    const runId = randomUUID();
+    const taskId = randomUUID();
+
+    await repo.createRun({ id: runId, status: RunStatus.Running, goal: "Cancel Race", budgetLimits: {}, createdAt: new Date(), updatedAt: new Date() });
+    await repo.createTask({ id: taskId, runId, title: "Cancel Task", description: "Desc", status: TaskStatus.Created, role: AntRole.Engineer, assignedAntId: "ant-cancel-1", attempt: 0, maxAttempts: 3, depth: 0, requirements: [], dependencies: [], createdAt: new Date(), updatedAt: new Date() });
+
+    // Client session 2 cancels run
+    const client2 = await pool.connect();
+    try {
+      await client2.query("UPDATE runs SET status = 'CANCELLED' WHERE id = $1", [runId]);
+    } finally {
+      client2.release();
+    }
+
+    // Client session 1 attempts task claim
+    const claimed = await repo.claimTaskLease(taskId, "worker-cancelled", 60_000);
+    assert.equal(claimed, null, "Task claim MUST be denied on CANCELLED run");
+
+    // Stale authority attempt to claim operation on cancelled run
+    const cancelOpInput = { id: randomUUID(), toolName: "shell", inputHash: "h1", runId, taskId, antId: "ant-cancel-1" };
+    const staleOpClaim = await repo.claimOperation(
+      cancelOpInput,
+      { workerId: "worker-cancelled", leaseToken: "stale-token" },
+      60_000,
+    );
+    assert.equal(staleOpClaim.status, "TASK_AUTHORITY_LOST", "Operation claim MUST return TASK_AUTHORITY_LOST after cancellation");
+  });
+
+  await t.test("Worker Capability Matching on actual PostgreSQL server", async () => {
+    const repo = new PostgresStateRepository(pool as any, pool);
+    const runId = randomUUID();
+    const taskId = randomUUID();
+
+    await repo.createRun({ id: runId, status: RunStatus.Running, goal: "Capability Test", budgetLimits: {}, createdAt: new Date(), updatedAt: new Date() });
+    await repo.createTask({ id: taskId, runId, title: "Docker Task", description: "Desc", status: TaskStatus.Created, role: AntRole.DevOps, assignedAntId: "ant-devops-1", attempt: 0, maxAttempts: 3, depth: 0, requirements: ["docker"], dependencies: [], createdAt: new Date(), updatedAt: new Date() });
+
+    // Incapable worker denied
+    const denied = await repo.claimTaskLease(taskId, "worker-lacks-docker", 60_000, ["shell", "git"]);
+    assert.equal(denied, null, "Worker lacking docker capability MUST be denied claim");
+
+    // Capable worker granted
+    const granted = await repo.claimTaskLease(taskId, "worker-has-docker", 60_000, ["shell", "docker"]);
+    assert.ok(granted, "Worker possessing docker capability MUST succeed");
+  });
+
+  await t.test("Multi-Reservation Aggregate Reconciliation Ledger Provenance", async () => {
     const repo = new PostgresStateRepository(pool as any, pool);
     const runId = randomUUID();
 
     await repo.createRun({ id: runId, status: RunStatus.Running, goal: "Multi Res Acc Test", budgetLimits: { maxCostUsd: 10.0 }, createdAt: new Date(), updatedAt: new Date() });
 
-    // Create 3 reservations: $0.20, $0.30, $0.50 ($1.00 total)
+    // Create 3 reservations
     await repo.reserveBudget(runId, 0.20, 200);
     await repo.reserveBudget(runId, 0.30, 300);
     await repo.reserveBudget(runId, 0.50, 500);
@@ -299,69 +428,60 @@ test("Actual PostgreSQL Server Integration & Multi-Session Concurrency Suite", {
       assert.equal(usage.costUsd, 0.80, "Aggregate costUsd must match evidence actual exactly ($0.80)");
       assert.equal(usage.inputTokens + usage.outputTokens, 800, "Aggregate tokens must match evidence actual exactly (800)");
 
-      // Verify individual reservations received non-zero proportional allocation
-      const resRows = await pool.query("SELECT actual_cost_usd, actual_tokens FROM budget_reservations WHERE run_id = $1 ORDER BY created_at ASC", [runId]);
-      assert.equal(resRows.rows.length, 3);
-      assert.ok(Number(resRows.rows[0].actual_cost_usd) > 0, "Reservation 1 received proportional cost");
-      assert.ok(Number(resRows.rows[1].actual_cost_usd) > 0, "Reservation 2 received proportional cost");
-      assert.ok(Number(resRows.rows[2].actual_cost_usd) > 0, "Reservation 3 received proportional cost");
+      // Verify reconciliation ledger row was created and old reserved rows settled
+      const ledgerRes = await pool.query("SELECT * FROM budget_reservations WHERE run_id = $1 AND kind = 'RECONCILIATION'", [runId]);
+      assert.equal(ledgerRes.rows.length, 1, "Dedicated RECONCILIATION ledger row MUST be created");
+      assert.equal(Number(ledgerRes.rows[0].actual_cost_usd), 0.80);
     } finally {
       if (oldSecret) process.env.ACCOUNTING_RECOVERY_SECRET = oldSecret;
       else delete process.env.ACCOUNTING_RECOVERY_SECRET;
     }
   });
 
-  await t.test("Forced Mid-Transaction Failure for Accounting Recovery Rollback", async () => {
+  await t.test("Production recoverAccountingState Fault Injection Mid-Transaction Rollback", async () => {
+    const repo = new PostgresStateRepository(pool as any, pool);
     const runId = randomUUID();
 
-    // Create run and set accounting state
-    await pool.query(
-      `INSERT INTO runs (id, status, goal, budget_limits, created_at, updated_at)
-       VALUES ($1, 'RUNNING', 'Rollback Mid-Tx Test', '{}', NOW(), NOW())`,
-      [runId],
-    );
-    await pool.query(
-      `INSERT INTO run_accounting_state (run_id, state, reason, updated_at)
-       VALUES ($1, 'BLOCKED_UNKNOWN_BILLING', 'Unbilled failure', NOW())`,
-      [runId],
-    );
-    await pool.query(
-      `INSERT INTO budget_reservations (id, run_id, kind, reserved_cost_usd, reserved_tokens, status, created_at)
-       VALUES ($1, $2, 'MODEL', 1.00, 1000, 'RESERVED', NOW())`,
-      [randomUUID(), runId],
-    );
+    await repo.createRun({ id: runId, status: RunStatus.Running, goal: "Rollback Mid-Tx Test", budgetLimits: {}, createdAt: new Date(), updatedAt: new Date() });
+    await repo.setAccountingState(runId, "BLOCKED_UNKNOWN_BILLING", "Unbilled failure");
+    await repo.reserveBudget(runId, 1.00, 1000);
 
-    // Simulate mid-transaction failure AFTER writing reservation changes but BEFORE COMMIT
-    const client = await pool.connect();
+    const oldSecret = process.env.ACCOUNTING_RECOVERY_SECRET;
+    process.env.ACCOUNTING_RECOVERY_SECRET = "rollback-secret-key-999";
+
     try {
-      await client.query("BEGIN");
-      // 1. Update reservation
-      await client.query(
-        `UPDATE budget_reservations SET status = 'RECONCILED', actual_cost_usd = 1.00 WHERE run_id = $1`,
-        [runId],
-      );
-      // 2. Update accounting state
-      await client.query(
-        `UPDATE run_accounting_state SET state = 'ACTIVE' WHERE run_id = $1`,
-        [runId],
-      );
-      // 3. Inject deterministic failure before commit
-      throw new Error("DETERMINISTIC_MID_TRANSACTION_FAILURE");
-    } catch (e: any) {
-      assert.equal(e.message, "DETERMINISTIC_MID_TRANSACTION_FAILURE");
-      await client.query("ROLLBACK");
+      const trustedAuthority = mintTrustedRecoveryAuthority({ adminIdentity: "admin-rollback", adminSecretToken: "rollback-secret-key-999" });
+      const validEvidence = { type: "HUMAN_ADMIN_AUDIT" as const, adminIdentity: "admin-rollback", approvalTicket: "TICKET-100", reconciledCostUsd: 1.00, reconciledTokens: 1000 };
+
+      // Pass fault injection hook throwing error right before COMMIT
+      await assert.rejects(async () => {
+        await repo.recoverAccountingState(
+          runId,
+          AccountingRecoveryMode.HUMAN_RECONCILED,
+          trustedAuthority,
+          validEvidence,
+          async () => {
+            throw new Error("FAULT_INJECTION_BEFORE_COMMIT");
+          },
+        );
+      }, /FAULT_INJECTION_BEFORE_COMMIT/);
+
+      // Verify database state remained unchanged (rolled back completely)
+      const state = await repo.getAccountingState(runId);
+      assert.equal(state.state, "BLOCKED_UNKNOWN_BILLING", "State MUST remain BLOCKED after fault injection rollback");
+
+      const eventRes = await pool.query("SELECT * FROM events WHERE run_id = $1 AND event_type = 'accounting.recovered'", [runId]);
+      assert.equal(eventRes.rows.length, 0, "No accounting.recovered event MUST exist after rollback");
+
+      // Verify subsequent valid recovery call succeeds safely
+      const retryResult = await repo.recoverAccountingState(runId, AccountingRecoveryMode.HUMAN_RECONCILED, trustedAuthority, validEvidence);
+      assert.equal(retryResult.recovered, true, "Subsequent valid recovery retry MUST succeed safely");
+
+      const finalState = await repo.getAccountingState(runId);
+      assert.equal(finalState.state, "ACTIVE", "Accounting state MUST be ACTIVE after successful recovery");
     } finally {
-      client.release();
+      if (oldSecret) process.env.ACCOUNTING_RECOVERY_SECRET = oldSecret;
+      else delete process.env.ACCOUNTING_RECOVERY_SECRET;
     }
-
-    // Verify database state remained unchanged (rolled back completely)
-    const stateRes = await pool.query("SELECT state FROM run_accounting_state WHERE run_id = $1", [runId]);
-    assert.equal(stateRes.rows[0].state, "BLOCKED_UNKNOWN_BILLING", "State MUST remain BLOCKED after transaction rollback");
-
-    const resRes = await pool.query("SELECT status FROM budget_reservations WHERE run_id = $1", [runId]);
-    assert.equal(resRes.rows[0].status, "RESERVED", "Budget reservation MUST remain RESERVED after transaction rollback");
-
-    const eventRes = await pool.query("SELECT * FROM events WHERE run_id = $1 AND event_type = 'accounting.recovered'", [runId]);
-    assert.equal(eventRes.rows.length, 0, "No accounting.recovered event MUST exist after rollback");
   });
 });

@@ -147,6 +147,7 @@ export interface ProviderReconciliationEvidence {
   invoiceOrUsageRef: string;
   actualCostUsd: number;
   actualTokens: number;
+  reservationId?: string;
 }
 
 export interface HumanReconciliationEvidence {
@@ -155,6 +156,7 @@ export interface HumanReconciliationEvidence {
   approvalTicket: string;
   reconciledCostUsd: number;
   reconciledTokens: number;
+  reservationId?: string;
 }
 
 export interface ConservativeWriteOffEvidence {
@@ -162,6 +164,7 @@ export interface ConservativeWriteOffEvidence {
   reason: string;
   maxReservedCostUsd: number;
   maxReservedTokens: number;
+  reservationId?: string;
 }
 
 export type AccountingRecoveryEvidence =
