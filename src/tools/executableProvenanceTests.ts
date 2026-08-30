@@ -47,13 +47,21 @@ const IS_WINDOWS = process.platform === "win32";
 const DOCKER_NAME = IS_WINDOWS ? "docker.exe" : "docker";
 
 function tempDir(tag: string): string {
-  return realpathSync(mkdtempSync(join(tmpdir(), `namla-s9-${tag}-`)));
+  const d = realpathSync(mkdtempSync(join(tmpdir(), `namla-s9-${tag}-`)));
+  if (!IS_WINDOWS) {
+    chmodSync(d, 0o755);
+  }
+  return d;
 }
 
 /** Plant an INERT file with an executable-looking name. Never executed. */
 function plant(dir: string, name = DOCKER_NAME): string {
   const p = join(dir, name);
-  writeFileSync(p, "inert fixture - not a real executable\n");
+  writeFileSync(p, "inert fixture - not a real executable\n", { mode: 0o755 });
+  if (!IS_WINDOWS) {
+    chmodSync(dir, 0o755);
+    chmodSync(p, 0o755);
+  }
   return p;
 }
 
@@ -988,4 +996,22 @@ test("a resolver-reported identity cannot vouch for a DIFFERENT candidate", () =
   assert.equal(r.ok, false, "another file's identity authorizes nothing here");
   assert.equal(r.reasonCode, "hash-mismatch");
   assert.equal(runner.calls.length, 0, "ZERO process starts");
+});
+
+// ==================== THREAT MODEL: SAME-UID ATTACK OUTSIDE WORKSPACE ====
+
+test("THREAT MODEL: same-UID workload writing a clean executable outside workspaceRoots is refused when identity pin is required", () => {
+  // Reproduces attack: malicious workload writes a clean, app-UID owned executable
+  // outside workspaceRoots and puts it on searchPath.
+  const attackDir = tempDir("sameuidattack");
+  plant(attackDir, DOCKER_NAME);
+
+  // Without identity pinning, POSIX ownership accepts it.
+  const unpinned = resolveTrustedExecutable("docker", { searchPath: attackDir });
+  assert.equal(unpinned.ok, true);
+
+  // With strict requireIdentityPin (or expectedSha256 pin), the attack candidate is REFUSED.
+  const pinned = resolveTrustedExecutable("docker", { searchPath: attackDir, requireIdentityPin: true });
+  assert.equal(pinned.ok, false, "same-UID planted executable outside workspaceRoots is refused without external pin");
+  assert.equal(pinned.reasonCode, "executable-identity-unpinned");
 });

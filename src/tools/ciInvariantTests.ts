@@ -277,3 +277,37 @@ test("an ASCII hyphen is not mistaken for the skip marker", () => {
   // ordinary diagnostic lines as skips.
   assert.equal(parseSkips("- not a skip marker (1ms) # nope").skippedNames.length, 0);
 });
+
+test("docs/productization/QUALITY_GATES.md must contain valid evidence links for every PASS entry", () => {
+  const fs = require("fs");
+  const path = require("path");
+
+  const gatesPath = path.resolve(process.cwd(), "docs/productization/QUALITY_GATES.md");
+  assert.equal(fs.existsSync(gatesPath), true, "QUALITY_GATES.md must exist");
+
+  const content = fs.readFileSync(gatesPath, "utf8");
+  const lines = content.split("\n");
+
+  for (const line of lines) {
+    if (!line.startsWith("|") || line.includes("Subsystem") || line.includes("---")) continue;
+
+    const parts = line.split("|").map((p: string) => p.trim());
+    if (parts.length < 10) continue;
+
+    const subsystem = parts[1];
+    const status = parts[9];
+    const evidence = parts[10] || "";
+
+    if (status === "PASS") {
+      assert.ok(evidence.length > 0, `Subsystem '${subsystem}' marked PASS must specify non-empty evidence links`);
+      const fileRefs = evidence.match(/`([^`]+)`/g) || [];
+      assert.ok(fileRefs.length > 0, `Subsystem '${subsystem}' marked PASS must reference backticked file paths in Evidence column`);
+
+      for (const rawRef of fileRefs) {
+        const filePath = rawRef.slice(1, -1);
+        const resolvedPath = path.resolve(process.cwd(), filePath);
+        assert.equal(fs.existsSync(resolvedPath), true, `Subsystem '${subsystem}' references non-existent evidence file: ${filePath}`);
+      }
+    }
+  }
+});

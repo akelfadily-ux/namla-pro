@@ -7,7 +7,7 @@
   "type": "commonjs",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "build": "tsc",
+    "build": "tsc && node -e \"require('fs').mkdirSync('dist/infrastructure/persistence/migrations', { recursive: true }); require('fs').copyFileSync('src/infrastructure/persistence/migrations/001_initial_schema.sql', 'dist/infrastructure/persistence/migrations/001_initial_schema.sql');\"",
     "demo": "node dist/tools/reviewerDemo.js",
     "test": "node dist/tools/p0SecurityRunner.js",
     "test:golden": "node dist/examples/demoGoldenOutputs.js",
@@ -24,10 +24,18 @@
     "test:p0:posix": "node --test dist/tools/workspaceSecurityTests.js dist/tools/trustedExecutableTests.js dist/tools/processTreeTests.js dist/tools/ciInvariantTests.js",
     "test:p0:sandbox-capability": "node dist/tools/sandboxCapabilityReport.js",
     "test:p0:container-sandbox": "node dist/tools/verifyContainerSandbox.js",
-    "test:p0:bisect-docker": "node dist/tools/bisectDockerStages.js"
+    "test:p0:bisect-docker": "node dist/tools/bisectDockerStages.js",
+    "test:postgres-release": "node dist/tools/postgresReleaseRunner.js",
+    "test:golden-postgres-release": "node --test dist/tools/goldenPostgresServerE2ETests.js"
   },
   "devDependencies": {
-    "typescript": "^5.4.0",
-    "@types/node": "^20.11.0"
+    "@types/node": "^20.11.0",
+    "typescript": "^5.4.0"
+  },
+  "dependencies": {
+    "@electric-sql/pglite": "^0.5.8",
+    "@types/pg": "^8.23.1",
+    "pg": "^8.23.0",
+    "pg-mem": "^3.0.14"
   }
 }
