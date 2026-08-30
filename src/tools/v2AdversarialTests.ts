@@ -154,15 +154,33 @@ test("P0-RA6 & P0-RA7 8-Point Execution Receipt Authenticity & Reserved Producer
       /FORBIDDEN_RESERVED_PRODUCER/
     );
 
-    // 6. COLONY_A attempting to mint QUALIFICATION_PROOF is downgraded to CLAIM
+    // 6. COLONY_A attempting to mint QUALIFICATION_PROOF via public API is downgraded to CLAIM
     const evColony = kernel.emitEvidence("COLONY_A", "m-ra", "COLONY_AB", { criterionId: "ac-1" }, undefined, undefined, undefined, "QUALIFICATION_PROOF");
     assert.equal(evColony.proofKind, "CLAIM", "COLONY_A QUALIFICATION_PROOF attempt MUST be downgraded to CLAIM");
 
-    // 7. Generic unauthorized producer attempting QUALIFICATION_PROOF is downgraded to TRACEABILITY
+    // 7. Generic caller supplying authorized verifier string (e.g. TEST_SUITE_VERIFIER) to public emitEvidence is DOWNGRADED to TRACEABILITY
+    const evImpersonated = kernel.emitEvidence("TEST_SUITE_VERIFIER", "m-ra", "PROMAX", { criterionId: "ac-1" }, undefined, undefined, undefined, "QUALIFICATION_PROOF");
+    assert.equal(evImpersonated.proofKind, "TRACEABILITY", "Public emitEvidence caller supplying authorized verifier string MUST be downgraded to TRACEABILITY");
+    assert.notEqual(evImpersonated.proofKind, "QUALIFICATION_PROOF");
+
+    // 7b. Generic unauthorized producer attempting QUALIFICATION_PROOF is downgraded to TRACEABILITY
     const evUnauth = kernel.emitEvidence("UNAUTHORIZED_PRODUCER", "m-ra", "STAGE", { criterionId: "ac-1" }, undefined, undefined, undefined, "QUALIFICATION_PROOF");
     assert.equal(evUnauth.proofKind, "TRACEABILITY", "Unauthorized producer QUALIFICATION_PROOF attempt MUST be downgraded to TRACEABILITY");
 
-    // 8. Authentic executeCommand produces unforgeable TRUSTED_KERNEL_COMMAND record with TRACEABILITY proofKind
+    // 8. Narrow typed methods cannot create TRUSTED_KERNEL_COMMAND records
+    const checkEv = kernel.emitArtifactCheckEvidence("m-ra", "PROMAX", { hash: "abc" });
+    assert.equal(checkEv.producer, "PROMAX_ARTIFACT_CHECK");
+    assert.notEqual(checkEv.producer, "TRUSTED_KERNEL_COMMAND");
+
+    const subEv = kernel.emitArtifactSubstitutionEvidence("m-ra", "PROMAX", { hash: "abc" });
+    assert.equal(subEv.producer, "PROMAX_ARTIFACT_SUBSTITUTION_DETECTED");
+    assert.notEqual(subEv.producer, "TRUSTED_KERNEL_COMMAND");
+
+    const assessEv = kernel.emitProMaxAssessmentReceipt("m-ra", "PROMAX", { satisfied: true });
+    assert.equal(assessEv.producer, "PROMAX_ASSESSMENT_RECEIPT");
+    assert.notEqual(assessEv.producer, "TRUSTED_KERNEL_COMMAND");
+
+    // 9. Authentic executeCommand produces unforgeable TRUSTED_KERNEL_COMMAND record with TRACEABILITY proofKind
     const leggoRel = "workspaces/v2-missions/m-ra/leggo-integrated";
     kernel.safeWriteWorkspaceFile(`${leggoRel}/package.json`, JSON.stringify({ name: "ra", version: "1.0.0" }), "m-ra");
     const cmdRes = kernel.executeCommand("npm" as any, ["--version"], "m-ra", "PROMAX", leggoRel);
@@ -240,18 +258,25 @@ test("P0-SE7 10-Point Command-Confusion & Source Execution Binding Matrix", () =
       },
     };
 
+    // Execute genuine kernel commands on leggoRel workspace to obtain unforgeable command execution evidence records
+    const resTestCmd = kernel.executeCommand("npm" as any, ["test"], "m-se7", "PROMAX", leggoRel);
+    const srcNpmTest = resTestCmd.evidenceRecord!;
+
+    const resVersionCmd = kernel.executeCommand("npm" as any, ["--version"], "m-se7", "PROMAX", leggoRel);
+    const srcNpmVersion = resVersionCmd.evidenceRecord!;
+
+    const resBuildCmd = kernel.executeCommand("npm" as any, ["run", "build"], "m-se7", "PROMAX", leggoRel);
+    const srcNpmBuild = resBuildCmd.evidenceRecord!;
+
     // 1. BUILD proof backed by npm test (rejected)
-    const srcNpmTest = kernel.emitInternalEvidence("TRUSTED_KERNEL_COMMAND", "m-se7", "PROMAX", { executableId: "npm", args: ["test"], exitCode: 0, success: true }, undefined, undefined, undefined, "TRACEABILITY");
     const proof1 = kernel.emitEvidence("BUILD_VERIFIER", "m-se7", "PROMAX", { criterionId: "ac-build", testRequirementId: "tr-build", candidateSnapshotHash: snapshotHash, sourceEvidenceRef: srcNpmTest.evidenceId, proofKind: "QUALIFICATION_PROOF" });
     assert.equal(verifier.verifyCandidate(candidate, context, kernel, [srcNpmTest, proof1]).success, false);
 
     // 2. TEST proof backed by npm --version (rejected)
-    const srcNpmVersion = kernel.emitInternalEvidence("TRUSTED_KERNEL_COMMAND", "m-se7", "PROMAX", { executableId: "npm", args: ["--version"], exitCode: 0, success: true }, undefined, undefined, undefined, "TRACEABILITY");
     const proof2 = kernel.emitEvidence("TEST_SUITE_VERIFIER", "m-se7", "PROMAX", { criterionId: "ac-test", testRequirementId: "tr-test", candidateSnapshotHash: snapshotHash, sourceEvidenceRef: srcNpmVersion.evidenceId, proofKind: "QUALIFICATION_PROOF" });
     assert.equal(verifier.verifyCandidate(candidate, context, kernel, [srcNpmVersion, proof2]).success, false);
 
     // 3. TYPECHECK proof backed by npm run build (rejected)
-    const srcNpmBuild = kernel.emitInternalEvidence("TRUSTED_KERNEL_COMMAND", "m-se7", "PROMAX", { executableId: "npm", args: ["run", "build"], exitCode: 0, success: true }, undefined, undefined, undefined, "TRACEABILITY");
     const proof3 = kernel.emitEvidence("TYPECHECK_VERIFIER", "m-se7", "PROMAX", { criterionId: "ac-typecheck", testRequirementId: "tr-typecheck", candidateSnapshotHash: snapshotHash, sourceEvidenceRef: srcNpmBuild.evidenceId, proofKind: "QUALIFICATION_PROOF" });
     assert.equal(verifier.verifyCandidate(candidate, context, kernel, [srcNpmBuild, proof3]).success, false);
 
@@ -272,24 +297,23 @@ test("P0-SE7 10-Point Command-Confusion & Source Execution Binding Matrix", () =
     const proof7 = kernel.emitEvidence("BUILD_VERIFIER", "m-se7", "PROMAX", { criterionId: "ac-build", testRequirementId: "tr-build", candidateSnapshotHash: snapshotHash, sourceEvidenceRef: srcNonCommand.evidenceId, proofKind: "QUALIFICATION_PROOF" });
     assert.equal(verifier.verifyCandidate(candidate, context, kernel, [srcNonCommand, proof7]).success, false);
 
-    // 8. Source with proofKind !== TRACEABILITY (rejected)
-    const srcWrongProofKind = kernel.emitInternalEvidence("TRUSTED_KERNEL_COMMAND", "m-se7", "PROMAX", { executableId: "npm", args: ["run", "build"], exitCode: 0, success: true }, undefined, undefined, undefined, "CLAIM");
+    // 8. Source with proofKind !== TRACEABILITY (rejected - tested using non-TRACEABILITY evidence)
+    const srcWrongProofKind = { ...srcNpmBuild, proofKind: "CLAIM" as const };
     const proof8 = kernel.emitEvidence("BUILD_VERIFIER", "m-se7", "PROMAX", { criterionId: "ac-build", testRequirementId: "tr-build", candidateSnapshotHash: snapshotHash, sourceEvidenceRef: srcWrongProofKind.evidenceId, proofKind: "QUALIFICATION_PROOF" });
     assert.equal(verifier.verifyCandidate(candidate, context, kernel, [srcWrongProofKind, proof8]).success, false);
 
-    // 9. Source with correct executable but wrong args (npm run lint instead of npm run build - rejected)
-    const srcWrongArgs = kernel.emitInternalEvidence("TRUSTED_KERNEL_COMMAND", "m-se7", "PROMAX", { executableId: "npm", args: ["run", "lint"], exitCode: 0, success: true }, undefined, undefined, undefined, "TRACEABILITY");
-    const proof9 = kernel.emitEvidence("BUILD_VERIFIER", "m-se7", "PROMAX", { criterionId: "ac-build", testRequirementId: "tr-build", candidateSnapshotHash: snapshotHash, sourceEvidenceRef: srcWrongArgs.evidenceId, proofKind: "QUALIFICATION_PROOF" });
-    assert.equal(verifier.verifyCandidate(candidate, context, kernel, [srcWrongArgs, proof9]).success, false);
+    // 9. Source with correct executable but wrong args (npm --version instead of npm run build - rejected)
+    const proof9 = kernel.emitEvidence("BUILD_VERIFIER", "m-se7", "PROMAX", { criterionId: "ac-build", testRequirementId: "tr-build", candidateSnapshotHash: snapshotHash, sourceEvidenceRef: srcNpmVersion.evidenceId, proofKind: "QUALIFICATION_PROOF" });
+    assert.equal(verifier.verifyCandidate(candidate, context, kernel, [srcNpmVersion, proof9]).success, false);
 
     // 10. Source from correct command but wrong requirement/mission (wrong mission - rejected)
-    const srcWrongMission = kernel.emitInternalEvidence("TRUSTED_KERNEL_COMMAND", "m-OTHER-SE7", "PROMAX", { executableId: "npm", args: ["run", "build"], exitCode: 0, success: true }, undefined, undefined, undefined, "TRACEABILITY");
+    const srcWrongMission = { ...srcNpmBuild, missionId: "m-OTHER-SE7" };
     const proof10 = kernel.emitEvidence("BUILD_VERIFIER", "m-se7", "PROMAX", { criterionId: "ac-build", testRequirementId: "tr-build", candidateSnapshotHash: snapshotHash, sourceEvidenceRef: srcWrongMission.evidenceId, proofKind: "QUALIFICATION_PROOF" });
     assert.equal(verifier.verifyCandidate(candidate, context, kernel, [srcWrongMission, proof10]).success, false);
 
     // Positive check: Correct exact source chain for BUILD_VERIFIER succeeds
-    const srcBuildValid = kernel.emitInternalEvidence("TRUSTED_KERNEL_COMMAND", "m-se7", "PROMAX", { executableId: "npm", args: ["run", "build"], exitCode: 0, success: true }, undefined, undefined, undefined, "TRACEABILITY");
-    const proofValid = kernel.emitEvidence("BUILD_VERIFIER", "m-se7", "PROMAX", { criterionId: "ac-build", testRequirementId: "tr-build", candidateSnapshotHash: snapshotHash, sourceEvidenceRef: srcBuildValid.evidenceId, proofKind: "QUALIFICATION_PROOF" });
+    const srcBuildValid = srcNpmBuild;
+    const proofValid = kernel.emitVerifierQualificationProof("BUILD_VERIFIER", "m-se7", "PROMAX", { criterionId: "ac-build", testRequirementId: "tr-build", candidateSnapshotHash: snapshotHash, sourceEvidenceRef: srcBuildValid.evidenceId, proofKind: "QUALIFICATION_PROOF" });
 
     const ctxSingleBuild: ContractBoundStageContext = {
       ...context,
@@ -352,10 +376,10 @@ test("P0-SE6 REQUIRED NEGATIVE TEST: TEST_SUITE_VERIFIER Backed By Unrelated Com
       },
     };
 
-    // Source receipt: TRUSTED_KERNEL_COMMAND (npm --version) exit 0 success true
-    const sourceEvLaundered = kernel.emitInternalEvidence("TRUSTED_KERNEL_COMMAND", "m-se6", "PROMAX", {
-      executableId: "npm", args: ["--version"], exitCode: 0, success: true,
-    }, undefined, undefined, undefined, "TRACEABILITY");
+    // Source receipt: execute genuine kernel command (npm --version) to get an authentic receipt with wrong args for TEST_SUITE_VERIFIER
+    const cmdResLaundered = kernel.executeCommand("npm" as any, ["--version"], "m-se6", "PROMAX", leggoRel);
+    assert.equal(cmdResLaundered.evidenceRecord !== undefined, true);
+    const sourceEvLaundered = cmdResLaundered.evidenceRecord!;
 
     // Semantic proof: TEST_SUITE_VERIFIER with matching IDs but backed by npm --version source
     const proofLaundered = kernel.emitEvidence("TEST_SUITE_VERIFIER", "m-se6", "PROMAX", {
@@ -449,53 +473,61 @@ test("P0-E7 9-Point Causal Replay & Source Evidence Validation Matrix", () => {
     });
     assert.equal(verifier.verifyCandidate(candidate, context, kernel, [ev2]).success, false);
 
+    // Create authentic receipts via executeCommand on candidate workspace
+    kernel.safeWriteWorkspaceFile(`${leggoRel}/package.json`, JSON.stringify({ name: "causal", version: "1.0.0", scripts: { build: "node -v", test: "node -v" } }), "m-causal");
+    kernel.safeWriteWorkspaceFile(`${leggoRel}/Dockerfile`, "FROM scratch\n", "m-causal");
+
+    const cmdValidRes = kernel.executeCommand("npm" as any, ["test"], "m-causal", "PROMAX", leggoRel);
+    const sourceEvValid = cmdValidRes.evidenceRecord!;
+
+    const cmdBuildRes = kernel.executeCommand("npm" as any, ["run", "build"], "m-causal", "PROMAX", leggoRel);
+    const sourceBuild = cmdBuildRes.evidenceRecord!;
+
+    const cmdDockerRes = kernel.executeDockerBuild(leggoRel, "m-causal", "PROMAX");
+    const sourceDocker = cmdDockerRes.evidenceRecord ?? sourceBuild; // Fall back to sourceBuild if docker daemon absent
+
     // 3. Source evidence from wrong mission (fails closed)
-    const sourceEvOtherMission = kernel.emitInternalEvidence("TRUSTED_KERNEL_COMMAND", "m-OTHER-MISSION", "PROMAX", { exitCode: 0, success: true }, undefined, undefined, undefined, "TRACEABILITY");
+    const sourceEvOtherMission = { ...sourceEvValid, missionId: "m-OTHER-MISSION" };
     const ev3 = kernel.emitEvidence("TEST_SUITE_VERIFIER", "m-causal", "PROMAX", {
       criterionId: "ac-1", testRequirementId: "tr-1", candidateSnapshotHash: snapshotHash, sourceEvidenceRef: sourceEvOtherMission.evidenceId, proofKind: "QUALIFICATION_PROOF",
     });
     assert.equal(verifier.verifyCandidate(candidate, context, kernel, [sourceEvOtherMission, ev3]).success, false);
 
     // 4. Source command evidence status INVALIDATED (fails closed)
-    const sourceEvInvalidatedRaw = kernel.emitInternalEvidence("TRUSTED_KERNEL_COMMAND", "m-causal", "PROMAX", { exitCode: 0, success: true }, undefined, undefined, undefined, "TRACEABILITY");
-    const sourceEvInvalidated = { ...sourceEvInvalidatedRaw, status: "INVALIDATED" as const };
+    const sourceEvInvalidated = { ...sourceEvValid, status: "INVALIDATED" as const };
     const ev4 = kernel.emitEvidence("TEST_SUITE_VERIFIER", "m-causal", "PROMAX", {
       criterionId: "ac-1", testRequirementId: "tr-1", candidateSnapshotHash: snapshotHash, sourceEvidenceRef: sourceEvInvalidated.evidenceId, proofKind: "QUALIFICATION_PROOF",
     });
     assert.equal(verifier.verifyCandidate(candidate, context, kernel, [sourceEvInvalidated, ev4]).success, false);
 
     // 5. Source command execution failed but semantic proof says VERIFIED (fails closed)
-    const sourceEvFailed = kernel.emitInternalEvidence("TRUSTED_KERNEL_COMMAND", "m-causal", "PROMAX", { exitCode: 1, success: false }, undefined, undefined, undefined, "TRACEABILITY");
+    const sourceEvFailed = { ...sourceEvValid, details: { ...sourceEvValid.details, exitCode: 1, success: false } };
     const ev5 = kernel.emitEvidence("TEST_SUITE_VERIFIER", "m-causal", "PROMAX", {
       criterionId: "ac-1", testRequirementId: "tr-1", candidateSnapshotHash: snapshotHash, sourceEvidenceRef: sourceEvFailed.evidenceId, proofKind: "QUALIFICATION_PROOF",
     });
     assert.equal(verifier.verifyCandidate(candidate, context, kernel, [sourceEvFailed, ev5]).success, false);
 
     // 6. BUILD command receipt reused to back TEST proof (fails closed)
-    const sourceBuild = kernel.emitInternalEvidence("TRUSTED_KERNEL_COMMAND", "m-causal", "PROMAX", { executableId: "npm", args: ["run", "build"], exitCode: 0, success: true }, undefined, undefined, undefined, "TRACEABILITY");
     const ev6 = kernel.emitEvidence("BUILD_VERIFIER", "m-causal", "PROMAX", {
       criterionId: "ac-1", testRequirementId: "tr-1", candidateSnapshotHash: snapshotHash, sourceEvidenceRef: sourceBuild.evidenceId, proofKind: "QUALIFICATION_PROOF",
     });
     assert.equal(verifier.verifyCandidate(candidate, context, kernel, [sourceBuild, ev6]).success, false);
 
     // 7. Docker command receipt reused for unrelated criterion (fails closed)
-    const sourceDocker = kernel.emitInternalEvidence("TRUSTED_KERNEL_COMMAND", "m-causal", "PROMAX", { executableId: "docker", args: ["build", "."], exitCode: 0, success: true }, undefined, undefined, undefined, "TRACEABILITY");
     const ev7 = kernel.emitEvidence("DOCKER_BUILD_VERIFIER", "m-causal", "PROMAX", {
       criterionId: "ac-UNRELATED-CRITERION", testRequirementId: "tr-1", candidateSnapshotHash: snapshotHash, sourceEvidenceRef: sourceDocker.evidenceId, proofKind: "QUALIFICATION_PROOF",
     });
     assert.equal(verifier.verifyCandidate(candidate, context, kernel, [sourceDocker, ev7]).success, false);
 
     // 8. Source evidence superseded after qualification (fails closed)
-    const sourceEvSupersededRaw = kernel.emitInternalEvidence("TRUSTED_KERNEL_COMMAND", "m-causal", "PROMAX", { exitCode: 0, success: true }, undefined, undefined, undefined, "TRACEABILITY");
-    const sourceEvSuperseded = { ...sourceEvSupersededRaw, status: "SUPERSEDED" as const };
+    const sourceEvSuperseded = { ...sourceEvValid, status: "SUPERSEDED" as const };
     const ev8 = kernel.emitEvidence("TEST_SUITE_VERIFIER", "m-causal", "PROMAX", {
       criterionId: "ac-1", testRequirementId: "tr-1", candidateSnapshotHash: snapshotHash, sourceEvidenceRef: sourceEvSuperseded.evidenceId, proofKind: "QUALIFICATION_PROOF",
     });
     assert.equal(verifier.verifyCandidate(candidate, context, kernel, [sourceEvSuperseded, ev8]).success, false);
 
     // 9. Complete valid causal chain succeeds (P0-SE5: Uses exact contract-required command "npm test")
-    const sourceEvValid = kernel.emitInternalEvidence("TRUSTED_KERNEL_COMMAND", "m-causal", "PROMAX", { executableId: "npm", args: ["test"], exitCode: 0, success: true }, undefined, undefined, undefined, "TRACEABILITY");
-    const evValid = kernel.emitEvidence("TEST_SUITE_VERIFIER", "m-causal", "PROMAX", {
+    const evValid = kernel.emitVerifierQualificationProof("TEST_SUITE_VERIFIER", "m-causal", "PROMAX", {
       criterionId: "ac-1", testRequirementId: "tr-1", candidateSnapshotHash: snapshotHash, sourceEvidenceRef: sourceEvValid.evidenceId, proofKind: "QUALIFICATION_PROOF",
     });
     const res9 = verifier.verifyCandidate(candidate, context, kernel, [sourceEvValid, evValid]);
@@ -768,11 +800,9 @@ test("P0-C10: Comprehensive Cross-Verifier Confusion Matrix Rejection Suite", ()
     });
     assert.equal(verifier.verifyCandidate(candidate, context, kernel, [ev4]).success, false);
 
-    // 5. Generic TRUSTED_KERNEL_COMMAND PASS with criterionId injected (rejected)
-    const ev5 = kernel.emitInternalEvidence("TRUSTED_KERNEL_COMMAND", "m-conf", "PROMAX", {
-      criterionId: "ac-1",
-      proofKind: "QUALIFICATION_PROOF",
-    });
+    // 5. Generic TRUSTED_KERNEL_COMMAND PASS with criterionId injected (rejected - obtain via executeCommand)
+    const resCmdConf = kernel.executeCommand("npm" as any, ["--version"], "m-conf", "PROMAX", leggoRelPath);
+    const ev5 = { ...resCmdConf.evidenceRecord!, details: { ...resCmdConf.evidenceRecord!.details, criterionId: "ac-1" } };
     assert.equal(verifier.verifyCandidate(candidate, context, kernel, [ev5]).success, false);
 
     // 6. PROMAX-generated record without underlying verifier proof (rejected)
@@ -1277,10 +1307,11 @@ test("P0-S5 Matrix Case 7: Proof from previous candidate snapshot after modifyin
     const snapshotHashV1 = computeCandidateSnapshotHash(candidateV1.integratedArtifacts);
 
     // Source command evidence for V1 snapshot proof matching TEST requirement (npm test)
-    const sourceEvV1 = kernel.emitInternalEvidence("TRUSTED_KERNEL_COMMAND", "m-s5-7", "PROMAX", { executableId: "npm", args: ["test"], exitCode: 0, success: true }, undefined, undefined, undefined, "TRACEABILITY");
+    const resCmdV1 = kernel.executeCommand("npm" as any, ["test"], "m-s5-7", "PROMAX", leggoRelPath);
+    const sourceEvV1 = resCmdV1.evidenceRecord!;
 
     // Emit QUALIFICATION_PROOF bound to candidate V1 snapshot
-    const evV1 = kernel.emitEvidence("TEST_SUITE_VERIFIER", "m-s5-7", "PROMAX", {
+    const evV1 = kernel.emitVerifierQualificationProof("TEST_SUITE_VERIFIER", "m-s5-7", "PROMAX", {
       criterionId: "ac-multi-file",
       testRequirementId: "tr-suite",
       candidateSnapshotHash: snapshotHashV1,
@@ -1631,8 +1662,9 @@ test("P0-CB6 8-Point Candidate Boundary & Verifier Path Adversarial Matrix", () 
     };
 
     const validSnapshotHash = computeCandidateSnapshotHash(validCandidate.integratedArtifacts);
-    const validSourceEv = kernel.emitInternalEvidence("TRUSTED_KERNEL_COMMAND", "m-cb6", "PROMAX", { exitCode: 0, success: true }, undefined, undefined, undefined, "TRACEABILITY");
-    const validEv = kernel.emitEvidence("TEST_SUITE_VERIFIER", "m-cb6", "PROMAX", {
+    const resCmdCb6 = kernel.executeCommand("npm" as any, ["--version"], "m-cb6", "PROMAX", leggoRel);
+    const validSourceEv = resCmdCb6.evidenceRecord!;
+    const validEv = kernel.emitVerifierQualificationProof("TEST_SUITE_VERIFIER", "m-cb6", "PROMAX", {
       criterionId: "ac-1",
       testRequirementId: "tr-1",
       candidateSnapshotHash: validSnapshotHash,

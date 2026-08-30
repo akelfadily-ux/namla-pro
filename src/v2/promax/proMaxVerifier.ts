@@ -197,12 +197,12 @@ export class ProMaxVerifier {
           artifactCheckPassed = false;
           failedCriteria.push(`Artifact substitution detected for ${art.path}: expected ${art.sha256}, got ${recomputedSha256}`);
 
-          const subEv = kernel.emitInternalEvidence("PROMAX_ARTIFACT_SUBSTITUTION_DETECTED", context.missionId, "PROMAX", {
+          const subEv = kernel.emitArtifactSubstitutionEvidence(context.missionId, "PROMAX", {
             path: art.path,
             expectedSha256: art.sha256,
             observedSha256: recomputedSha256,
             candidateSnapshotHash,
-          }, undefined, undefined, undefined, "QUALIFICATION_PROOF");
+          });
           accumulatedPool.push(subEv);
 
           proofMappings.push({
@@ -216,12 +216,12 @@ export class ProMaxVerifier {
             candidateSnapshotHash,
           });
         } else {
-          const ev = kernel.emitInternalEvidence("PROMAX_ARTIFACT_CHECK", context.missionId, "PROMAX", {
+          const ev = kernel.emitArtifactCheckEvidence(context.missionId, "PROMAX", {
             path: art.path,
             expectedSha256: art.sha256,
             observedSha256: recomputedSha256,
             candidateSnapshotHash,
-          }, undefined, undefined, undefined, "QUALIFICATION_PROOF");
+          });
           accumulatedPool.push(ev);
 
           proofMappings.push({
@@ -255,13 +255,13 @@ export class ProMaxVerifier {
         }
       }
 
-      const secEv = kernel.emitEvidence("SECURITY_VERIFIER", context.missionId, "PROMAX", {
+      const secEv = kernel.emitSecurityQualificationProof(context.missionId, "PROMAX", {
         securityRequirementId: secReq.id,
         rule: secReq.rule,
         passed: !secFailed,
         candidateSnapshotHash,
         proofKind: "QUALIFICATION_PROOF",
-      }, undefined, undefined, undefined, "QUALIFICATION_PROOF");
+      });
       accumulatedPool.push(secEv);
 
       proofMappings.push({
@@ -278,13 +278,13 @@ export class ProMaxVerifier {
       // Bind QUALIFICATION_PROOF explicitly to declared target criteria (P0-C11)
       if (!secFailed && secReq.provesCriterionIds) {
         for (const targetCriterionId of secReq.provesCriterionIds) {
-          const acSecEv = kernel.emitEvidence("SECURITY_VERIFIER", context.missionId, "PROMAX", {
+          const acSecEv = kernel.emitSecurityQualificationProof(context.missionId, "PROMAX", {
             criterionId: targetCriterionId,
             securityRequirementId: secReq.id,
             rule: secReq.rule,
             candidateSnapshotHash,
             proofKind: "QUALIFICATION_PROOF",
-          }, undefined, undefined, undefined, "QUALIFICATION_PROOF");
+          });
           accumulatedPool.push(acSecEv);
 
           proofMappings.push({
@@ -338,7 +338,7 @@ export class ProMaxVerifier {
           failedCriteria.push(`Verifier ${verifierRes.verifier} produced VERIFIED result without source execution evidenceRef`);
         } else {
           for (const targetCriterionId of reqTest.provesCriterionIds) {
-            const proofEv = kernel.emitEvidence(verifierRes.verifier, context.missionId, "PROMAX", {
+            const proofEv = kernel.emitVerifierQualificationProof(verifierRes.verifier, context.missionId, "PROMAX", {
               criterionId: targetCriterionId,
               testRequirementId: reqTest.id,
               verifier: verifierRes.verifier,
@@ -347,7 +347,7 @@ export class ProMaxVerifier {
               candidateSnapshotHash,
               sha256: verifierRes.artifactHash,
               proofKind: "QUALIFICATION_PROOF",
-            }, undefined, undefined, undefined, "QUALIFICATION_PROOF");
+            });
             accumulatedPool.push(proofEv);
 
             proofMappings.push({
@@ -562,8 +562,7 @@ export class ProMaxVerifier {
       evidenceFreshnessVerified,
     };
 
-    const evidenceRecord = kernel.emitInternalEvidence(
-      "PROMAX_ASSESSMENT_RECEIPT",
+    const evidenceRecord = kernel.emitProMaxAssessmentReceipt(
       context.missionId,
       "PROMAX",
       {
@@ -577,11 +576,7 @@ export class ProMaxVerifier {
         independentTestsPassed,
         regressionPassed,
         candidateSnapshotHash,
-      },
-      candidate.integratedArtifacts[0],
-      undefined,
-      undefined,
-      "QUALIFICATION_PROOF"
+      }
     );
 
     return {

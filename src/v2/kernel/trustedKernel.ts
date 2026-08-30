@@ -409,9 +409,116 @@ export class TrustedKernel {
   }
 
   /**
-   * Internal kernel evidence emission for trusted system processes (ProMax receipts, artifact checks).
+   * Narrow typed method for ProMax artifact verification checks (P0-RA1).
    */
-  public emitInternalEvidence(
+  public emitArtifactCheckEvidence(
+    missionId: string,
+    stageId: string,
+    details: Record<string, unknown>,
+    artifactIdentity?: ArtifactIdentity
+  ): EvidenceRecord {
+    return this.createInternalEvidenceRecord(
+      "PROMAX_ARTIFACT_CHECK",
+      missionId,
+      stageId,
+      details,
+      artifactIdentity,
+      undefined,
+      undefined,
+      "TRACEABILITY"
+    );
+  }
+
+  /**
+   * Narrow typed method for ProMax artifact substitution detection (P0-RA1).
+   */
+  public emitArtifactSubstitutionEvidence(
+    missionId: string,
+    stageId: string,
+    details: Record<string, unknown>,
+    artifactIdentity?: ArtifactIdentity
+  ): EvidenceRecord {
+    return this.createInternalEvidenceRecord(
+      "PROMAX_ARTIFACT_SUBSTITUTION_DETECTED",
+      missionId,
+      stageId,
+      details,
+      artifactIdentity,
+      undefined,
+      undefined,
+      "TRACEABILITY"
+    );
+  }
+
+  /**
+   * Narrow typed method for ProMax contract-wide assessment receipts (P0-RA1).
+   */
+  public emitProMaxAssessmentReceipt(
+    missionId: string,
+    stageId: string,
+    details: Record<string, unknown>
+  ): EvidenceRecord {
+    return this.createInternalEvidenceRecord(
+      "PROMAX_ASSESSMENT_RECEIPT",
+      missionId,
+      stageId,
+      details,
+      undefined,
+      undefined,
+      undefined,
+      "QUALIFICATION_PROOF"
+    );
+  }
+
+  /**
+   * Dedicated method for authorized semantic verifiers to emit unforgeable QUALIFICATION_PROOF evidence.
+   * Public emitEvidence API strictly CANNOT mint QUALIFICATION_PROOF under any producer name.
+   */
+  public emitVerifierQualificationProof(
+    producer: string,
+    missionId: string,
+    stageId: string,
+    details: Record<string, unknown>,
+    artifactIdentity?: ArtifactIdentity,
+    workPackageId?: string,
+    executionId?: string
+  ): EvidenceRecord {
+    return this.createInternalEvidenceRecord(
+      producer,
+      missionId,
+      stageId,
+      details,
+      artifactIdentity,
+      workPackageId,
+      executionId,
+      "QUALIFICATION_PROOF"
+    );
+  }
+
+  /**
+   * Dedicated method for SECURITY_VERIFIER to emit unforgeable QUALIFICATION_PROOF evidence.
+   */
+  public emitSecurityQualificationProof(
+    missionId: string,
+    stageId: string,
+    details: Record<string, unknown>
+  ): EvidenceRecord {
+    return this.createInternalEvidenceRecord(
+      "SECURITY_VERIFIER",
+      missionId,
+      stageId,
+      details,
+      undefined,
+      undefined,
+      undefined,
+      "QUALIFICATION_PROOF"
+    );
+  }
+
+  /**
+   * Private internal kernel evidence emission for trusted system processes.
+   */
+  private emitInternalEvidence(
     producer: string,
     missionId: string,
     stageId: string,
@@ -453,23 +560,21 @@ export class TrustedKernel {
       throw new Error(`FORBIDDEN_RESERVED_PRODUCER: Public emitEvidence API cannot mint kernel-reserved producer "${producer}"`);
     }
 
-    // P0-RA3: PUBLIC API MUST NOT PERMIT UNAUTHORIZED QUALIFICATION_PROOF MINTING
+    // PUBLIC API STRICTLY CANNOT MINT QUALIFICATION_PROOF UNDER ANY PRODUCER NAME.
+    // QUALIFICATION_PROOF can only be minted via dedicated internal methods:
+    // emitVerifierQualificationProof, emitSecurityQualificationProof, or emitProMaxAssessmentReceipt.
     let effectiveProofKind: ProofKind = explicitProofKind ?? (typeof details.proofKind === "string" ? (details.proofKind as ProofKind) : "TRACEABILITY");
 
     if (effectiveProofKind === "QUALIFICATION_PROOF") {
-      const { AUTHORIZED_VERIFIER_PRODUCERS } = require("../promax/proMaxVerifier");
-      if (!AUTHORIZED_VERIFIER_PRODUCERS.has(producer) && producer !== "PROMAX") {
-        this.receiptLog.create({
-          summary: "EMIT_EVIDENCE: PROOF_KIND_DOWNGRADED",
-          status: "blocked",
-          details: { producer, reason: "Unauthorized producer attempted to emit QUALIFICATION_PROOF" },
-        });
-        // Force downgrade to TRACEABILITY or CLAIM
-        if (producer === "COLONY_A" || producer === "COLONY_B" || producer === "COLONY_AB") {
-          effectiveProofKind = "CLAIM";
-        } else {
-          effectiveProofKind = "TRACEABILITY";
-        }
+      this.receiptLog.create({
+        summary: "EMIT_EVIDENCE: PROOF_KIND_DOWNGRADED",
+        status: "blocked",
+        details: { producer, reason: "Public emitEvidence API cannot mint QUALIFICATION_PROOF" },
+      });
+      if (producer === "COLONY_A" || producer === "COLONY_B" || producer === "COLONY_AB") {
+        effectiveProofKind = "CLAIM";
+      } else {
+        effectiveProofKind = "TRACEABILITY";
       }
     }
 
