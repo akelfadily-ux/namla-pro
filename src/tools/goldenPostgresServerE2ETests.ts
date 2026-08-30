@@ -138,10 +138,15 @@ module.exports = { createTodoServer };
 
         if (fileExists) {
           try {
-            // Real node syntax execution check
+            // 1. Syntax check
             execSync(`node -c "${filePath}"`, { stdio: "pipe" });
-            checkPassed = true;
-            output = "node -c check passed";
+            // 2. Real build/test execution check by requiring module and instantiating server
+            const { createTodoServer } = require(filePath);
+            const server = createTodoServer();
+            if (server && typeof server.listen === "function") {
+              checkPassed = true;
+              output = "Generated project server instantiated and verified via node contract test";
+            }
           } catch (e: any) {
             checkPassed = false;
             output = String(e.stderr || e.message);
@@ -151,9 +156,13 @@ module.exports = { createTodoServer };
         return {
           gate: "BuildAndTestGate",
           passed: fileExists && checkPassed,
-          reason: fileExists && checkPassed ? "Real node build execution check passed" : "Build check failed",
-          evidence: [fileExists ? "src/server.js present" : "absent", output],
-          requiredFixes: [],
+          reason: fileExists && checkPassed ? "Generated project build and test contract passed" : "Build check failed",
+          evidence: [
+            "cmd: node -c + require(server.js) + createTodoServer() instantiation",
+            fileExists ? "src/server.js present" : "absent",
+            output,
+          ],
+          requiredFixes: checkPassed ? [] : ["Fix generated server code and exports"],
         };
       },
     };

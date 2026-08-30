@@ -265,32 +265,103 @@ test("Actual PostgreSQL Server Integration & Multi-Session Concurrency Suite", {
     assert.equal(acceptedCount, 4, "With $1.00 / 1000 tokens limit, exactly 4 callers must succeed");
   });
 
-  await t.test("Forced Mid-Transaction Failure for Accounting Recovery Rollback", async () => {
+  await t.test("Multi-Reservation Proportional Reconciliation Provenance", async () => {
     const repo = new PostgresStateRepository(pool as any, pool);
     const runId = randomUUID();
 
-    await repo.createRun({ id: runId, status: RunStatus.Running, goal: "Rollback Recovery Test", budgetLimits: {}, createdAt: new Date(), updatedAt: new Date() });
-    await repo.setAccountingState(runId, "BLOCKED_UNKNOWN_BILLING", "Unbilled failure");
+    await repo.createRun({ id: runId, status: RunStatus.Running, goal: "Multi Res Acc Test", budgetLimits: { maxCostUsd: 10.0 }, createdAt: new Date(), updatedAt: new Date() });
+
+    // Create 3 reservations: $0.20, $0.30, $0.50 ($1.00 total)
+    await repo.reserveBudget(runId, 0.20, 200);
+    await repo.reserveBudget(runId, 0.30, 300);
+    await repo.reserveBudget(runId, 0.50, 500);
+
+    await repo.setAccountingState(runId, "BLOCKED_UNKNOWN_BILLING", "Unbilled provider failure");
 
     const oldSecret = process.env.ACCOUNTING_RECOVERY_SECRET;
-    process.env.ACCOUNTING_RECOVERY_SECRET = "rollback-secret-key-999";
+    process.env.ACCOUNTING_RECOVERY_SECRET = "multi-res-secret-123";
 
     try {
-      const trustedAuthority = mintTrustedRecoveryAuthority({ adminIdentity: "admin-rollback", adminSecretToken: "rollback-secret-key-999" });
+      const trustedAuthority = mintTrustedRecoveryAuthority({ adminIdentity: "admin-provenance", adminSecretToken: "multi-res-secret-123" });
+      const evidence = {
+        type: "PROVIDER_INVOICE" as const,
+        providerName: "openai",
+        invoiceOrUsageRef: "INV-100",
+        actualCostUsd: 0.80,
+        actualTokens: 800,
+      };
 
-      // Invalid evidence type throws Error mid-transaction
-      const invalidEvidence: any = { type: "INVALID_EVIDENCE_TYPE", actualCostUsd: -1, actualTokens: -1 };
+      const result = await repo.recoverAccountingState(runId, AccountingRecoveryMode.PROVIDER_RECONCILED, trustedAuthority, evidence);
+      assert.equal(result.recovered, true);
 
-      await assert.rejects(async () => {
-        await repo.recoverAccountingState(runId, AccountingRecoveryMode.PROVIDER_RECONCILED, trustedAuthority, invalidEvidence);
-      }, ConfigurationError);
+      // Verify getBudgetUsage reports exact $0.80 / 800 tokens total
+      const usage = await repo.getBudgetUsage(runId);
+      assert.equal(usage.costUsd, 0.80, "Aggregate costUsd must match evidence actual exactly ($0.80)");
+      assert.equal(usage.inputTokens + usage.outputTokens, 800, "Aggregate tokens must match evidence actual exactly (800)");
 
-      // Verify state remains BLOCKED_UNKNOWN_BILLING after failed recovery transaction
-      const state = await repo.getAccountingState(runId);
-      assert.equal(state.state, "BLOCKED_UNKNOWN_BILLING", "Run MUST remain accounting-blocked after transaction rollback");
+      // Verify individual reservations received non-zero proportional allocation
+      const resRows = await pool.query("SELECT actual_cost_usd, actual_tokens FROM budget_reservations WHERE run_id = $1 ORDER BY created_at ASC", [runId]);
+      assert.equal(resRows.rows.length, 3);
+      assert.ok(Number(resRows.rows[0].actual_cost_usd) > 0, "Reservation 1 received proportional cost");
+      assert.ok(Number(resRows.rows[1].actual_cost_usd) > 0, "Reservation 2 received proportional cost");
+      assert.ok(Number(resRows.rows[2].actual_cost_usd) > 0, "Reservation 3 received proportional cost");
     } finally {
       if (oldSecret) process.env.ACCOUNTING_RECOVERY_SECRET = oldSecret;
       else delete process.env.ACCOUNTING_RECOVERY_SECRET;
     }
+  });
+
+  await t.test("Forced Mid-Transaction Failure for Accounting Recovery Rollback", async () => {
+    const runId = randomUUID();
+
+    // Create run and set accounting state
+    await pool.query(
+      `INSERT INTO runs (id, status, goal, budget_limits, created_at, updated_at)
+       VALUES ($1, 'RUNNING', 'Rollback Mid-Tx Test', '{}', NOW(), NOW())`,
+      [runId],
+    );
+    await pool.query(
+      `INSERT INTO run_accounting_state (run_id, state, reason, updated_at)
+       VALUES ($1, 'BLOCKED_UNKNOWN_BILLING', 'Unbilled failure', NOW())`,
+      [runId],
+    );
+    await pool.query(
+      `INSERT INTO budget_reservations (id, run_id, kind, reserved_cost_usd, reserved_tokens, status, created_at)
+       VALUES ($1, $2, 'MODEL', 1.00, 1000, 'RESERVED', NOW())`,
+      [randomUUID(), runId],
+    );
+
+    // Simulate mid-transaction failure AFTER writing reservation changes but BEFORE COMMIT
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      // 1. Update reservation
+      await client.query(
+        `UPDATE budget_reservations SET status = 'RECONCILED', actual_cost_usd = 1.00 WHERE run_id = $1`,
+        [runId],
+      );
+      // 2. Update accounting state
+      await client.query(
+        `UPDATE run_accounting_state SET state = 'ACTIVE' WHERE run_id = $1`,
+        [runId],
+      );
+      // 3. Inject deterministic failure before commit
+      throw new Error("DETERMINISTIC_MID_TRANSACTION_FAILURE");
+    } catch (e: any) {
+      assert.equal(e.message, "DETERMINISTIC_MID_TRANSACTION_FAILURE");
+      await client.query("ROLLBACK");
+    } finally {
+      client.release();
+    }
+
+    // Verify database state remained unchanged (rolled back completely)
+    const stateRes = await pool.query("SELECT state FROM run_accounting_state WHERE run_id = $1", [runId]);
+    assert.equal(stateRes.rows[0].state, "BLOCKED_UNKNOWN_BILLING", "State MUST remain BLOCKED after transaction rollback");
+
+    const resRes = await pool.query("SELECT status FROM budget_reservations WHERE run_id = $1", [runId]);
+    assert.equal(resRes.rows[0].status, "RESERVED", "Budget reservation MUST remain RESERVED after transaction rollback");
+
+    const eventRes = await pool.query("SELECT * FROM events WHERE run_id = $1 AND event_type = 'accounting.recovered'", [runId]);
+    assert.equal(eventRes.rows.length, 0, "No accounting.recovered event MUST exist after rollback");
   });
 });

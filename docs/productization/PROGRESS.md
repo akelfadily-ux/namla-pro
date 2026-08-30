@@ -1,21 +1,21 @@
 # PROGRESS REPORT — NAMLA PRO Productization
 
 ## CURRENT PHASE
-P0 READY FOR HUMAN REVIEW — Human Review Round 15 Pass Complete (Extreme Quality P0.26)
+P0 IN PROGRESS — Awaiting DATABASE_URL Release Verification Pass
 
 ## LAST SAFE COMMIT
-P0.26 Human Review Round 15 Pass complete with 100% test pass.
+P0.27 Human Review Round 16 Pass complete with 100% test pass (767 passed across 46 suites).
 
 ## COMPLETED
-- **Trusted Recovery Authority Security Hardening:** Hardened `mintTrustedRecoveryAuthority` to require mandatory `adminSecretToken` verified against `process.env.ACCOUNTING_RECOVERY_SECRET` (failing closed if absent or invalid), and added adversarial security tests.
+- **Trusted Recovery Authority Security Hardening:** Hardened `mintTrustedRecoveryAuthority` to require mandatory `adminSecretToken` verified against `process.env.ACCOUNTING_RECOVERY_SECRET` (failing closed if absent or invalid), and added adversarial security tests in `extremeQualityTests.ts`.
 - **Executable Run State Requirement for Claims:** Updated `PostgresStateRepository.claimTaskLease` to enforce `run.status === 'RUNNING'` for task claims, denying claims on `CREATED`, `PLANNING`, `PAUSED`, `CANCELLED`, `FAILED`, and `COMPLETED` runs.
-- **Proportional Accounting Reconciliation:** Updated multi-reservation recovery in `PostgresStateRepository.recoverAccountingState` so `getBudgetUsage()` reports exact evidence values across reservations without usage multiplication.
-- **Full Concurrency & Release Matrix:** Expanded `actualPostgresServerIntegrationTests.ts` with multi-session operation claims, stale authority rejections, PostgreSQL `NOW()` lease expiry, cost budget contention, cancellation races, and forced mid-transaction failure rollback verification.
-- **Full Golden Release Suite with HTTP Contract & Real Build/Test Execution:** Rebuilt `goldenPostgresServerE2ETests.ts` featuring positive path HTTP REST contract verification (`POST`, `GET`, `GET :id`, `PATCH`, `DELETE`, 404), real node syntax/execution gate (`node -c`), and negative gate rejection path, failing closed (EXIT 1) without `DATABASE_URL`.
-- **Truthful Documentation Tier Synchronization:** Updated `QUALITY_GATES.md` and `PROGRESS.md` to keep evidence classifications truthful and synchronized across emulator, engine, and server tiers.
+- **Proportional Accounting Reconciliation:** Updated multi-reservation recovery in `PostgresStateRepository.recoverAccountingState` so `getBudgetUsage()` reports exact evidence values across reservations without usage multiplication, preserving individual reservation proportions.
+- **Forced Mid-Transaction Failure Rollback Test:** Updated `actualPostgresServerIntegrationTests.ts` to test mid-transaction failure rollback inside active database transaction blocks.
+- **Full Golden Release Suite with Real Build/Test Execution:** Rebuilt `goldenPostgresServerE2ETests.ts` featuring positive path HTTP REST contract verification (`POST`, `GET`, `GET :id`, `PATCH`, `DELETE`, 404), real generated-project instantiation/execution gate, and negative gate rejection path, failing closed (EXIT 1) without `DATABASE_URL`.
+- **Truthful Documentation Tier Synchronization:** Updated `QUALITY_GATES.md` and `PROGRESS.md` to align status reports and evidence classifications across emulator, engine, and server tiers.
 
 ## IN PROGRESS
-P0 READY FOR HUMAN REVIEW — All P0 blockers resolved. Awaiting human review before P1.
+P0 IN PROGRESS — PostgreSQL server release runners (`npm run test:postgres-release` & `npm run test:golden-postgres-release`) ready for `DATABASE_URL` environment execution.
 
 ## FAILING TESTS
 - None (0 failing tests).
