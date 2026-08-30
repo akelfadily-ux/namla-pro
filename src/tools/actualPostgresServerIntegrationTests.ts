@@ -484,4 +484,77 @@ test("Actual PostgreSQL Server Integration & Multi-Session Concurrency Suite", {
       else delete process.env.ACCOUNTING_RECOVERY_SECRET;
     }
   });
+
+  await t.test("Fail-Closed Specific-Reservation Mode Mismatch, Absent Reservation, and Partial Recovery Safety", async () => {
+    const repo = new PostgresStateRepository(pool as any, pool);
+    const runId = randomUUID();
+
+    await repo.createRun({ id: runId, status: RunStatus.Running, goal: "Fail-Closed Specific Res Test", budgetLimits: { maxCostUsd: 10.0 }, createdAt: new Date(), updatedAt: new Date() });
+    await repo.setAccountingState(runId, "BLOCKED_UNKNOWN_BILLING", "Unbilled provider failure");
+
+    const res1 = await repo.reserveBudget(runId, 0.50, 500);
+    const res2 = await repo.reserveBudget(runId, 0.50, 500);
+    assert.ok(res1.reservationId);
+    assert.ok(res2.reservationId);
+
+    const oldSecret = process.env.ACCOUNTING_RECOVERY_SECRET;
+    process.env.ACCOUNTING_RECOVERY_SECRET = "fail-closed-res-secret";
+
+    try {
+      const trustedAuth = mintTrustedRecoveryAuthority({ adminIdentity: "admin-fc", adminSecretToken: "fail-closed-res-secret" });
+
+      // Case 1: Mismatched mode/evidence (CONSERVATIVE_MAX_WRITE_OFF mode with PROVIDER_INVOICE evidence and reservationId)
+      await assert.rejects(async () => {
+        await repo.recoverAccountingState(
+          runId,
+          AccountingRecoveryMode.CONSERVATIVE_MAX_WRITE_OFF,
+          trustedAuth,
+          { type: "PROVIDER_INVOICE", providerName: "openai", invoiceOrUsageRef: "INV-1", actualCostUsd: 0.50, actualTokens: 500, reservationId: res1.reservationId! },
+        );
+      }, ConfigurationError);
+
+      const checkState1 = await repo.getAccountingState(runId);
+      assert.equal(checkState1.state, "BLOCKED_UNKNOWN_BILLING", "State MUST remain BLOCKED after mismatched evidence error");
+
+      // Case 2: Absent/Invalid reservationId rowCount === 0
+      await assert.rejects(async () => {
+        await repo.recoverAccountingState(
+          runId,
+          AccountingRecoveryMode.PROVIDER_RECONCILED,
+          trustedAuth,
+          { type: "PROVIDER_INVOICE", providerName: "openai", invoiceOrUsageRef: "INV-1", actualCostUsd: 0.50, actualTokens: 500, reservationId: randomUUID() },
+        );
+      }, ConfigurationError);
+
+      const checkState2 = await repo.getAccountingState(runId);
+      assert.equal(checkState2.state, "BLOCKED_UNKNOWN_BILLING", "State MUST remain BLOCKED after absent reservationId error");
+
+      // Case 3: Partial specific reservation recovery (res1 reconciled, res2 still RESERVED)
+      const partialRes = await repo.recoverAccountingState(
+        runId,
+        AccountingRecoveryMode.PROVIDER_RECONCILED,
+        trustedAuth,
+        { type: "PROVIDER_INVOICE", providerName: "openai", invoiceOrUsageRef: "INV-1", actualCostUsd: 0.50, actualTokens: 500, reservationId: res1.reservationId! },
+      );
+
+      assert.equal(partialRes.recovered, false, "Partial recovery MUST return recovered: false while unresolved reservations remain");
+      const checkState3 = await repo.getAccountingState(runId);
+      assert.equal(checkState3.state, "BLOCKED_UNKNOWN_BILLING", "State MUST remain BLOCKED while res2 is still RESERVED");
+
+      // Now reconcile remaining res2
+      const completeRes = await repo.recoverAccountingState(
+        runId,
+        AccountingRecoveryMode.PROVIDER_RECONCILED,
+        trustedAuth,
+        { type: "PROVIDER_INVOICE", providerName: "openai", invoiceOrUsageRef: "INV-2", actualCostUsd: 0.50, actualTokens: 500, reservationId: res2.reservationId! },
+      );
+
+      assert.equal(completeRes.recovered, true, "Complete recovery MUST return recovered: true when all reservations are resolved");
+      const checkState4 = await repo.getAccountingState(runId);
+      assert.equal(checkState4.state, "ACTIVE", "State MUST become ACTIVE once all reservations are resolved");
+    } finally {
+      if (oldSecret) process.env.ACCOUNTING_RECOVERY_SECRET = oldSecret;
+      else delete process.env.ACCOUNTING_RECOVERY_SECRET;
+    }
+  });
 });

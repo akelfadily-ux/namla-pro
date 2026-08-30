@@ -193,23 +193,43 @@ export class PostgresStateRepository implements StateRepository {
 
       // Model 1: Specific reservation reconciliation if reservationId is supplied
       if (evidence.reservationId) {
-        let cost = 0;
-        let tokens = 0;
-        if (mode === "PROVIDER_RECONCILED" && (evidence.type === "PROVIDER_INVOICE" || evidence.type === "PROVIDER_USAGE_API")) {
+        let cost: number;
+        let tokens: number;
+
+        if (mode === "PROVIDER_RECONCILED") {
+          if (evidence.type !== "PROVIDER_INVOICE" && evidence.type !== "PROVIDER_USAGE_API") {
+            throw new ConfigurationError("PROVIDER_RECONCILED mode requires PROVIDER_INVOICE or PROVIDER_USAGE_API evidence");
+          }
           cost = evidence.actualCostUsd;
           tokens = evidence.actualTokens;
-        } else if (mode === "HUMAN_RECONCILED" && evidence.type === "HUMAN_ADMIN_AUDIT") {
+        } else if (mode === "HUMAN_RECONCILED") {
+          if (evidence.type !== "HUMAN_ADMIN_AUDIT") {
+            throw new ConfigurationError("HUMAN_RECONCILED mode requires HUMAN_ADMIN_AUDIT evidence");
+          }
           cost = evidence.reconciledCostUsd;
           tokens = evidence.reconciledTokens;
+        } else if (mode === "CONSERVATIVE_MAX_WRITE_OFF") {
+          if (evidence.type !== "CONSERVATIVE_MAX_WRITE_OFF_AUDIT") {
+            throw new ConfigurationError("CONSERVATIVE_MAX_WRITE_OFF mode requires CONSERVATIVE_MAX_WRITE_OFF_AUDIT evidence");
+          }
+          cost = evidence.maxReservedCostUsd;
+          tokens = evidence.maxReservedTokens;
+        } else {
+          throw new ConfigurationError(`Unsupported or invalid recovery mode '${mode}'`);
         }
         validateBounds(cost, tokens);
 
-        await client.query(
+        const updateRes = await client.query(
           `UPDATE budget_reservations
            SET status = 'RECONCILED', actual_cost_usd = $1, actual_tokens = $2, reconciled_at = NOW()
            WHERE id = $3 AND run_id = $4 AND status = 'RESERVED'`,
           [cost, tokens, evidence.reservationId, runId],
         );
+
+        const affectedRows = updateRes.rows.length || updateRes.rowCount || 0;
+        if (affectedRows !== 1) {
+          throw new ConfigurationError(`Reservation '${evidence.reservationId}' for run '${runId}' not found in RESERVED status`);
+        }
       } else {
         // Model 2: Aggregate Reconciliation Ledger Row.
         // Settle active RESERVED rows to RECONCILED with 0 cost/tokens to prevent double counting
@@ -253,6 +273,22 @@ export class PostgresStateRepository implements StateRepository {
           ) VALUES ($1, $2, 'RECONCILIATION', $3, $4, $3, $4, 'RECONCILED', NOW(), NOW())`,
           [recLedgerId, runId, aggregateCost, aggregateTokens],
         );
+      }
+
+      // Check whether unresolved accounting uncertainty remains for this run
+      const remainingRes = await client.query(
+        `SELECT COUNT(*)::int as count FROM budget_reservations WHERE run_id = $1 AND status = 'RESERVED'`,
+        [runId],
+      );
+      const remainingCount = Number(remainingRes.rows[0]?.count || 0);
+
+      if (remainingCount > 0) {
+        // Partial reconciliation: reservation status updated, but accounting state remains BLOCKED
+        if (_testHookBeforeCommit) {
+          await _testHookBeforeCommit(client);
+        }
+        await client.query("COMMIT");
+        return { recovered: false, previousState: currentState };
       }
 
       // Transition accounting safety state back to ACTIVE
