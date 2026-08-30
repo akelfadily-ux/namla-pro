@@ -50,6 +50,14 @@ export interface CommandExecutionResult {
   readonly evidenceRecord?: EvidenceRecord;
 }
 
+export const KERNEL_RESERVED_PRODUCERS: ReadonlySet<string> = new Set([
+  "TRUSTED_KERNEL_COMMAND",
+  "TRUSTED_KERNEL",
+  "PROMAX_ARTIFACT_CHECK",
+  "PROMAX_ARTIFACT_SUBSTITUTION_DETECTED",
+  "PROMAX_ASSESSMENT_RECEIPT",
+]);
+
 export class TrustedKernel {
   private readonly safetyGuard: SafetyGuard;
   private readonly receiptLog: ReceiptLog;
@@ -289,22 +297,15 @@ export class TrustedKernel {
     const exitCode = outcome.status;
     const success = exitCode === 0;
 
-    const evidenceRecord = this.emitEvidence(
-      "TRUSTED_KERNEL_COMMAND",
+    const evidenceRecord = this.emitCommandExecutionEvidence(
       missionId,
       stageId,
-      {
-        executableId,
-        args,
-        exitCode,
-        success,
-        stdoutSnippet: stdout.slice(0, 500),
-        stderrSnippet: stderr.slice(0, 500),
-      },
-      undefined,
-      undefined,
-      undefined,
-      "QUALIFICATION_PROOF"
+      executableId,
+      args,
+      exitCode,
+      success,
+      stdout.slice(0, 500),
+      stderr.slice(0, 500)
     );
 
     this.receiptLog.create({
@@ -323,6 +324,115 @@ export class TrustedKernel {
     };
   }
 
+  /**
+   * Dedicated executeDockerBuild method (P0-D2, P0-D3, P0-D4, P0-D5).
+   * Tight authority boundary for Docker build execution.
+   */
+  public executeDockerBuild(
+    subDirRelative: string,
+    missionId: string,
+    stageId: string,
+    tag?: string,
+    timeoutMs = 45000
+  ): CommandExecutionResult {
+    const cwdRes = resolveWorkspacePath(this.workspaceRoot, subDirRelative);
+    if (!cwdRes.ok) {
+      const code = cwdRes.reasonCode.startsWith("SYMLINK") ? "SYMLINK_ESCAPE_REFUSED" : "PATH_TRAVERSAL_REFUSED";
+      return {
+        success: false,
+        exitCode: null,
+        stdout: "",
+        stderr: `Target working directory invalid: ${cwdRes.reasonCode}`,
+        reasonCode: code,
+      };
+    }
+
+    const candCheck = this.isInsideCandidateWorkspace(subDirRelative, "Dockerfile");
+    if (!candCheck.ok) {
+      return {
+        success: false,
+        exitCode: null,
+        stdout: "",
+        stderr: `Candidate boundary check failed: Dockerfile escapes candidate workspace ${subDirRelative}`,
+        reasonCode: "CANDIDATE_BOUNDARY_ESCAPE",
+      };
+    }
+
+    const fullDockerfileRelPath = `${subDirRelative}/Dockerfile`;
+    if (!this.workspaceFileExists(fullDockerfileRelPath)) {
+      return {
+        success: false,
+        exitCode: null,
+        stdout: "",
+        stderr: `Dockerfile absent in candidate workspace ${subDirRelative}`,
+        reasonCode: "DOCKERFILE_ABSENT",
+      };
+    }
+
+    const imageTag = tag ?? `test-${missionId}`;
+    const args = ["build", "-t", imageTag, "."];
+
+    return this.executeCommand("docker", args, missionId, stageId, subDirRelative, timeoutMs);
+  }
+
+  /**
+   * Private internal method to emit authentic TRUSTED_KERNEL_COMMAND receipts (P0-RA1).
+   * Unforgeable through public emitEvidence API.
+   */
+  private emitCommandExecutionEvidence(
+    missionId: string,
+    stageId: string,
+    executableId: string,
+    args: readonly string[],
+    exitCode: number | null,
+    success: boolean,
+    stdoutSnippet: string,
+    stderrSnippet: string
+  ): EvidenceRecord {
+    return this.createInternalEvidenceRecord(
+      "TRUSTED_KERNEL_COMMAND",
+      missionId,
+      stageId,
+      {
+        executableId,
+        args,
+        exitCode,
+        success,
+        stdoutSnippet,
+        stderrSnippet,
+      },
+      undefined,
+      undefined,
+      undefined,
+      "TRACEABILITY"
+    );
+  }
+
+  /**
+   * Internal kernel evidence emission for trusted system processes (ProMax receipts, artifact checks).
+   */
+  public emitInternalEvidence(
+    producer: string,
+    missionId: string,
+    stageId: string,
+    details: Record<string, unknown>,
+    artifactIdentity?: ArtifactIdentity,
+    workPackageId?: string,
+    executionId?: string,
+    explicitProofKind?: ProofKind
+  ): EvidenceRecord {
+    return this.createInternalEvidenceRecord(
+      producer,
+      missionId,
+      stageId,
+      details,
+      artifactIdentity,
+      workPackageId,
+      executionId,
+      explicitProofKind ?? "QUALIFICATION_PROOF"
+    );
+  }
+
   public emitEvidence(
     producer: string,
     missionId: string,
@@ -333,6 +443,58 @@ export class TrustedKernel {
     executionId?: string,
     explicitProofKind?: ProofKind
   ): EvidenceRecord {
+    // P0-RA1 & P0-RA2: PUBLIC API MUST NOT PERMIT RESERVED PRODUCER IMPERSONATION
+    if (KERNEL_RESERVED_PRODUCERS.has(producer)) {
+      this.receiptLog.create({
+        summary: "EMIT_EVIDENCE: BLOCKED",
+        status: "blocked",
+        details: { producer, reason: "Public emitEvidence cannot mint reserved producer string" },
+      });
+      throw new Error(`FORBIDDEN_RESERVED_PRODUCER: Public emitEvidence API cannot mint kernel-reserved producer "${producer}"`);
+    }
+
+    // P0-RA3: PUBLIC API MUST NOT PERMIT UNAUTHORIZED QUALIFICATION_PROOF MINTING
+    let effectiveProofKind: ProofKind = explicitProofKind ?? (typeof details.proofKind === "string" ? (details.proofKind as ProofKind) : "TRACEABILITY");
+
+    if (effectiveProofKind === "QUALIFICATION_PROOF") {
+      const { AUTHORIZED_VERIFIER_PRODUCERS } = require("../promax/proMaxVerifier");
+      if (!AUTHORIZED_VERIFIER_PRODUCERS.has(producer) && producer !== "PROMAX") {
+        this.receiptLog.create({
+          summary: "EMIT_EVIDENCE: PROOF_KIND_DOWNGRADED",
+          status: "blocked",
+          details: { producer, reason: "Unauthorized producer attempted to emit QUALIFICATION_PROOF" },
+        });
+        // Force downgrade to TRACEABILITY or CLAIM
+        if (producer === "COLONY_A" || producer === "COLONY_B" || producer === "COLONY_AB") {
+          effectiveProofKind = "CLAIM";
+        } else {
+          effectiveProofKind = "TRACEABILITY";
+        }
+      }
+    }
+
+    return this.createInternalEvidenceRecord(
+      producer,
+      missionId,
+      stageId,
+      details,
+      artifactIdentity,
+      workPackageId,
+      executionId,
+      effectiveProofKind
+    );
+  }
+
+  private createInternalEvidenceRecord(
+    producer: string,
+    missionId: string,
+    stageId: string,
+    details: Record<string, unknown>,
+    artifactIdentity?: ArtifactIdentity,
+    workPackageId?: string,
+    executionId?: string,
+    proofKind: ProofKind = "TRACEABILITY"
+  ): EvidenceRecord {
     this.evidenceCounter += 1;
     const sequenceNumber = Date.now() + this.evidenceCounter;
     const envIdentity: EnvironmentIdentity = {
@@ -341,18 +503,6 @@ export class TrustedKernel {
       cwd: process.cwd(),
       envFingerprint: createHash("sha256").update(`${process.platform}:${process.version}`).digest("hex"),
     };
-
-    // P0-B6: PROOF KIND MUST NOT BE INFERRED FROM PRODUCER NAME
-    // Explicit proofKind required for qualification evidence.
-    // Default conservatively to TRACEABILITY or CLAIM based on explicit parameters only.
-    let proofKind: ProofKind = explicitProofKind ?? (typeof details.proofKind === "string" ? (details.proofKind as ProofKind) : "TRACEABILITY");
-    if (!explicitProofKind && typeof details.proofKind !== "string") {
-      if (producer === "COLONY_A" || producer === "COLONY_B" || producer === "COLONY_AB") {
-        proofKind = "CLAIM";
-      } else {
-        proofKind = "TRACEABILITY";
-      }
-    }
 
     const evidenceId = `ev-${createHash("sha256").update(`${producer}:${missionId}:${stageId}:${sequenceNumber}:${this.evidenceCounter}`).digest("hex").slice(0, 12)}`;
     const recordContent = JSON.stringify({ evidenceId, producer, missionId, stageId, proofKind, details, artifactIdentity, sequenceNumber });

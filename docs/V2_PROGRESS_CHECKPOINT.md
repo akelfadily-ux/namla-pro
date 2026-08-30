@@ -1,8 +1,8 @@
-# NAMLA PRO V2 PROGRESS CHECKPOINT & CLAIM AUDIT (§20, P0.22, FINAL-P0-5, FINAL-P0-10, HARDENING-18, P0-T1..P0-T6, P0-P1..P0-P9, P0-C1..P0-C12, P0-S1..P0-S6, P0-B1..P0-B11, P0-CB1..P0-CB7)
+# NAMLA PRO V2 PROGRESS CHECKPOINT & CLAIM AUDIT (§20, P0.22, FINAL-P0-5, FINAL-P0-10, HARDENING-18, P0-T1..P0-T6, P0-P1..P0-P9, P0-C1..P0-C12, P0-S1..P0-S6, P0-B1..P0-B11, P0-CB1..P0-CB7, P0-SE1..P0-SE9, P0-RA1..P0-RA8)
 
 **Branch:** `namla-v2-full-runtime`
 **Date:** 2026-08-29
-**Overall Status:** **Deterministic/integration P0 hardened with strict candidate workspace boundary containment (`isInsideCandidateWorkspace`), process.cwd() probing elimination, Docker execution through TrustedKernel, Smoke verifier fallback removal, and 23/23 adversarial rejection tests; READY FOR HUMAN REVIEW. Real-provider production qualification remains BLOCKED.**
+**Overall Status:** **Deterministic/integration P0 hardened with execution receipt authenticity closure (`KERNEL_RESERVED_PRODUCERS`), mandatory source-evidence semantic binding (`sourceEvidenceRef`), evidence causality closure, strict candidate workspace boundary containment (`isInsideCandidateWorkspace`), Docker execution through TrustedKernel, and 28/28 adversarial rejection tests; READY FOR HUMAN REVIEW. Real-provider production qualification remains BLOCKED.**
 
 ---
 
@@ -32,14 +32,17 @@
    - Tests Colony A and Colony B cross-workspace isolation and distinct workspace path containment.
    - **Result:** 3/3 PASS.
 
-- **`v2AdversarialTests.ts` (HARDENING-15, P0-T2, P0-A1..P0-A9, P0-P1..P0-P8, P0-C9..P0-C10, P0-S1..P0-S5, P0-B1..P0-B9, P0-CB1..P0-CB6):**
+- **`v2AdversarialTests.ts` (HARDENING-15, P0-T2, P0-A1..P0-A9, P0-P1..P0-P8, P0-C9..P0-C10, P0-S5, P0-B9, P0-CB6, P0-SE6, P0-SE7, P0-RA6, P0-RA7):**
    - Tests path traversal refusal, secret leakage refusal, forbidden command refusal, authority escalation, anti-livelock ceilings, stale evidence rejection, unverified delivery refusal, and unmapped acceptance criteria auto-pass prevention.
    - **P0-C9 Bug Regression Test:** Confirms passing test requirement for `AC-1` MUST NOT prove unbound `AC-2` (`AC-1 = VERIFIED`, `AC-2 = UNVERIFIED`, `contractSatisfied = false`).
    - **P0-C10 Cross-Verifier Confusion Matrix:** 10-point test matrix rejecting wrong criterion proofs, SMOKE/BUILD proof reuse for TEST criteria, generic command PASS without criterion binding, PROMAX self-minted records, wrong requirement IDs, and mutated candidate snapshots.
    - **P0-S5 Mandatory Snapshot & Requirement Identity Matrix:** 7-point test matrix proving rejection of (1) missing `candidateSnapshotHash`, (2) wrong `candidateSnapshotHash`, (3) missing `testRequirementId`, (4) wrong `testRequirementId`, (5) missing causal artifact/snapshot identity, (6) internal mapping requirement mismatch, and (7) multi-file candidate mutation of 2nd artifact invalidating prior snapshot proof.
    - **P0-B9 12-Point Filesystem & Boundary Matrix:** 12-point test matrix proving rejection of (1) sibling-prefix workspace escapes (`workspace-evil`), (2) `..` traversal, (3) absolute POSIX paths, (4) Windows drive paths, (5) encoded path variants, (6) symlink file escapes outside workspace, (7) symlink directory escapes outside workspace, (8) command `cwd` symlink escapes, (9) proposal suffix/basename collisions, (10) capability prefix collisions (`src/auth` vs `src/auth-evil`), (11) nested valid paths, (12) exact allowlisted files, and (13) unauthorized producer `ProofKind` inference attacks.
    - **P0-CB6 8-Point Candidate Boundary & Verifier Path Matrix:** 8-point test matrix proving rejection of (1) candidate sibling-prefix escapes (`leggo-integrated-evil`), (2) nested valid candidate artifacts, (3) artifacts outside candidate workspace but inside global workspace, (4) ProMax candidate sibling escapes, (5) absent smoke test files returning `BLOCKED` instead of falling back to `npm test`, (6) Integration existence checks via `workspaceFileExists`, (7) Docker candidate cwd containment via `TrustedKernel`, and (8) `process.cwd()` mismatch invariance.
-   - **Result:** 23/23 PASS.
+   - **P0-SE6 Negative Laundering Test:** TEST_SUITE_VERIFIER backed by `npm --version` source receipt is rejected (`AC` evaluates to `UNVERIFIED` and Lab refuses packaging).
+   - **P0-SE7 10-Point Command-Confusion Matrix:** 10-point test matrix verifying command-type mismatch rejection, missing/non-TRACEABILITY proofKind rejection, wrong executable/args rejection, and wrong mission rejection.
+   - **P0-RA6 & P0-RA7 Execution Receipt Authenticity Matrix:** 8-point matrix proving that public callers cannot mint reserved producer strings (`TRUSTED_KERNEL_COMMAND`, `TRUSTED_KERNEL`, etc.) or self-mint `QUALIFICATION_PROOF`, while authentic `executeCommand` produces unforgeable `TRUSTED_KERNEL_COMMAND` records.
+   - **Result:** 28/28 PASS.
 
 ### B. Fuzz Seeds & Configuration
 - **Provider Parser Fuzz Seed:** `0x5a3f89b1`
@@ -113,6 +116,9 @@ LabPackager Fail-Closed Verified Delivery Package Manifest & Checksums
 | Exact Target Scope Matching | **EXACT_RELATIVE_PATH_SCOPE** (P0-B3) | `ColonyExecutor` requires exact canonical relative path equality against WorkPackage `targetFiles` allowlists, rejecting suffix/basename collision attempts. |
 | Segment-Aware Capability Scopes | **SEGMENT_AWARE_SCOPE** (P0-B4) | Capability scope matching checks exact match or `allowedScope/descendant`, preventing prefix collisions (`src/auth` vs `src/auth-evil`). |
 | TOCTOU Write Revalidation | **RE_READ_HASH_VERIFICATION** (P0-B8) | `TrustedKernel.safeWriteWorkspaceFile` re-reads bytes from disk immediately after write to verify disk identity before emitting artifact evidence. |
+| Kernel Reserved Producers | **FORBIDDEN_RESERVED_PRODUCER** (P0-RA1, P0-RA2) | `TrustedKernel.emitEvidence` throws `FORBIDDEN_RESERVED_PRODUCER` if public callers attempt to mint `TRUSTED_KERNEL_COMMAND`, `TRUSTED_KERNEL`, `PROMAX_ARTIFACT_CHECK`, `PROMAX_ARTIFACT_SUBSTITUTION_DETECTED`, or `PROMAX_ASSESSMENT_RECEIPT`. |
+| Execution Receipt Unforgeability | **INTERNAL_EMISSION_ONLY** (P0-RA1, P0-RA8) | `TRUSTED_KERNEL_COMMAND` evidence records are minted exclusively via private `emitCommandExecutionEvidence` during real `executeCommand` / `executeDockerBuild` calls. |
+| Source Evidence Semantic Binding | **MANDATORY_SOURCE_BINDING** (P0-SE1, P0-SE2, P0-SE3) | `ProMaxVerifier` strictly requires command-backed verifiers to supply a valid `sourceEvidenceRef` pointing to a valid `TRUSTED_KERNEL_COMMAND` receipt matching expected `executableId` and `args`. |
 | ProofKind Authority Inference | **REMOVED** (P0-B6) | `TrustedKernel.emitEvidence` no longer infers `QUALIFICATION_PROOF` from producer strings (e.g. `PROMAX` or `VERIFIER`). Missing `proofKind` defaults conservatively to `TRACEABILITY`. |
 | Secret Policy Unification | **SINGLE_SECRET_POLICY** (P0-B7) | `ProMaxVerifier` imports `looksLikeSecret` from `src/policies/secretProtectionPolicy.ts` rather than hardcoding string patterns. |
 | ProMax Truth Minting | **VALIDATOR_NOT_MINT** (P0-C5, P0-C6) | `PROMAX`, `PROMAX_VERIFIER`, and `TRUSTED_KERNEL_COMMAND` removed from `AUTHORIZED_VERIFIER_PRODUCERS`. ProMax strictly validates verifier-emitted proofs; it never self-mints proof out of thin air. |
@@ -146,7 +152,7 @@ LabPackager Fail-Closed Verified Delivery Package Manifest & Checksums
 ## 6. TEST EXECUTION SUMMARY
 
 - **V2 Black-Box Clean-Room E2E Suite (`dist/tools/v2E2eRunner.js`):** 11/11 `PASS` (All 7 project classes + 8+ file DAG + broken build adversarial test + broken typecheck adversarial test + docker daemon classification test + clean-room reproducibility).
-- **V2 Adversarial Security Suite (`dist/tools/v2AdversarialTests.js`):** 23/23 `PASS` (Path traversal, secret leakage, unsafe commands, authority escalation, anti-livelock, stale evidence, unverified delivery refusal, unmapped acceptance criteria auto-pass prevention, artifact mutation detection, P0-P7 human bug regression test, P0-P8 provenance attack matrix, P0-C9 one-test-two-criteria bug regression, P0-C10 cross-verifier confusion matrix, P0-S5 7-case snapshot and requirement identity matrix, P0-B9 12-point filesystem and boundary matrix, P0-CB6 8-point candidate boundary matrix).
+- **V2 Adversarial Security Suite (`dist/tools/v2AdversarialTests.js`):** 28/28 `PASS` (Path traversal, secret leakage, unsafe commands, authority escalation, anti-livelock, stale evidence, unverified delivery refusal, unmapped acceptance criteria auto-pass prevention, artifact mutation detection, P0-P7 human bug regression test, P0-P8 provenance attack matrix, P0-C9 one-test-two-criteria bug regression, P0-C10 cross-verifier confusion matrix, P0-S5 7-case snapshot and requirement identity matrix, P0-B9 12-point filesystem and boundary matrix, P0-CB6 8-point candidate boundary matrix, P0-SE6 negative laundering test, P0-SE7 command confusion matrix, P0-RA6 & P0-RA7 receipt authenticity matrix).
 - **V2 Provider Parser Fuzz Suite (`dist/tools/v2ProviderParserFuzzTests.js`):** 3/3 `PASS` (JSON/JSONL fuzzing, provider prompt ↔ parser schema synchronization, malformed output, traversal, missing proposals).
 - **V2 Security Mutation Fuzz Suite (`dist/tools/v2SecurityMutationFuzzTests.js`):** 4/4 `PASS` (Path fuzzing, secret leakage pattern detection/refusal, malicious commands, true security gate mutation seam tests).
 - **V2 Artifact & Evidence Hardening Suite (`dist/tools/v2ArtifactAndEvidenceHardeningTests.js`):** 3/3 `PASS` (Artifact tampering, post-acceptance modification/deletion, stale evidence causality, Lab direct fail-closed refusal gates).

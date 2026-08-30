@@ -25,14 +25,13 @@ import { TrustedExecutableId } from "../../cognitive/trustedExecutableRegistry";
 import { detectProviderAvailability } from "../../cognitive/nodeProviderProcessDriver";
 import { looksLikeSecret } from "../../policies/secretProtectionPolicy";
 import { createHash } from "crypto";
-import { existsSync } from "fs";
-import { resolve, join } from "path";
 
 export interface ProofMapping {
   readonly criterionId: string;
   readonly verifier: string;
   readonly observation: string;
   readonly evidenceRef: string;
+  readonly sourceEvidenceRef?: string;
   readonly status: "VERIFIED" | "UNVERIFIED" | "FAILED" | "BLOCKED";
   readonly artifactHash?: string;
   readonly candidateSnapshotHash?: string;
@@ -75,6 +74,60 @@ export function computeCandidateSnapshotHash(artifacts: readonly ArtifactIdentit
   return createHash("sha256").update(raw).digest("hex");
 }
 
+export interface ExpectedSourceExecution {
+  readonly executableId: string;
+  readonly args: readonly string[];
+}
+
+export function getExpectedSourceExecution(
+  verifier: string,
+  reqTest?: TestRequirement,
+  projectClass?: ProjectClass,
+  missionId?: string
+): ExpectedSourceExecution | undefined {
+  if (verifier === "BUILD_VERIFIER") {
+    if (reqTest?.command) {
+      const parts = reqTest.command.trim().split(/\s+/);
+      return { executableId: parts[0], args: parts.slice(1) };
+    }
+    return { executableId: "npm", args: ["run", "build"] };
+  }
+
+  if (verifier === "TYPECHECK_VERIFIER") {
+    return { executableId: "npx", args: ["--package=typescript", "tsc", "--noEmit"] };
+  }
+
+  if (verifier === "DOCKER_BUILD_VERIFIER") {
+    const tag = missionId ? `test-${missionId}` : undefined;
+    return { executableId: "docker", args: ["build", "-t", tag ?? "", "."] };
+  }
+
+  if (verifier.includes("SMOKE_VERIFIER")) {
+    const cls = projectClass ?? "TYPESCRIPT_LIBRARY";
+    const smokeTestRelPath =
+      cls === "REST_API" ? "tests/server.test.ts" :
+      cls === "CLI_APPLICATION" ? "tests/cli.test.ts" :
+      cls === "DATABASE_SERVICE" ? "tests/repository.test.ts" :
+      cls === "WEB_APPLICATION" || cls === "FULLSTACK_APPLICATION" ? "tests/app.test.ts" :
+      "tests/index.test.ts";
+    return { executableId: "npx", args: ["node", "--test", smokeTestRelPath] };
+  }
+
+  if (verifier === "DISTINCT_CONTRACT_INTEGRATION_VERIFIER" || verifier === "INTEGRATION_VERIFIER") {
+    return { executableId: "npx", args: ["node", "--test", "tests/integration.test.ts"] };
+  }
+
+  if (verifier === "TEST_SUITE_VERIFIER" || verifier === "TEST") {
+    if (reqTest?.command) {
+      const parts = reqTest.command.trim().split(/\s+/);
+      return { executableId: parts[0], args: parts.slice(1) };
+    }
+    return { executableId: "npm", args: ["test"] };
+  }
+
+  return undefined;
+}
+
 export class ProMaxVerifier {
   public verifyCandidate(
     candidate: IntegratedCandidate,
@@ -89,10 +142,11 @@ export class ProMaxVerifier {
 
     const contract = context.frozenPlanContract;
     const candidateSnapshotHash = computeCandidateSnapshotHash(candidate.integratedArtifacts);
+    const accumulatedPool: EvidenceRecord[] = [...evidencePool];
 
     // 1. Evidence Freshness Verification (P0.17)
     let evidenceFreshnessVerified = true;
-    const staleRecords = evidencePool.filter((e) => e.status === "INVALIDATED" || e.status === "SUPERSEDED");
+    const staleRecords = accumulatedPool.filter((e) => e.status === "INVALIDATED" || e.status === "SUPERSEDED");
     if (staleRecords.length > 0) {
       evidenceFreshnessVerified = false;
       failedCriteria.push(`ProMax detected ${staleRecords.length} stale/invalidated evidence records`);
@@ -143,12 +197,13 @@ export class ProMaxVerifier {
           artifactCheckPassed = false;
           failedCriteria.push(`Artifact substitution detected for ${art.path}: expected ${art.sha256}, got ${recomputedSha256}`);
 
-          const subEv = kernel.emitEvidence("PROMAX_ARTIFACT_SUBSTITUTION_DETECTED", context.missionId, "PROMAX", {
+          const subEv = kernel.emitInternalEvidence("PROMAX_ARTIFACT_SUBSTITUTION_DETECTED", context.missionId, "PROMAX", {
             path: art.path,
             expectedSha256: art.sha256,
             observedSha256: recomputedSha256,
             candidateSnapshotHash,
           }, undefined, undefined, undefined, "QUALIFICATION_PROOF");
+          accumulatedPool.push(subEv);
 
           proofMappings.push({
             criterionId: `artifact-${art.path}`,
@@ -161,12 +216,13 @@ export class ProMaxVerifier {
             candidateSnapshotHash,
           });
         } else {
-          const ev = kernel.emitEvidence("PROMAX_ARTIFACT_CHECK", context.missionId, "PROMAX", {
+          const ev = kernel.emitInternalEvidence("PROMAX_ARTIFACT_CHECK", context.missionId, "PROMAX", {
             path: art.path,
             expectedSha256: art.sha256,
             observedSha256: recomputedSha256,
             candidateSnapshotHash,
           }, undefined, undefined, undefined, "QUALIFICATION_PROOF");
+          accumulatedPool.push(ev);
 
           proofMappings.push({
             criterionId: `artifact-${art.path}`,
@@ -206,6 +262,7 @@ export class ProMaxVerifier {
         candidateSnapshotHash,
         proofKind: "QUALIFICATION_PROOF",
       }, undefined, undefined, undefined, "QUALIFICATION_PROOF");
+      accumulatedPool.push(secEv);
 
       proofMappings.push({
         criterionId: secReq.id,
@@ -228,6 +285,7 @@ export class ProMaxVerifier {
             candidateSnapshotHash,
             proofKind: "QUALIFICATION_PROOF",
           }, undefined, undefined, undefined, "QUALIFICATION_PROOF");
+          accumulatedPool.push(acSecEv);
 
           proofMappings.push({
             criterionId: targetCriterionId,
@@ -250,6 +308,9 @@ export class ProMaxVerifier {
 
     for (const reqTest of contract.requiredTests) {
       const verifierRes = this.dispatchSemanticVerifier(reqTest, candidate, context, kernel);
+      if (verifierRes.evidenceRecord) {
+        accumulatedPool.push(verifierRes.evidenceRecord);
+      }
 
       if (verifierRes.status === "FAILED") {
         independentTestsPassed = false;
@@ -262,6 +323,7 @@ export class ProMaxVerifier {
         verifier: verifierRes.verifier,
         observation: verifierRes.observation,
         evidenceRef: verifierRes.evidenceRef,
+        sourceEvidenceRef: verifierRes.evidenceRef,
         status: verifierRes.status,
         proofKind: "QUALIFICATION_PROOF",
         artifactHash: verifierRes.artifactHash,
@@ -269,30 +331,38 @@ export class ProMaxVerifier {
         testRequirementId: reqTest.id,
       });
 
-      // Emit verifier QUALIFICATION_PROOF for explicitly bound criteria ONLY (P0-C1, P0-C2, P0-C3, P0-C6)
+      // Emit verifier QUALIFICATION_PROOF for explicitly bound criteria ONLY (P0-C1, P0-C2, P0-C3, P0-C6, P0-E2, P0-E3)
       if (verifierRes.status === "VERIFIED" && reqTest.provesCriterionIds) {
-        for (const targetCriterionId of reqTest.provesCriterionIds) {
-          const proofEv = kernel.emitEvidence(verifierRes.verifier, context.missionId, "PROMAX", {
-            criterionId: targetCriterionId,
-            testRequirementId: reqTest.id,
-            verifier: verifierRes.verifier,
-            observation: verifierRes.observation,
-            candidateSnapshotHash,
-            sha256: verifierRes.artifactHash,
-            proofKind: "QUALIFICATION_PROOF",
-          }, undefined, undefined, undefined, "QUALIFICATION_PROOF");
+        // P0-E3: Command-backed verifier MUST carry a valid source evidence reference
+        if (!verifierRes.evidenceRef || verifierRes.evidenceRef.trim().length === 0) {
+          failedCriteria.push(`Verifier ${verifierRes.verifier} produced VERIFIED result without source execution evidenceRef`);
+        } else {
+          for (const targetCriterionId of reqTest.provesCriterionIds) {
+            const proofEv = kernel.emitEvidence(verifierRes.verifier, context.missionId, "PROMAX", {
+              criterionId: targetCriterionId,
+              testRequirementId: reqTest.id,
+              verifier: verifierRes.verifier,
+              observation: verifierRes.observation,
+              sourceEvidenceRef: verifierRes.evidenceRef,
+              candidateSnapshotHash,
+              sha256: verifierRes.artifactHash,
+              proofKind: "QUALIFICATION_PROOF",
+            }, undefined, undefined, undefined, "QUALIFICATION_PROOF");
+            accumulatedPool.push(proofEv);
 
-          proofMappings.push({
-            criterionId: targetCriterionId,
-            verifier: verifierRes.verifier,
-            observation: `QUALIFICATION_PROOF from authorized verifier (${verifierRes.verifier}) for requirement ${reqTest.id}: ${verifierRes.observation}`,
-            evidenceRef: proofEv.evidenceId,
-            status: "VERIFIED",
-            proofKind: "QUALIFICATION_PROOF",
-            candidateSnapshotHash,
-            artifactHash: verifierRes.artifactHash,
-            testRequirementId: reqTest.id,
-          });
+            proofMappings.push({
+              criterionId: targetCriterionId,
+              verifier: verifierRes.verifier,
+              observation: `QUALIFICATION_PROOF from authorized verifier (${verifierRes.verifier}) for requirement ${reqTest.id}: ${verifierRes.observation}`,
+              evidenceRef: proofEv.evidenceId,
+              sourceEvidenceRef: verifierRes.evidenceRef,
+              status: "VERIFIED",
+              proofKind: "QUALIFICATION_PROOF",
+              candidateSnapshotHash,
+              artifactHash: verifierRes.artifactHash,
+              testRequirementId: reqTest.id,
+            });
+          }
         }
       }
     }
@@ -315,7 +385,7 @@ export class ProMaxVerifier {
       }
 
       // Search for explicit QUALIFICATION_PROOF evidence in evidencePool emitted by an authorized verifier (P0-P1..P0-P5, P0-C1..P0-C8)
-      const matchingEvidence = evidencePool.find((ev) => {
+      const matchingEvidence = accumulatedPool.find((ev) => {
         if (ev.status !== "VALID") return false;
         if (ev.missionId !== context.missionId) return false;
 
@@ -372,21 +442,74 @@ export class ProMaxVerifier {
           }
         }
 
+        // P0-SE2 & P0-SE4: MANDATORY SOURCE EVIDENCE VALIDATION FOR COMMAND-BACKED QUALIFICATION PROOFS
+        if (ev.producer !== "SECURITY_VERIFIER" && ev.producer !== "PROMAX") {
+          const sourceRef = typeof ev.details.sourceEvidenceRef === "string" ? ev.details.sourceEvidenceRef : undefined;
+          if (!sourceRef || sourceRef.trim().length === 0) return false; // Mandatory sourceEvidenceRef missing -> REJECT
+
+          const sourceEv = accumulatedPool.find((e) => e.evidenceId === sourceRef);
+          if (!sourceEv) return false; // Nonexistent source evidence -> REJECT
+          if (sourceEv.producer !== "TRUSTED_KERNEL_COMMAND") return false; // Must be TRUSTED_KERNEL_COMMAND -> REJECT
+          if (sourceEv.proofKind !== "TRACEABILITY") return false; // Must be TRACEABILITY observation -> REJECT
+          if (sourceEv.status !== "VALID") return false; // Invalidated source evidence -> REJECT
+          if (sourceEv.missionId !== context.missionId) return false; // Cross-mission source evidence -> REJECT
+          if (sourceEv.details.success !== true && sourceEv.details.exitCode !== 0) return false; // Failed command execution -> REJECT
+
+          // P0-SE1 & P0-SE2: Validate exact executableId and args against expected verifier execution
+          const reqTest = contract.requiredTests.find((r) => r.id === ev.details.testRequirementId);
+          const expected = getExpectedSourceExecution(ev.producer, reqTest, context.projectClass, context.missionId);
+          if (expected) {
+            const srcExecId = sourceEv.details.executableId;
+            const srcArgs = Array.isArray(sourceEv.details.args) ? sourceEv.details.args : [];
+            if (srcExecId !== expected.executableId) return false; // Executable mismatch -> REJECT
+            if (srcArgs.length !== expected.args.length) return false; // Args length mismatch -> REJECT
+            for (let i = 0; i < expected.args.length; i++) {
+              if (srcArgs[i] !== expected.args[i]) return false; // Arg content mismatch -> REJECT
+            }
+          }
+        }
+
         return true;
       });
 
-      // Search for explicit proof mapping generated during semantic verifier dispatch (QUALIFICATION_PROOF) (P0-S1, P0-S3, P0-S4)
-      const matchingProof = proofMappings.find(
-        (p) =>
-          p.criterionId === criterion.id &&
-          p.status === "VERIFIED" &&
-          p.proofKind === "QUALIFICATION_PROOF" &&
-          AUTHORIZED_VERIFIER_PRODUCERS.has(p.verifier) &&
-          p.candidateSnapshotHash === candidateSnapshotHash && // P0-S1: Mandatory snapshot identity
-          (!criterion.requiredRequirementId ||
-            p.testRequirementId === criterion.requiredRequirementId ||
-            p.securityRequirementId === criterion.requiredRequirementId) // P0-S3: Requirement ID matching
-      );
+      // Search for explicit proof mapping generated during semantic verifier dispatch (QUALIFICATION_PROOF) (P0-S1, P0-S3, P0-S4, P0-SE2, P0-SE4)
+      const matchingProof = proofMappings.find((p) => {
+        if (p.criterionId !== criterion.id) return false;
+        if (p.status !== "VERIFIED") return false;
+        if (p.proofKind !== "QUALIFICATION_PROOF") return false;
+        if (!AUTHORIZED_VERIFIER_PRODUCERS.has(p.verifier)) return false;
+        if (p.candidateSnapshotHash !== candidateSnapshotHash) return false;
+
+        // Requirement ID matching
+        if (criterion.requiredRequirementId) {
+          if (p.testRequirementId !== criterion.requiredRequirementId && p.securityRequirementId !== criterion.requiredRequirementId) {
+            return false;
+          }
+        }
+
+        // For non-security verifiers, sourceEvidenceRef is mandatory and must pass source validation
+        if (p.verifier !== "SECURITY_VERIFIER") {
+          if (!p.sourceEvidenceRef || p.sourceEvidenceRef.trim().length === 0) return false;
+          const sourceEv = accumulatedPool.find((e) => e.evidenceId === p.sourceEvidenceRef);
+          if (!sourceEv) return false;
+          if (sourceEv.status !== "VALID" || sourceEv.missionId !== context.missionId) return false;
+          if (sourceEv.producer !== "TRUSTED_KERNEL_COMMAND" || sourceEv.proofKind !== "TRACEABILITY") return false;
+          if (sourceEv.details.success !== true && sourceEv.details.exitCode !== 0) return false;
+
+          const reqTest = contract.requiredTests.find((r) => r.id === p.testRequirementId);
+          const expected = getExpectedSourceExecution(p.verifier, reqTest, context.projectClass, context.missionId);
+          if (expected) {
+            if (sourceEv.details.executableId !== expected.executableId) return false;
+            const srcArgs = Array.isArray(sourceEv.details.args) ? sourceEv.details.args : [];
+            if (srcArgs.length !== expected.args.length) return false;
+            for (let i = 0; i < expected.args.length; i++) {
+              if (srcArgs[i] !== expected.args[i]) return false;
+            }
+          }
+        }
+
+        return true;
+      });
 
       if (matchingEvidence || matchingProof) {
         verifiedCriteria.push(criterion.id);
@@ -439,7 +562,7 @@ export class ProMaxVerifier {
       evidenceFreshnessVerified,
     };
 
-    const evidenceRecord = kernel.emitEvidence(
+    const evidenceRecord = kernel.emitInternalEvidence(
       "PROMAX_ASSESSMENT_RECEIPT",
       context.missionId,
       "PROMAX",
@@ -475,7 +598,7 @@ export class ProMaxVerifier {
     candidate: IntegratedCandidate,
     context: ContractBoundStageContext,
     kernel: TrustedKernel
-  ): { verifier: string; observation: string; evidenceRef: string; status: "VERIFIED" | "FAILED" | "BLOCKED"; artifactHash?: string } {
+  ): { verifier: string; observation: string; evidenceRef: string; status: "VERIFIED" | "FAILED" | "BLOCKED"; artifactHash?: string; evidenceRecord?: EvidenceRecord } {
     const verifierType = reqTest.verifier ?? reqTest.type ?? "TEST";
     const projectClass: ProjectClass = context.projectClass ?? "TYPESCRIPT_LIBRARY";
     const primaryArtifactHash = candidate.integratedArtifacts[0]?.sha256;
@@ -493,6 +616,7 @@ export class ProMaxVerifier {
           evidenceRef: res.evidenceRecord?.evidenceId ?? "",
           status: res.success ? "VERIFIED" : "FAILED",
           artifactHash: primaryArtifactHash,
+          evidenceRecord: res.evidenceRecord,
         };
       }
 
@@ -505,6 +629,7 @@ export class ProMaxVerifier {
           evidenceRef: res.evidenceRecord?.evidenceId ?? "",
           status: res.success ? "VERIFIED" : "FAILED",
           artifactHash: primaryArtifactHash,
+          evidenceRecord: res.evidenceRecord,
         };
       }
 
@@ -520,45 +645,44 @@ export class ProMaxVerifier {
           };
         }
 
-        // P0-CB3: Dedicated Docker Verifier using canonical workspace path authority & safe child env
-        const candCheck = kernel.isInsideCandidateWorkspace(candidate.workspacePath, "Dockerfile");
-        const dockerCwd = resolve(join(process.cwd(), candidate.workspacePath));
+        // P0-D1 & P0-D2 & P0-D4 & P0-D5: Route Docker execution entirely through TrustedKernel
+        const res = kernel.executeDockerBuild(candidate.workspacePath, context.missionId, "PROMAX");
 
-        const { spawnSync } = require("child_process");
-        const { buildSafeChildEnv } = require("../../cognitive/safeProviderRequest");
-
-        const dockerBuild = spawnSync("docker", ["build", "-t", `test-${context.missionId}`, "."], {
-          cwd: dockerCwd,
-          shell: false,
-          encoding: "utf8",
-          timeout: 30000,
-          env: buildSafeChildEnv(),
-        });
-
-        if (dockerBuild.status === 0) {
+        if (res.reasonCode === "DOCKERFILE_ABSENT" || res.reasonCode === "CANDIDATE_BOUNDARY_ESCAPE") {
           return {
             verifier: "DOCKER_BUILD_VERIFIER",
-            observation: `Docker build requirement ${reqTest.id} built image successfully`,
+            observation: res.stderr,
             evidenceRef: "",
-            status: "VERIFIED",
-            artifactHash: primaryArtifactHash,
+            status: "BLOCKED",
           };
         }
 
-        const output = (dockerBuild.stderr || "") + (dockerBuild.stdout || "") + (dockerBuild.error ? dockerBuild.error.message : "");
+        const output = (res.stderr || "") + (res.stdout || "");
         const isEnvIssue =
+          res.reasonCode === "EXECUTABLE_UNAUTHORIZED" ||
           output.includes("Cannot connect to the Docker daemon") ||
           output.includes("docker daemon is not running") ||
           output.includes("permission denied") ||
           output.includes("overlayfs") ||
-          output.includes("ENOENT") ||
-          dockerBuild.error !== undefined;
+          output.includes("ENOENT");
+
+        if (res.success) {
+          return {
+            verifier: "DOCKER_BUILD_VERIFIER",
+            observation: `Docker build requirement ${reqTest.id} built image successfully`,
+            evidenceRef: res.evidenceRecord?.evidenceId ?? "",
+            status: "VERIFIED",
+            artifactHash: primaryArtifactHash,
+            evidenceRecord: res.evidenceRecord,
+          };
+        }
 
         return {
           verifier: "DOCKER_BUILD_VERIFIER",
           observation: isEnvIssue ? `Docker daemon/environment unavailable: ${output.slice(0, 100)}` : `Docker build failed: ${output.slice(0, 100)}`,
-          evidenceRef: "",
+          evidenceRef: res.evidenceRecord?.evidenceId ?? "",
           status: isEnvIssue ? "BLOCKED" : "FAILED",
+          evidenceRecord: res.evidenceRecord,
         };
       }
 
@@ -591,6 +715,7 @@ export class ProMaxVerifier {
           evidenceRef: res.evidenceRecord?.evidenceId ?? "",
           status: res.success ? "VERIFIED" : "FAILED",
           artifactHash: primaryArtifactHash,
+          evidenceRecord: res.evidenceRecord,
         };
       }
 
@@ -614,6 +739,7 @@ export class ProMaxVerifier {
           evidenceRef: res.evidenceRecord?.evidenceId ?? "",
           status: res.success ? "VERIFIED" : "FAILED",
           artifactHash: primaryArtifactHash,
+          evidenceRecord: res.evidenceRecord,
         };
       }
 
@@ -630,6 +756,7 @@ export class ProMaxVerifier {
           evidenceRef: res.evidenceRecord?.evidenceId ?? "",
           status: res.success ? "VERIFIED" : "FAILED",
           artifactHash: primaryArtifactHash,
+          evidenceRecord: res.evidenceRecord,
         };
       }
     }

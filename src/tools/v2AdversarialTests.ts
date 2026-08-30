@@ -119,6 +119,573 @@ test("P0-C9 REGRESSION: Passing Test For AC-1 Must NOT Prove Unbound AC-2", () =
   }
 });
 
+test("P0-RA6 & P0-RA7 8-Point Execution Receipt Authenticity & Reserved Producer Attack Matrix", () => {
+  const ws = tempWorkspace("ra-matrix");
+  try {
+    const kernel = new TrustedKernel({ workspaceRoot: ws });
+
+    // 1. Reserved producer TRUSTED_KERNEL_COMMAND refused by public emitEvidence
+    assert.throws(
+      () => kernel.emitEvidence("TRUSTED_KERNEL_COMMAND", "m-ra", "PROMAX", { exitCode: 0 }),
+      /FORBIDDEN_RESERVED_PRODUCER/
+    );
+
+    // 2. Reserved producer TRUSTED_KERNEL refused by public emitEvidence
+    assert.throws(
+      () => kernel.emitEvidence("TRUSTED_KERNEL", "m-ra", "PROMAX", { exitCode: 0 }),
+      /FORBIDDEN_RESERVED_PRODUCER/
+    );
+
+    // 3. Reserved producer PROMAX_ARTIFACT_CHECK refused by public emitEvidence
+    assert.throws(
+      () => kernel.emitEvidence("PROMAX_ARTIFACT_CHECK", "m-ra", "PROMAX", { hash: "abc" }),
+      /FORBIDDEN_RESERVED_PRODUCER/
+    );
+
+    // 4. Reserved producer PROMAX_ARTIFACT_SUBSTITUTION_DETECTED refused by public emitEvidence
+    assert.throws(
+      () => kernel.emitEvidence("PROMAX_ARTIFACT_SUBSTITUTION_DETECTED", "m-ra", "PROMAX", { hash: "abc" }),
+      /FORBIDDEN_RESERVED_PRODUCER/
+    );
+
+    // 5. Reserved producer PROMAX_ASSESSMENT_RECEIPT refused by public emitEvidence
+    assert.throws(
+      () => kernel.emitEvidence("PROMAX_ASSESSMENT_RECEIPT", "m-ra", "PROMAX", { satisfied: true }),
+      /FORBIDDEN_RESERVED_PRODUCER/
+    );
+
+    // 6. COLONY_A attempting to mint QUALIFICATION_PROOF is downgraded to CLAIM
+    const evColony = kernel.emitEvidence("COLONY_A", "m-ra", "COLONY_AB", { criterionId: "ac-1" }, undefined, undefined, undefined, "QUALIFICATION_PROOF");
+    assert.equal(evColony.proofKind, "CLAIM", "COLONY_A QUALIFICATION_PROOF attempt MUST be downgraded to CLAIM");
+
+    // 7. Generic unauthorized producer attempting QUALIFICATION_PROOF is downgraded to TRACEABILITY
+    const evUnauth = kernel.emitEvidence("UNAUTHORIZED_PRODUCER", "m-ra", "STAGE", { criterionId: "ac-1" }, undefined, undefined, undefined, "QUALIFICATION_PROOF");
+    assert.equal(evUnauth.proofKind, "TRACEABILITY", "Unauthorized producer QUALIFICATION_PROOF attempt MUST be downgraded to TRACEABILITY");
+
+    // 8. Authentic executeCommand produces unforgeable TRUSTED_KERNEL_COMMAND record with TRACEABILITY proofKind
+    const leggoRel = "workspaces/v2-missions/m-ra/leggo-integrated";
+    kernel.safeWriteWorkspaceFile(`${leggoRel}/package.json`, JSON.stringify({ name: "ra", version: "1.0.0" }), "m-ra");
+    const cmdRes = kernel.executeCommand("npm" as any, ["--version"], "m-ra", "PROMAX", leggoRel);
+    assert.equal(cmdRes.success, true);
+    assert.equal(cmdRes.evidenceRecord !== undefined, true);
+    assert.equal(cmdRes.evidenceRecord?.producer, "TRUSTED_KERNEL_COMMAND");
+    assert.equal(cmdRes.evidenceRecord?.proofKind, "TRACEABILITY");
+    assert.equal(cmdRes.evidenceRecord?.status, "VALID");
+  } finally {
+    rmSync(ws, { recursive: true, force: true });
+  }
+});
+
+test("P0-SE7 10-Point Command-Confusion & Source Execution Binding Matrix", () => {
+  const ws = tempWorkspace("cmd-confusion");
+  try {
+    const kernel = new TrustedKernel({ workspaceRoot: ws });
+    const verifier = new ProMaxVerifier();
+
+    const leggoRel = "workspaces/v2-missions/m-se7/leggo-integrated";
+    kernel.safeWriteWorkspaceFile(`${leggoRel}/package.json`, JSON.stringify({ name: "se7", version: "1.0.0", scripts: { build: "node -v", test: "node -v" } }), "m-se7");
+    kernel.safeWriteWorkspaceFile(`${leggoRel}/src/index.ts`, "export const x = 1;", "m-se7");
+    kernel.safeWriteWorkspaceFile(`${leggoRel}/tests/server.test.ts`, "export const test = true;", "m-se7");
+    kernel.safeWriteWorkspaceFile(`${leggoRel}/tests/integration.test.ts`, "export const integ = true;", "m-se7");
+    kernel.safeWriteWorkspaceFile(`${leggoRel}/Dockerfile`, "FROM scratch\n", "m-se7");
+
+    const pkgContent = JSON.stringify({ name: "se7", version: "1.0.0", scripts: { build: "node -v", test: "node -v" } });
+    const srcContent = "export const x = 1;";
+    const pkgHash = createHash("sha256").update(pkgContent).digest("hex");
+    const srcHash = createHash("sha256").update(srcContent).digest("hex");
+
+    const candidate: IntegratedCandidate = {
+      candidateId: "cand-se7",
+      missionId: "m-se7",
+      integratedArtifacts: [
+        { artifactId: "a1", path: "package.json", sha256: pkgHash, sizeBytes: pkgContent.length, missionId: "m-se7" },
+        { artifactId: "a2", path: "src/index.ts", sha256: srcHash, sizeBytes: srcContent.length, missionId: "m-se7" },
+      ],
+      resolvedConflicts: [],
+      sourceTraceability: { "package.json": "COLONY_A", "src/index.ts": "COLONY_A" },
+      workspacePath: leggoRel,
+    };
+    const snapshotHash = computeCandidateSnapshotHash(candidate.integratedArtifacts);
+
+    const context: ContractBoundStageContext = {
+      missionId: "m-se7",
+      authoritativeInputs: [],
+      policyVersions: ["v1.0.0"],
+      budgets: { virtualTicks: 100, providerCalls: 10, maxFixAttempts: 3 },
+      evidenceRefs: [],
+      missionStateRef: "VERIFYING",
+      executionMode: "DETERMINISTIC_FIXTURE_MODE",
+      projectClass: "REST_API",
+      contractPhase: "CONTRACT_BOUND",
+      frozenPlanContract: {
+        contractId: "c1", version: "v1.0.0", contractHash: "h1", objective: "Obj",
+        acceptanceCriteria: [
+          { id: "ac-build", description: "Build", verificationMethod: "TEST", required: true, requiredRequirementId: "tr-build" },
+          { id: "ac-test", description: "Test", verificationMethod: "TEST", required: true, requiredRequirementId: "tr-test" },
+          { id: "ac-typecheck", description: "Typecheck", verificationMethod: "TEST", required: true, requiredRequirementId: "tr-typecheck" },
+          { id: "ac-smoke", description: "Smoke", verificationMethod: "TEST", required: true, requiredRequirementId: "tr-smoke" },
+          { id: "ac-integ", description: "Integration", verificationMethod: "TEST", required: true, requiredRequirementId: "tr-integ" },
+          { id: "ac-docker", description: "Docker", verificationMethod: "TEST", required: true, requiredRequirementId: "tr-docker" },
+        ],
+        constraints: [], tasks: [], dependencies: [], allowedCapabilities: [],
+        requiredTests: [
+          { id: "tr-build", type: "BUILD", verifier: "BUILD_VERIFIER", name: "Build", command: "npm run build", expectedExitCode: 0, provesCriterionIds: ["ac-build"] },
+          { id: "tr-test", type: "TEST", verifier: "TEST_SUITE_VERIFIER", name: "Test", command: "npm test", expectedExitCode: 0, provesCriterionIds: ["ac-test"] },
+          { id: "tr-typecheck", type: "TYPECHECK", verifier: "TYPECHECK_VERIFIER", name: "Typecheck", command: "npx --package=typescript tsc --noEmit", expectedExitCode: 0, provesCriterionIds: ["ac-typecheck"] },
+          { id: "tr-smoke", type: "SMOKE", verifier: "SMOKE_VERIFIER", name: "Smoke", command: "npx node --test tests/server.test.ts", expectedExitCode: 0, provesCriterionIds: ["ac-smoke"] },
+          { id: "tr-integ", type: "INTEGRATION_TEST", verifier: "INTEGRATION_VERIFIER", name: "Integ", command: "npx node --test tests/integration.test.ts", expectedExitCode: 0, provesCriterionIds: ["ac-integ"] },
+          { id: "tr-docker", type: "DOCKER_BUILD", verifier: "DOCKER_BUILD_VERIFIER", name: "Docker", command: "docker build -t test-m-se7 .", expectedExitCode: 0, provesCriterionIds: ["ac-docker"] },
+        ],
+        securityRequirements: [], expectedArtifacts: [], evidenceRequirements: [], riskClassification: "LOW", completionConditions: [], frozenAt: Date.now(),
+      },
+    };
+
+    // 1. BUILD proof backed by npm test (rejected)
+    const srcNpmTest = kernel.emitInternalEvidence("TRUSTED_KERNEL_COMMAND", "m-se7", "PROMAX", { executableId: "npm", args: ["test"], exitCode: 0, success: true }, undefined, undefined, undefined, "TRACEABILITY");
+    const proof1 = kernel.emitEvidence("BUILD_VERIFIER", "m-se7", "PROMAX", { criterionId: "ac-build", testRequirementId: "tr-build", candidateSnapshotHash: snapshotHash, sourceEvidenceRef: srcNpmTest.evidenceId, proofKind: "QUALIFICATION_PROOF" });
+    assert.equal(verifier.verifyCandidate(candidate, context, kernel, [srcNpmTest, proof1]).success, false);
+
+    // 2. TEST proof backed by npm --version (rejected)
+    const srcNpmVersion = kernel.emitInternalEvidence("TRUSTED_KERNEL_COMMAND", "m-se7", "PROMAX", { executableId: "npm", args: ["--version"], exitCode: 0, success: true }, undefined, undefined, undefined, "TRACEABILITY");
+    const proof2 = kernel.emitEvidence("TEST_SUITE_VERIFIER", "m-se7", "PROMAX", { criterionId: "ac-test", testRequirementId: "tr-test", candidateSnapshotHash: snapshotHash, sourceEvidenceRef: srcNpmVersion.evidenceId, proofKind: "QUALIFICATION_PROOF" });
+    assert.equal(verifier.verifyCandidate(candidate, context, kernel, [srcNpmVersion, proof2]).success, false);
+
+    // 3. TYPECHECK proof backed by npm run build (rejected)
+    const srcNpmBuild = kernel.emitInternalEvidence("TRUSTED_KERNEL_COMMAND", "m-se7", "PROMAX", { executableId: "npm", args: ["run", "build"], exitCode: 0, success: true }, undefined, undefined, undefined, "TRACEABILITY");
+    const proof3 = kernel.emitEvidence("TYPECHECK_VERIFIER", "m-se7", "PROMAX", { criterionId: "ac-typecheck", testRequirementId: "tr-typecheck", candidateSnapshotHash: snapshotHash, sourceEvidenceRef: srcNpmBuild.evidenceId, proofKind: "QUALIFICATION_PROOF" });
+    assert.equal(verifier.verifyCandidate(candidate, context, kernel, [srcNpmBuild, proof3]).success, false);
+
+    // 4. SMOKE proof backed by generic npm test (rejected)
+    const proof4 = kernel.emitEvidence("REST_API_EXECUTABLE_SMOKE_VERIFIER", "m-se7", "PROMAX", { criterionId: "ac-smoke", testRequirementId: "tr-smoke", candidateSnapshotHash: snapshotHash, sourceEvidenceRef: srcNpmTest.evidenceId, proofKind: "QUALIFICATION_PROOF" });
+    assert.equal(verifier.verifyCandidate(candidate, context, kernel, [srcNpmTest, proof4]).success, false);
+
+    // 5. INTEGRATION proof backed by normal unit test command (rejected)
+    const proof5 = kernel.emitEvidence("DISTINCT_CONTRACT_INTEGRATION_VERIFIER", "m-se7", "PROMAX", { criterionId: "ac-integ", testRequirementId: "tr-integ", candidateSnapshotHash: snapshotHash, sourceEvidenceRef: srcNpmTest.evidenceId, proofKind: "QUALIFICATION_PROOF" });
+    assert.equal(verifier.verifyCandidate(candidate, context, kernel, [srcNpmTest, proof5]).success, false);
+
+    // 6. DOCKER proof backed by npm command (rejected)
+    const proof6 = kernel.emitEvidence("DOCKER_BUILD_VERIFIER", "m-se7", "PROMAX", { criterionId: "ac-docker", testRequirementId: "tr-docker", candidateSnapshotHash: snapshotHash, sourceEvidenceRef: srcNpmBuild.evidenceId, proofKind: "QUALIFICATION_PROOF" });
+    assert.equal(verifier.verifyCandidate(candidate, context, kernel, [srcNpmBuild, proof6]).success, false);
+
+    // 7. Evidence with producer !== TRUSTED_KERNEL_COMMAND (rejected)
+    const srcNonCommand = kernel.emitEvidence("COLONY_A", "m-se7", "PROMAX", { exitCode: 0, success: true }, undefined, undefined, undefined, "TRACEABILITY");
+    const proof7 = kernel.emitEvidence("BUILD_VERIFIER", "m-se7", "PROMAX", { criterionId: "ac-build", testRequirementId: "tr-build", candidateSnapshotHash: snapshotHash, sourceEvidenceRef: srcNonCommand.evidenceId, proofKind: "QUALIFICATION_PROOF" });
+    assert.equal(verifier.verifyCandidate(candidate, context, kernel, [srcNonCommand, proof7]).success, false);
+
+    // 8. Source with proofKind !== TRACEABILITY (rejected)
+    const srcWrongProofKind = kernel.emitInternalEvidence("TRUSTED_KERNEL_COMMAND", "m-se7", "PROMAX", { executableId: "npm", args: ["run", "build"], exitCode: 0, success: true }, undefined, undefined, undefined, "CLAIM");
+    const proof8 = kernel.emitEvidence("BUILD_VERIFIER", "m-se7", "PROMAX", { criterionId: "ac-build", testRequirementId: "tr-build", candidateSnapshotHash: snapshotHash, sourceEvidenceRef: srcWrongProofKind.evidenceId, proofKind: "QUALIFICATION_PROOF" });
+    assert.equal(verifier.verifyCandidate(candidate, context, kernel, [srcWrongProofKind, proof8]).success, false);
+
+    // 9. Source with correct executable but wrong args (npm run lint instead of npm run build - rejected)
+    const srcWrongArgs = kernel.emitInternalEvidence("TRUSTED_KERNEL_COMMAND", "m-se7", "PROMAX", { executableId: "npm", args: ["run", "lint"], exitCode: 0, success: true }, undefined, undefined, undefined, "TRACEABILITY");
+    const proof9 = kernel.emitEvidence("BUILD_VERIFIER", "m-se7", "PROMAX", { criterionId: "ac-build", testRequirementId: "tr-build", candidateSnapshotHash: snapshotHash, sourceEvidenceRef: srcWrongArgs.evidenceId, proofKind: "QUALIFICATION_PROOF" });
+    assert.equal(verifier.verifyCandidate(candidate, context, kernel, [srcWrongArgs, proof9]).success, false);
+
+    // 10. Source from correct command but wrong requirement/mission (wrong mission - rejected)
+    const srcWrongMission = kernel.emitInternalEvidence("TRUSTED_KERNEL_COMMAND", "m-OTHER-SE7", "PROMAX", { executableId: "npm", args: ["run", "build"], exitCode: 0, success: true }, undefined, undefined, undefined, "TRACEABILITY");
+    const proof10 = kernel.emitEvidence("BUILD_VERIFIER", "m-se7", "PROMAX", { criterionId: "ac-build", testRequirementId: "tr-build", candidateSnapshotHash: snapshotHash, sourceEvidenceRef: srcWrongMission.evidenceId, proofKind: "QUALIFICATION_PROOF" });
+    assert.equal(verifier.verifyCandidate(candidate, context, kernel, [srcWrongMission, proof10]).success, false);
+
+    // Positive check: Correct exact source chain for BUILD_VERIFIER succeeds
+    const srcBuildValid = kernel.emitInternalEvidence("TRUSTED_KERNEL_COMMAND", "m-se7", "PROMAX", { executableId: "npm", args: ["run", "build"], exitCode: 0, success: true }, undefined, undefined, undefined, "TRACEABILITY");
+    const proofValid = kernel.emitEvidence("BUILD_VERIFIER", "m-se7", "PROMAX", { criterionId: "ac-build", testRequirementId: "tr-build", candidateSnapshotHash: snapshotHash, sourceEvidenceRef: srcBuildValid.evidenceId, proofKind: "QUALIFICATION_PROOF" });
+
+    const ctxSingleBuild: ContractBoundStageContext = {
+      ...context,
+      frozenPlanContract: {
+        ...context.frozenPlanContract,
+        acceptanceCriteria: [{ id: "ac-build", description: "Build", verificationMethod: "TEST", required: true, requiredRequirementId: "tr-build" }],
+        requiredTests: [{ id: "tr-build", type: "BUILD", verifier: "BUILD_VERIFIER", name: "Build", command: "npm run build", expectedExitCode: 0, provesCriterionIds: ["ac-build"] }],
+      },
+    };
+    const resValid = verifier.verifyCandidate(candidate, ctxSingleBuild, kernel, [srcBuildValid, proofValid]);
+    assert.equal(resValid.success, true, "Correct exact source chain for BUILD_VERIFIER MUST succeed");
+  } finally {
+    rmSync(ws, { recursive: true, force: true });
+  }
+});
+
+test("P0-SE6 REQUIRED NEGATIVE TEST: TEST_SUITE_VERIFIER Backed By Unrelated Command (npm --version) MUST REJECT", () => {
+  const ws = tempWorkspace("se6-negative");
+  try {
+    const kernel = new TrustedKernel({ workspaceRoot: ws });
+    const verifier = new ProMaxVerifier();
+    const packager = new LabPackager();
+
+    const leggoRel = "workspaces/v2-missions/m-se6/leggo-integrated";
+    kernel.safeWriteWorkspaceFile(`${leggoRel}/package.json`, JSON.stringify({ name: "se6", version: "1.0.0", scripts: { test: "node -v" } }), "m-se6");
+    kernel.safeWriteWorkspaceFile(`${leggoRel}/src/index.ts`, "export const x = 1;", "m-se6");
+    const pkgContent = JSON.stringify({ name: "se6", version: "1.0.0", scripts: { test: "node -v" } });
+    const srcContent = "export const x = 1;";
+    const pkgHash = createHash("sha256").update(pkgContent).digest("hex");
+    const srcHash = createHash("sha256").update(srcContent).digest("hex");
+
+    const candidate: IntegratedCandidate = {
+      candidateId: "cand-se6",
+      missionId: "m-se6",
+      integratedArtifacts: [
+        { artifactId: "a1", path: "package.json", sha256: pkgHash, sizeBytes: pkgContent.length, missionId: "m-se6" },
+        { artifactId: "a2", path: "src/index.ts", sha256: srcHash, sizeBytes: srcContent.length, missionId: "m-se6" },
+      ],
+      resolvedConflicts: [],
+      sourceTraceability: { "package.json": "COLONY_A", "src/index.ts": "COLONY_A" },
+      workspacePath: leggoRel,
+    };
+    const snapshotHash = computeCandidateSnapshotHash(candidate.integratedArtifacts);
+
+    const context: ContractBoundStageContext = {
+      missionId: "m-se6",
+      authoritativeInputs: [],
+      policyVersions: ["v1.0.0"],
+      budgets: { virtualTicks: 100, providerCalls: 10, maxFixAttempts: 3 },
+      evidenceRefs: [],
+      missionStateRef: "VERIFYING",
+      executionMode: "DETERMINISTIC_FIXTURE_MODE",
+      contractPhase: "CONTRACT_BOUND",
+      frozenPlanContract: {
+        contractId: "c1", version: "v1.0.0", contractHash: "h1", objective: "Obj",
+        acceptanceCriteria: [{ id: "ac-test", description: "Unit tests pass", verificationMethod: "TEST", required: true, requiredRequirementId: "tr-test" }],
+        constraints: [], tasks: [], dependencies: [], allowedCapabilities: [],
+        requiredTests: [{ id: "tr-test", type: "TEST", verifier: "TEST_SUITE_VERIFIER", name: "T1", command: "npm test", expectedExitCode: 0, provesCriterionIds: ["ac-test"] }],
+        securityRequirements: [], expectedArtifacts: [], evidenceRequirements: [], riskClassification: "LOW", completionConditions: [], frozenAt: Date.now(),
+      },
+    };
+
+    // Source receipt: TRUSTED_KERNEL_COMMAND (npm --version) exit 0 success true
+    const sourceEvLaundered = kernel.emitInternalEvidence("TRUSTED_KERNEL_COMMAND", "m-se6", "PROMAX", {
+      executableId: "npm", args: ["--version"], exitCode: 0, success: true,
+    }, undefined, undefined, undefined, "TRACEABILITY");
+
+    // Semantic proof: TEST_SUITE_VERIFIER with matching IDs but backed by npm --version source
+    const proofLaundered = kernel.emitEvidence("TEST_SUITE_VERIFIER", "m-se6", "PROMAX", {
+      criterionId: "ac-test", testRequirementId: "tr-test", candidateSnapshotHash: snapshotHash, sourceEvidenceRef: sourceEvLaundered.evidenceId, proofKind: "QUALIFICATION_PROOF",
+    });
+
+    // Prevent internal verifier re-execution from generating a fresh valid proof for ac-test
+    const contextFailingTest: ContractBoundStageContext = {
+      ...context,
+      frozenPlanContract: {
+        ...context.frozenPlanContract,
+        requiredTests: [], // No requiredTests to re-execute, relying purely on provided evidence pool
+      },
+    };
+
+    const res = verifier.verifyCandidate(candidate, contextFailingTest, kernel, [sourceEvLaundered, proofLaundered]);
+
+    // MUST evaluate as UNVERIFIED, contractSatisfied = false, and Lab refuses delivery!
+    assert.equal(res.success, false, "Contract MUST NOT be satisfied when TEST proof is backed by npm --version");
+    assert.equal(res.assessment.contractSatisfied, false);
+
+    // Verify criterion ac-test failed or is unverified
+    assert.equal(res.assessment.verifiedCriteria.includes("ac-test"), false, "ac-test MUST NOT be in verifiedCriteria");
+    assert.equal(res.assessment.failedCriteria.includes("ac-test"), true, "ac-test MUST be in failedCriteria");
+
+    const acProof = res.proofMappings.find((p) => p.criterionId === "ac-test");
+    assert.equal(acProof?.status, "UNVERIFIED");
+
+    const labRes = packager.packageDeliverables(candidate, res.assessment, context, kernel, [sourceEvLaundered, proofLaundered]);
+    assert.equal(labRes.success, false);
+    assert.equal(labRes.reasonCode.startsWith("NAMLA_LAB_REFUSED"), true);
+  } finally {
+    rmSync(ws, { recursive: true, force: true });
+  }
+});
+
+test("P0-E7 9-Point Causal Replay & Source Evidence Validation Matrix", () => {
+  const ws = tempWorkspace("causal-matrix");
+  try {
+    const kernel = new TrustedKernel({ workspaceRoot: ws });
+    const verifier = new ProMaxVerifier();
+
+    const leggoRel = "workspaces/v2-missions/m-causal/leggo-integrated";
+    kernel.safeWriteWorkspaceFile(`${leggoRel}/src/index.ts`, "export const x = 1;", "m-causal");
+    const content = "export const x = 1;";
+    const hash = createHash("sha256").update(content).digest("hex");
+    const snapshotHash = computeCandidateSnapshotHash([{ artifactId: "a1", path: "src/index.ts", sha256: hash, sizeBytes: content.length, missionId: "m-causal" }]);
+
+    const candidate: IntegratedCandidate = {
+      candidateId: "cand-causal",
+      missionId: "m-causal",
+      integratedArtifacts: [{ artifactId: "a1", path: "src/index.ts", sha256: hash, sizeBytes: content.length, missionId: "m-causal" }],
+      resolvedConflicts: [],
+      sourceTraceability: { "src/index.ts": "COLONY_A" },
+      workspacePath: leggoRel,
+    };
+
+    const context: ContractBoundStageContext = {
+      missionId: "m-causal",
+      authoritativeInputs: [],
+      policyVersions: ["v1.0.0"],
+      budgets: { virtualTicks: 100, providerCalls: 10, maxFixAttempts: 3 },
+      evidenceRefs: [],
+      missionStateRef: "VERIFYING",
+      executionMode: "DETERMINISTIC_FIXTURE_MODE",
+      contractPhase: "CONTRACT_BOUND",
+      frozenPlanContract: {
+        contractId: "c1", version: "v1.0.0", contractHash: "h1", objective: "Obj",
+        acceptanceCriteria: [{ id: "ac-1", description: "AC1", verificationMethod: "TEST", required: true, requiredRequirementId: "tr-1" }],
+        constraints: [], tasks: [], dependencies: [], allowedCapabilities: [],
+        requiredTests: [], // Test external evidence pool matching without requiredTests re-execution
+        securityRequirements: [], expectedArtifacts: [], evidenceRequirements: [], riskClassification: "LOW", completionConditions: [], frozenAt: Date.now(),
+      },
+    };
+
+    // 1. Semantic proof with empty sourceEvidenceRef (fails closed)
+    const ev1 = kernel.emitEvidence("TEST_SUITE_VERIFIER", "m-causal", "PROMAX", {
+      criterionId: "ac-1", testRequirementId: "tr-1", candidateSnapshotHash: snapshotHash, sourceEvidenceRef: "", proofKind: "QUALIFICATION_PROOF",
+    });
+    assert.equal(verifier.verifyCandidate(candidate, context, kernel, [ev1]).success, false);
+
+    // 1b. Semantic proof with missing sourceEvidenceRef (fails closed)
+    const ev1b = kernel.emitEvidence("TEST_SUITE_VERIFIER", "m-causal", "PROMAX", {
+      criterionId: "ac-1", testRequirementId: "tr-1", candidateSnapshotHash: snapshotHash, proofKind: "QUALIFICATION_PROOF",
+    });
+    assert.equal(verifier.verifyCandidate(candidate, context, kernel, [ev1b]).success, false);
+
+    // 2. Semantic proof with nonexistent source evidence ID (fails closed)
+    const ev2 = kernel.emitEvidence("TEST_SUITE_VERIFIER", "m-causal", "PROMAX", {
+      criterionId: "ac-1", testRequirementId: "tr-1", candidateSnapshotHash: snapshotHash, sourceEvidenceRef: "ev-NONEXISTENT-SOURCE-ID", proofKind: "QUALIFICATION_PROOF",
+    });
+    assert.equal(verifier.verifyCandidate(candidate, context, kernel, [ev2]).success, false);
+
+    // 3. Source evidence from wrong mission (fails closed)
+    const sourceEvOtherMission = kernel.emitInternalEvidence("TRUSTED_KERNEL_COMMAND", "m-OTHER-MISSION", "PROMAX", { exitCode: 0, success: true }, undefined, undefined, undefined, "TRACEABILITY");
+    const ev3 = kernel.emitEvidence("TEST_SUITE_VERIFIER", "m-causal", "PROMAX", {
+      criterionId: "ac-1", testRequirementId: "tr-1", candidateSnapshotHash: snapshotHash, sourceEvidenceRef: sourceEvOtherMission.evidenceId, proofKind: "QUALIFICATION_PROOF",
+    });
+    assert.equal(verifier.verifyCandidate(candidate, context, kernel, [sourceEvOtherMission, ev3]).success, false);
+
+    // 4. Source command evidence status INVALIDATED (fails closed)
+    const sourceEvInvalidatedRaw = kernel.emitInternalEvidence("TRUSTED_KERNEL_COMMAND", "m-causal", "PROMAX", { exitCode: 0, success: true }, undefined, undefined, undefined, "TRACEABILITY");
+    const sourceEvInvalidated = { ...sourceEvInvalidatedRaw, status: "INVALIDATED" as const };
+    const ev4 = kernel.emitEvidence("TEST_SUITE_VERIFIER", "m-causal", "PROMAX", {
+      criterionId: "ac-1", testRequirementId: "tr-1", candidateSnapshotHash: snapshotHash, sourceEvidenceRef: sourceEvInvalidated.evidenceId, proofKind: "QUALIFICATION_PROOF",
+    });
+    assert.equal(verifier.verifyCandidate(candidate, context, kernel, [sourceEvInvalidated, ev4]).success, false);
+
+    // 5. Source command execution failed but semantic proof says VERIFIED (fails closed)
+    const sourceEvFailed = kernel.emitInternalEvidence("TRUSTED_KERNEL_COMMAND", "m-causal", "PROMAX", { exitCode: 1, success: false }, undefined, undefined, undefined, "TRACEABILITY");
+    const ev5 = kernel.emitEvidence("TEST_SUITE_VERIFIER", "m-causal", "PROMAX", {
+      criterionId: "ac-1", testRequirementId: "tr-1", candidateSnapshotHash: snapshotHash, sourceEvidenceRef: sourceEvFailed.evidenceId, proofKind: "QUALIFICATION_PROOF",
+    });
+    assert.equal(verifier.verifyCandidate(candidate, context, kernel, [sourceEvFailed, ev5]).success, false);
+
+    // 6. BUILD command receipt reused to back TEST proof (fails closed)
+    const sourceBuild = kernel.emitInternalEvidence("TRUSTED_KERNEL_COMMAND", "m-causal", "PROMAX", { executableId: "npm", args: ["run", "build"], exitCode: 0, success: true }, undefined, undefined, undefined, "TRACEABILITY");
+    const ev6 = kernel.emitEvidence("BUILD_VERIFIER", "m-causal", "PROMAX", {
+      criterionId: "ac-1", testRequirementId: "tr-1", candidateSnapshotHash: snapshotHash, sourceEvidenceRef: sourceBuild.evidenceId, proofKind: "QUALIFICATION_PROOF",
+    });
+    assert.equal(verifier.verifyCandidate(candidate, context, kernel, [sourceBuild, ev6]).success, false);
+
+    // 7. Docker command receipt reused for unrelated criterion (fails closed)
+    const sourceDocker = kernel.emitInternalEvidence("TRUSTED_KERNEL_COMMAND", "m-causal", "PROMAX", { executableId: "docker", args: ["build", "."], exitCode: 0, success: true }, undefined, undefined, undefined, "TRACEABILITY");
+    const ev7 = kernel.emitEvidence("DOCKER_BUILD_VERIFIER", "m-causal", "PROMAX", {
+      criterionId: "ac-UNRELATED-CRITERION", testRequirementId: "tr-1", candidateSnapshotHash: snapshotHash, sourceEvidenceRef: sourceDocker.evidenceId, proofKind: "QUALIFICATION_PROOF",
+    });
+    assert.equal(verifier.verifyCandidate(candidate, context, kernel, [sourceDocker, ev7]).success, false);
+
+    // 8. Source evidence superseded after qualification (fails closed)
+    const sourceEvSupersededRaw = kernel.emitInternalEvidence("TRUSTED_KERNEL_COMMAND", "m-causal", "PROMAX", { exitCode: 0, success: true }, undefined, undefined, undefined, "TRACEABILITY");
+    const sourceEvSuperseded = { ...sourceEvSupersededRaw, status: "SUPERSEDED" as const };
+    const ev8 = kernel.emitEvidence("TEST_SUITE_VERIFIER", "m-causal", "PROMAX", {
+      criterionId: "ac-1", testRequirementId: "tr-1", candidateSnapshotHash: snapshotHash, sourceEvidenceRef: sourceEvSuperseded.evidenceId, proofKind: "QUALIFICATION_PROOF",
+    });
+    assert.equal(verifier.verifyCandidate(candidate, context, kernel, [sourceEvSuperseded, ev8]).success, false);
+
+    // 9. Complete valid causal chain succeeds (P0-SE5: Uses exact contract-required command "npm test")
+    const sourceEvValid = kernel.emitInternalEvidence("TRUSTED_KERNEL_COMMAND", "m-causal", "PROMAX", { executableId: "npm", args: ["test"], exitCode: 0, success: true }, undefined, undefined, undefined, "TRACEABILITY");
+    const evValid = kernel.emitEvidence("TEST_SUITE_VERIFIER", "m-causal", "PROMAX", {
+      criterionId: "ac-1", testRequirementId: "tr-1", candidateSnapshotHash: snapshotHash, sourceEvidenceRef: sourceEvValid.evidenceId, proofKind: "QUALIFICATION_PROOF",
+    });
+    const res9 = verifier.verifyCandidate(candidate, context, kernel, [sourceEvValid, evValid]);
+    assert.equal(res9.success, true, "Complete valid causal evidence chain MUST succeed");
+  } finally {
+    rmSync(ws, { recursive: true, force: true });
+  }
+});
+
+test("P0-D6 8-Point Dedicated Docker Adversarial & Boundary Qualification Matrix", () => {
+  const ws = tempWorkspace("d6-matrix");
+  try {
+    const kernel = new TrustedKernel({ workspaceRoot: ws });
+    const verifier = new ProMaxVerifier();
+
+    const candRel = "workspaces/v2-missions/m-d6/colony_a";
+    kernel.safeWriteWorkspaceFile(`${candRel}/Dockerfile`, "FROM scratch\n", "m-d6");
+
+    // 1. Changing process.cwd() does not change Docker candidate resolution
+    const origCwd = process.cwd();
+    try {
+      const resCwd1 = kernel.executeDockerBuild(candRel, "m-d6", "PROMAX");
+      process.chdir("/tmp");
+      const resCwd2 = kernel.executeDockerBuild(candRel, "m-d6", "PROMAX");
+      assert.equal(resCwd1.reasonCode, resCwd2.reasonCode, "Docker candidate resolution MUST be identical regardless of process.cwd()");
+    } finally {
+      process.chdir(origCwd);
+    }
+
+    // 2. Candidate sibling workspace cannot become Docker cwd
+    const siblingEvilRel = "../" + resolve(ws).split("/").pop() + "-evil";
+    const resSibling = kernel.executeDockerBuild(siblingEvilRel, "m-d6", "PROMAX");
+    assert.equal(resSibling.success, false, "Candidate sibling workspace MUST NOT be accepted as Docker cwd");
+    assert.equal(
+      resSibling.reasonCode.includes("CANDIDATE_BOUNDARY_ESCAPE") ||
+      resSibling.reasonCode.includes("PATH_TRAVERSAL_REFUSED") ||
+      resSibling.reasonCode.includes("SYMLINK_ESCAPE_REFUSED") ||
+      resSibling.reasonCode.includes("DOCKERFILE_ABSENT") ||
+      resSibling.reasonCode.includes("FILE_NOT_FOUND"),
+      true
+    );
+
+    // 3. Symlinked candidate cwd escaping workspace is rejected
+    const outsideDir = tempWorkspace("d6-outside");
+    try {
+      const symlinkDirRel = `${candRel}/symlink-escape`;
+      const symlinkDirAbs = resolve(ws, symlinkDirRel);
+      mkdirSync(resolve(ws, candRel), { recursive: true });
+      symlinkSync(outsideDir, symlinkDirAbs);
+
+      const resSym = kernel.executeDockerBuild(`${candRel}/symlink-escape`, "m-d6", "PROMAX");
+      assert.equal(resSym.success, false, "Symlinked candidate cwd escaping workspace MUST be rejected");
+      assert.equal(
+        resSym.reasonCode.includes("SYMLINK_ESCAPE_REFUSED") ||
+        resSym.reasonCode.includes("CANDIDATE_BOUNDARY_ESCAPE"),
+        true
+      );
+    } finally {
+      rmSync(outsideDir, { recursive: true, force: true });
+    }
+
+    // 4. Docker command not authorized by TrustedKernel policy is rejected (non-build subcommands)
+    const resRun = kernel.executeCommand("docker" as any, ["run", "ubuntu"], "m-d6", "PROMAX");
+    assert.equal(resRun.success, false, "docker run MUST be rejected by policy");
+    assert.equal(resRun.reasonCode, "FORBIDDEN_COMMAND_REFUSED");
+
+    const resExec = kernel.executeCommand("docker" as any, ["exec", "-it", "container", "bash"], "m-d6", "PROMAX");
+    assert.equal(resExec.success, false, "docker exec MUST be rejected by policy");
+    assert.equal(resExec.reasonCode, "FORBIDDEN_COMMAND_REFUSED");
+
+    const resPush = kernel.executeCommand("docker" as any, ["push", "myrepo/image"], "m-d6", "PROMAX");
+    assert.equal(resPush.success, false, "docker push MUST be rejected by policy");
+    assert.equal(resPush.reasonCode, "FORBIDDEN_COMMAND_REFUSED");
+
+    // 5. Real executeDockerBuild command execution evidence chain test (P0-E5)
+    // Execute real executeDockerBuild and verify evidenceRecord exists and is linked
+    const realDockerRel = "workspaces/v2-missions/m-d6/real-docker-cand";
+    kernel.safeWriteWorkspaceFile(`${realDockerRel}/Dockerfile`, "FROM scratch\n", "m-d6");
+    const realDockerExecRes = kernel.executeDockerBuild(realDockerRel, "m-d6", "PROMAX");
+    assert.equal(realDockerExecRes.evidenceRecord !== undefined, true, "executeDockerBuild MUST return a valid evidenceRecord");
+    assert.equal(realDockerExecRes.evidenceRecord?.producer, "TRUSTED_KERNEL_COMMAND");
+    assert.equal(realDockerExecRes.evidenceRecord?.proofKind, "TRACEABILITY");
+
+    // Pass candidate to ProMaxVerifier and verify evidenceRef and sourceEvidenceRef in proof mapping match
+    const candRealDocker: IntegratedCandidate = {
+      candidateId: "cand-real-docker",
+      missionId: "m-d6",
+      integratedArtifacts: [{ artifactId: "a1", path: "Dockerfile", sha256: "df-hash", sizeBytes: 13, missionId: "m-d6" }],
+      resolvedConflicts: [],
+      sourceTraceability: {},
+      workspacePath: realDockerRel,
+    };
+    const ctxRealDocker: ContractBoundStageContext = {
+      missionId: "m-d6",
+      authoritativeInputs: [],
+      policyVersions: ["v1.0.0"],
+      budgets: { virtualTicks: 100, providerCalls: 10, maxFixAttempts: 3 },
+      evidenceRefs: [],
+      missionStateRef: "VERIFYING",
+      executionMode: "DETERMINISTIC_FIXTURE_MODE",
+      contractPhase: "CONTRACT_BOUND",
+      frozenPlanContract: {
+        contractId: "c1", version: "v1.0.0", contractHash: "h1", objective: "Obj",
+        acceptanceCriteria: [{ id: "ac-docker-real", description: "Docker Real", verificationMethod: "TEST", required: true, requiredRequirementId: "tr-docker-real" }],
+        constraints: [], tasks: [], dependencies: [], allowedCapabilities: [],
+        requiredTests: [{ id: "tr-docker-real", type: "DOCKER_BUILD", verifier: "DOCKER_BUILD_VERIFIER", name: "Docker", command: "docker build .", expectedExitCode: 0, provesCriterionIds: ["ac-docker-real"] }],
+        securityRequirements: [], expectedArtifacts: [], evidenceRequirements: [], riskClassification: "LOW", completionConditions: [], frozenAt: Date.now(),
+      },
+    };
+    const poolWithRealDocker = realDockerExecRes.evidenceRecord ? [realDockerExecRes.evidenceRecord] : [];
+    const pmRealDockerRes = verifier.verifyCandidate(candRealDocker, ctxRealDocker, kernel, poolWithRealDocker);
+    const dockerProofMap = pmRealDockerRes.proofMappings.find((p) => p.testRequirementId === "tr-docker-real");
+    assert.equal(dockerProofMap !== undefined, true);
+    assert.equal(dockerProofMap?.sourceEvidenceRef !== undefined && dockerProofMap.sourceEvidenceRef.length > 0, true, "Docker proof mapping MUST carry non-empty sourceEvidenceRef");
+
+    // 6. Docker environment unavailable / Dockerfile absent returns BLOCKED
+    const noDockerRel = "workspaces/v2-missions/m-d6/no-dockerfile";
+    kernel.safeWriteWorkspaceFile(`${noDockerRel}/src/index.ts`, "export const x = 1;", "m-d6");
+    const resAbsent = kernel.executeDockerBuild(noDockerRel, "m-d6", "PROMAX");
+    assert.equal(resAbsent.success, false);
+    assert.equal(resAbsent.reasonCode, "DOCKERFILE_ABSENT");
+
+    const candAbsent: IntegratedCandidate = {
+      candidateId: "cand-no-df",
+      missionId: "m-d6",
+      integratedArtifacts: [{ artifactId: "a1", path: "src/index.ts", sha256: "abc", sizeBytes: 10, missionId: "m-d6" }],
+      resolvedConflicts: [],
+      sourceTraceability: {},
+      workspacePath: noDockerRel,
+    };
+    const ctxDocker: ContractBoundStageContext = {
+      missionId: "m-d6",
+      authoritativeInputs: [],
+      policyVersions: ["v1.0.0"],
+      budgets: { virtualTicks: 100, providerCalls: 10, maxFixAttempts: 3 },
+      evidenceRefs: [],
+      missionStateRef: "VERIFYING",
+      executionMode: "DETERMINISTIC_FIXTURE_MODE",
+      contractPhase: "CONTRACT_BOUND",
+      frozenPlanContract: {
+        contractId: "c1", version: "v1.0.0", contractHash: "h1", objective: "Obj",
+        acceptanceCriteria: [{ id: "ac-doc", description: "Doc", verificationMethod: "TEST", required: true, requiredRequirementId: "tr-docker" }],
+        constraints: [], tasks: [], dependencies: [], allowedCapabilities: [],
+        requiredTests: [{ id: "tr-docker", type: "DOCKER_BUILD", verifier: "DOCKER_BUILD_VERIFIER", name: "Docker", command: "docker build .", expectedExitCode: 0, provesCriterionIds: ["ac-doc"] }],
+        securityRequirements: [], expectedArtifacts: [], evidenceRequirements: [], riskClassification: "LOW", completionConditions: [], frozenAt: Date.now(),
+      },
+    };
+    const pmResAbsent = verifier.verifyCandidate(candAbsent, ctxDocker, kernel, []);
+    assert.equal(pmResAbsent.success, false);
+    const proofAbsent = pmResAbsent.proofMappings.find((p) => p.criterionId === "tr-docker");
+    assert.equal(proofAbsent?.status, "BLOCKED", "Absent Dockerfile MUST classify as BLOCKED");
+
+    // 7. Docker build semantic failure returns FAILED
+    // If Dockerfile contains bad instructions and docker daemon runs, executeDockerBuild returns exit code != 0
+    const badDockerRel = "workspaces/v2-missions/m-d6/bad-dockerfile";
+    kernel.safeWriteWorkspaceFile(`${badDockerRel}/Dockerfile`, "INVALID_DOCKER_INSTRUCTION_XYZZY\n", "m-d6");
+    const resBadFile = kernel.executeDockerBuild(badDockerRel, "m-d6", "PROMAX");
+    // Either Docker executable resolution fails (EXECUTABLE_UNAUTHORIZED on Windows without pin or missing docker) or docker build fails
+    assert.equal(resBadFile.success, false);
+
+    // 8. Docker build cannot execute arbitrary additional subcommands through verifier API (P0-E6)
+    // Create a valid candidate WITH Dockerfile so failure is NOT due to missing Dockerfile
+    const validDockerRel = "workspaces/v2-missions/m-d6/valid-dockerfile-cand";
+    kernel.safeWriteWorkspaceFile(`${validDockerRel}/Dockerfile`, "FROM scratch\n", "m-d6");
+    const candValidDocker: IntegratedCandidate = {
+      candidateId: "cand-valid-docker",
+      missionId: "m-d6",
+      integratedArtifacts: [{ artifactId: "a1", path: "Dockerfile", sha256: "df-hash", sizeBytes: 13, missionId: "m-d6" }],
+      resolvedConflicts: [],
+      sourceTraceability: {},
+      workspacePath: validDockerRel,
+    };
+    const ctxArbitrary: ContractBoundStageContext = {
+      ...ctxDocker,
+      frozenPlanContract: {
+        ...ctxDocker.frozenPlanContract,
+        requiredTests: [{ id: "tr-docker-evil", type: "DOCKER_BUILD", verifier: "DOCKER_BUILD_VERIFIER", name: "Docker", command: "docker run --rm ubuntu rm -rf /", expectedExitCode: 0, provesCriterionIds: ["ac-doc"] }],
+      },
+    };
+    const pmResArb = verifier.verifyCandidate(candValidDocker, ctxArbitrary, kernel, []);
+    // DOCKER_BUILD_VERIFIER ignores reqTest.command ("docker run...") and executes strictly kernel.executeDockerBuild
+    const proofArb = pmResArb.proofMappings.find((p) => p.criterionId === "tr-docker-evil");
+    assert.equal(proofArb !== undefined, true);
+    // If docker run had been executed, CommandSafetyPolicy would throw FORBIDDEN_COMMAND_REFUSED and fail closed
+    assert.equal(proofArb?.observation.includes("docker run") === false, true, "Verifier MUST NOT execute raw reqTest.command docker run");
+  } finally {
+    rmSync(ws, { recursive: true, force: true });
+  }
+});
+
 test("P0-C10: Comprehensive Cross-Verifier Confusion Matrix Rejection Suite", () => {
   const ws = tempWorkspace("confusion-matrix");
   try {
@@ -202,7 +769,7 @@ test("P0-C10: Comprehensive Cross-Verifier Confusion Matrix Rejection Suite", ()
     assert.equal(verifier.verifyCandidate(candidate, context, kernel, [ev4]).success, false);
 
     // 5. Generic TRUSTED_KERNEL_COMMAND PASS with criterionId injected (rejected)
-    const ev5 = kernel.emitEvidence("TRUSTED_KERNEL_COMMAND", "m-conf", "PROMAX", {
+    const ev5 = kernel.emitInternalEvidence("TRUSTED_KERNEL_COMMAND", "m-conf", "PROMAX", {
       criterionId: "ac-1",
       proofKind: "QUALIFICATION_PROOF",
     });
@@ -676,6 +1243,7 @@ test("P0-S5 Matrix Case 7: Proof from previous candidate snapshot after modifyin
     const verifier = new ProMaxVerifier();
 
     const leggoRelPath = "workspaces/v2-missions/m-s5-7/leggo-integrated";
+    kernel.safeWriteWorkspaceFile(`${leggoRelPath}/package.json`, JSON.stringify({ name: "s5-7", version: "1.0.0", scripts: { test: "node -v" } }), "m-s5-7");
     const file1Path = "src/first.ts";
     const file2Path = "src/second.ts";
 
@@ -686,6 +1254,8 @@ test("P0-S5 Matrix Case 7: Proof from previous candidate snapshot after modifyin
     kernel.safeWriteWorkspaceFile(`${leggoRelPath}/${file1Path}`, file1Content, "m-s5-7");
     kernel.safeWriteWorkspaceFile(`${leggoRelPath}/${file2Path}`, file2ContentV1, "m-s5-7");
 
+    const pkgContent = JSON.stringify({ name: "s5-7", version: "1.0.0", scripts: { test: "node -v" } });
+    const pkgHash = createHash("sha256").update(pkgContent).digest("hex");
     const hash1 = createHash("sha256").update(file1Content).digest("hex");
     const hash2V1 = createHash("sha256").update(file2ContentV1).digest("hex");
     const hash2V2 = createHash("sha256").update(file2ContentV2).digest("hex");
@@ -694,16 +1264,20 @@ test("P0-S5 Matrix Case 7: Proof from previous candidate snapshot after modifyin
       candidateId: "cand-v1",
       missionId: "m-s5-7",
       integratedArtifacts: [
+        { artifactId: "a0", path: "package.json", sha256: pkgHash, sizeBytes: pkgContent.length, missionId: "m-s5-7" },
         { artifactId: "a1", path: file1Path, sha256: hash1, sizeBytes: file1Content.length, missionId: "m-s5-7" },
         { artifactId: "a2", path: file2Path, sha256: hash2V1, sizeBytes: file2ContentV1.length, missionId: "m-s5-7" },
       ],
       resolvedConflicts: [],
-      sourceTraceability: { [file1Path]: "COLONY_A", [file2Path]: "COLONY_A" },
+      sourceTraceability: { "package.json": "COLONY_A", [file1Path]: "COLONY_A", [file2Path]: "COLONY_A" },
       workspacePath: leggoRelPath,
     };
 
     // Calculate candidateSnapshotHash for Candidate V1
-    const snapshotHashV1 = createHash("sha256").update(`${file1Path}:${hash1};${file2Path}:${hash2V1}`).digest("hex");
+    const snapshotHashV1 = computeCandidateSnapshotHash(candidateV1.integratedArtifacts);
+
+    // Source command evidence for V1 snapshot proof matching TEST requirement (npm test)
+    const sourceEvV1 = kernel.emitInternalEvidence("TRUSTED_KERNEL_COMMAND", "m-s5-7", "PROMAX", { executableId: "npm", args: ["test"], exitCode: 0, success: true }, undefined, undefined, undefined, "TRACEABILITY");
 
     // Emit QUALIFICATION_PROOF bound to candidate V1 snapshot
     const evV1 = kernel.emitEvidence("TEST_SUITE_VERIFIER", "m-s5-7", "PROMAX", {
@@ -712,6 +1286,7 @@ test("P0-S5 Matrix Case 7: Proof from previous candidate snapshot after modifyin
       candidateSnapshotHash: snapshotHashV1,
       sha256: hash1,
       targetFile: file1Path,
+      sourceEvidenceRef: sourceEvV1.evidenceId,
       proofKind: "QUALIFICATION_PROOF",
     });
 
@@ -747,7 +1322,7 @@ test("P0-S5 Matrix Case 7: Proof from previous candidate snapshot after modifyin
     };
 
     // Verify V1 candidate against V1 evidence -> MUST PASS
-    const resV1 = verifier.verifyCandidate(candidateV1, context, kernel, [evV1]);
+    const resV1 = verifier.verifyCandidate(candidateV1, context, kernel, [sourceEvV1, evV1]);
     assert.equal(resV1.success, true, "V1 candidate with V1 snapshot proof MUST succeed");
 
     // Now mutate SECOND artifact (src/second.ts) on disk and update candidate to V2
@@ -766,7 +1341,7 @@ test("P0-S5 Matrix Case 7: Proof from previous candidate snapshot after modifyin
     };
 
     // Verify V2 candidate (with mutated 2nd artifact) against OLD V1 snapshot evidence -> MUST FAIL
-    const resV2 = verifier.verifyCandidate(candidateV2, context, kernel, [evV1]);
+    const resV2 = verifier.verifyCandidate(candidateV2, context, kernel, [sourceEvV1, evV1]);
     assert.equal(resV2.success, false, "V2 candidate with mutated second artifact MUST REJECT old V1 snapshot proof");
     assert.equal(resV2.assessment.contractSatisfied, false);
     const proofV2 = resV2.proofMappings.find((p) => p.criterionId === "ac-multi-file" && p.verifier === "UNMAPPED_CRITERION_VERIFIER");
@@ -1056,14 +1631,16 @@ test("P0-CB6 8-Point Candidate Boundary & Verifier Path Adversarial Matrix", () 
     };
 
     const validSnapshotHash = computeCandidateSnapshotHash(validCandidate.integratedArtifacts);
+    const validSourceEv = kernel.emitInternalEvidence("TRUSTED_KERNEL_COMMAND", "m-cb6", "PROMAX", { exitCode: 0, success: true }, undefined, undefined, undefined, "TRACEABILITY");
     const validEv = kernel.emitEvidence("TEST_SUITE_VERIFIER", "m-cb6", "PROMAX", {
       criterionId: "ac-1",
       testRequirementId: "tr-1",
       candidateSnapshotHash: validSnapshotHash,
+      sourceEvidenceRef: validSourceEv.evidenceId,
       proofKind: "QUALIFICATION_PROOF",
     });
 
-    const pmResValid = verifier.verifyCandidate(validCandidate, validCtx, kernel, [validEv]);
+    const pmResValid = verifier.verifyCandidate(validCandidate, validCtx, kernel, [validSourceEv, validEv]);
     assert.equal(pmResValid.success, true, "Nested valid candidate artifact MUST pass ProMax verification when correctly proved");
 
     // 3. Lab rejects artifact outside candidate workspace but still inside global TrustedKernel workspace
@@ -1108,7 +1685,7 @@ test("P0-CB6 8-Point Candidate Boundary & Verifier Path Adversarial Matrix", () 
     try {
       // process.cwd() path resolution in ProMax is completely eliminated; kernel handles candidate relative paths
       process.chdir("/tmp");
-      const pmRes8 = verifier.verifyCandidate(validCandidate, validCtx, kernel, [validEv]);
+      const pmRes8 = verifier.verifyCandidate(validCandidate, validCtx, kernel, [validSourceEv, validEv]);
       assert.equal(pmRes8.success, true, "Verifier path semantics MUST remain identical when process.cwd() changes");
     } finally {
       process.chdir(origCwd);

@@ -14,7 +14,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { resolve, join } from "path";
 import { createHash } from "crypto";
-import { ProMaxVerifier } from "../v2/promax/proMaxVerifier";
+import { ProMaxVerifier, computeCandidateSnapshotHash } from "../v2/promax/proMaxVerifier";
 import { TrustedKernel } from "../v2/kernel/trustedKernel";
 import { IntegratedCandidate } from "../v2/types/missionState";
 import { ContractBoundStageContext } from "../v2/types/stageContext";
@@ -30,19 +30,23 @@ test("ProMaxVerifier: Generates Proof Mappings and Verifies Observed Evidence", 
     const verifier = new ProMaxVerifier();
 
     const leggoRelPath = "workspaces/v2-missions/m-promax/leggo-integrated";
-    const content = "export const x = 1;\n";
-    const sha256 = createHash("sha256").update(content).digest("hex");
+    kernel.safeWriteWorkspaceFile(`${leggoRelPath}/package.json`, JSON.stringify({ name: "promax", version: "1.0.0", scripts: { test: "node -v" } }), "m-promax");
+    kernel.safeWriteWorkspaceFile(`${leggoRelPath}/src/index.ts`, "export const x = 1;\n", "m-promax");
 
-    kernel.safeWriteWorkspaceFile(`${leggoRelPath}/src/index.ts`, content, "m-promax");
+    const pkgContent = JSON.stringify({ name: "promax", version: "1.0.0", scripts: { test: "node -v" } });
+    const srcContent = "export const x = 1;\n";
+    const pkgHash = createHash("sha256").update(pkgContent).digest("hex");
+    const srcHash = createHash("sha256").update(srcContent).digest("hex");
 
     const candidate: IntegratedCandidate = {
       candidateId: "cand-1",
       missionId: "m-promax",
       integratedArtifacts: [
-        { artifactId: "art-1", path: "src/index.ts", sha256, sizeBytes: content.length, missionId: "m-promax" },
+        { artifactId: "art-0", path: "package.json", sha256: pkgHash, sizeBytes: pkgContent.length, missionId: "m-promax" },
+        { artifactId: "art-1", path: "src/index.ts", sha256: srcHash, sizeBytes: srcContent.length, missionId: "m-promax" },
       ],
       resolvedConflicts: [],
-      sourceTraceability: { "src/index.ts": "COLONY_A" },
+      sourceTraceability: { "package.json": "COLONY_A", "src/index.ts": "COLONY_A" },
       workspacePath: leggoRelPath,
     };
 
@@ -66,7 +70,7 @@ test("ProMaxVerifier: Generates Proof Mappings and Verifies Observed Evidence", 
         tasks: [],
         dependencies: [],
         allowedCapabilities: [],
-        requiredTests: [{ id: "t1", name: "Version Check", command: "npm --version", expectedExitCode: 0, provesCriterionIds: ["ac-1"] }],
+        requiredTests: [{ id: "t1", type: "TEST", verifier: "TEST_SUITE_VERIFIER", name: "Version Check", command: "npm test", expectedExitCode: 0, provesCriterionIds: ["ac-1"] }],
         securityRequirements: [{ id: "sec-1", rule: "NO_SECRET_LEAKAGE", failClosed: true }],
         expectedArtifacts: [],
         evidenceRequirements: [],
@@ -76,14 +80,22 @@ test("ProMaxVerifier: Generates Proof Mappings and Verifies Observed Evidence", 
       },
     };
 
+    const candidateSnapshotHash = computeCandidateSnapshotHash(candidate.integratedArtifacts);
+    // Execute genuine kernel command to produce authentic receipt
+    const cmdRes = kernel.executeCommand("npm" as any, ["test"], "m-promax", "PROMAX", leggoRelPath);
+    assert.equal(cmdRes.evidenceRecord !== undefined, true);
+
     const acEv = kernel.emitEvidence("TEST_SUITE_VERIFIER", "m-promax", "PROMAX", {
       criterionId: "ac-1",
+      testRequirementId: "t1",
       targetFile: "src/index.ts",
-      sha256,
+      sha256: srcHash,
+      candidateSnapshotHash,
+      sourceEvidenceRef: cmdRes.evidenceRecord?.evidenceId,
       proofKind: "QUALIFICATION_PROOF",
     });
 
-    const result = verifier.verifyCandidate(candidate, context, kernel, [acEv]);
+    const result = verifier.verifyCandidate(candidate, context, kernel, [cmdRes.evidenceRecord!, acEv]);
 
     assert.equal(result.success, true);
     assert.equal(result.proofMappings.length >= 2, true, "Proof mappings must exist");
