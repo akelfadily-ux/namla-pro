@@ -182,23 +182,50 @@ module.exports = { createTodoServer };
       name: "BuildGate",
       evaluate: async (ctx) => {
         const filePath = join(ctx.workspacePath, "src", "server.js");
+        const testFilePath = join(ctx.workspacePath, "test", "server.test.js");
         const fileExists = existsSync(filePath);
-        let syntaxValid = false;
+        let testPassed = false;
+        let exitCode = 1;
+        let output = "";
+
         if (fileExists) {
           try {
-            require(filePath);
-            syntaxValid = true;
-          } catch {
-            syntaxValid = false;
+            const { execSync } = require("child_process");
+            mkdirSync(join(ctx.workspacePath, "test"), { recursive: true });
+            const testContent = `
+const test = require("node:test");
+const assert = require("node:assert/strict");
+const { createTodoServer } = require("../src/server.js");
+
+test("Generated Todo Server Instantiation Contract", () => {
+  const server = createTodoServer();
+  assert.ok(server);
+  assert.equal(typeof server.listen, "function");
+});
+`;
+            writeFileSync(testFilePath, testContent, "utf8");
+            const execRes = execSync(`node --test "${testFilePath}"`, { stdio: "pipe" });
+            testPassed = true;
+            exitCode = 0;
+            output = execRes.toString("utf8");
+          } catch (e: any) {
+            testPassed = false;
+            exitCode = e.status || 1;
+            output = String(e.stderr?.toString("utf8") || e.stdout?.toString("utf8") || e.message);
           }
         }
-        const passed = fileExists && syntaxValid;
+        const passed = fileExists && testPassed;
         return {
           gate: "BuildGate",
           passed,
-          reason: passed ? "Server source file generated and successfully loaded by Node" : "Missing or invalid src/server.js",
-          evidence: [fileExists ? "src/server.js present" : "absent", syntaxValid ? "Node require syntax check passed" : "syntax failed"],
-          requiredFixes: [],
+          reason: passed ? "Generated project build and test command passed" : "Build/test command failed",
+          evidence: [
+            `cmd: node --test test/server.test.js (exitCode: ${exitCode})`,
+            fileExists ? "src/server.js present" : "absent",
+            `artifact: src/server.js`,
+            output.slice(0, 500),
+          ],
+          requiredFixes: passed ? [] : ["Fix generated server code and test contract"],
         };
       },
     };

@@ -132,37 +132,55 @@ module.exports = { createTodoServer };
       name: "BuildAndTestGate",
       evaluate: async (ctx) => {
         const filePath = join(ctx.workspacePath, "src", "server.js");
+        const testFilePath = join(ctx.workspacePath, "test", "server.test.js");
         const fileExists = existsSync(filePath);
         let checkPassed = false;
         let output = "";
+        let exitCode = 1;
 
         if (fileExists) {
           try {
             // 1. Syntax check
             execSync(`node -c "${filePath}"`, { stdio: "pipe" });
-            // 2. Real build/test execution check by requiring module and instantiating server
-            const { createTodoServer } = require(filePath);
-            const server = createTodoServer();
-            if (server && typeof server.listen === "function") {
-              checkPassed = true;
-              output = "Generated project server instantiated and verified via node contract test";
-            }
+
+            // 2. Write generated-project automated test file
+            mkdirSync(join(ctx.workspacePath, "test"), { recursive: true });
+            const testContent = `
+const test = require("node:test");
+const assert = require("node:assert/strict");
+const { createTodoServer } = require("../src/server.js");
+
+test("Generated Todo Server Instantiation Contract", () => {
+  const server = createTodoServer();
+  assert.ok(server);
+  assert.equal(typeof server.listen, "function");
+});
+`;
+            writeFileSync(testFilePath, testContent, "utf8");
+
+            // 3. Execute real generated-project test command via node --test
+            const execRes = execSync(`node --test "${testFilePath}"`, { stdio: "pipe" });
+            checkPassed = true;
+            exitCode = 0;
+            output = execRes.toString("utf8");
           } catch (e: any) {
             checkPassed = false;
-            output = String(e.stderr || e.message);
+            exitCode = e.status || 1;
+            output = String(e.stderr?.toString("utf8") || e.stdout?.toString("utf8") || e.message);
           }
         }
 
         return {
           gate: "BuildAndTestGate",
           passed: fileExists && checkPassed,
-          reason: fileExists && checkPassed ? "Generated project build and test contract passed" : "Build check failed",
+          reason: fileExists && checkPassed ? "Generated project build and test command passed" : "Build/test command failed",
           evidence: [
-            "cmd: node -c + require(server.js) + createTodoServer() instantiation",
+            `cmd: node --test test/server.test.js (exitCode: ${exitCode})`,
             fileExists ? "src/server.js present" : "absent",
+            `artifact: src/server.js`,
             output.slice(0, 500),
           ],
-          requiredFixes: checkPassed ? [] : ["Fix generated server code and exports"],
+          requiredFixes: checkPassed ? [] : ["Fix generated server code and test contract"],
         };
       },
     };
