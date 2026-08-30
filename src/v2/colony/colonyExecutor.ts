@@ -207,9 +207,9 @@ export class ColonyExecutor {
           };
         }
 
-        // Scope check against WorkPackage targetFiles
+        // Scope check against WorkPackage targetFiles (P0-B3): Exact canonical relative path equality required
         const isScoped = allowedTargetFiles.some(
-          (tf) => normalizedProposedPath === tf || normalizedProposedPath.endsWith(tf) || tf.endsWith(normalizedProposedPath)
+          (tf) => normalizedProposedPath === tf || normalizedProposedPath === tf.replace(/^\.\//, "")
         );
 
         if (!isScoped) {

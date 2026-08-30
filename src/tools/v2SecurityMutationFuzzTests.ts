@@ -26,26 +26,29 @@ test("HARDENING-11: Path Containment Fuzzing", () => {
   try {
     const kernel = new TrustedKernel({ workspaceRoot: ws });
 
-    const pathVariants = [
-      "src/index.ts",
-      "src/./index.ts",
-      "src/sub/../index.ts",
+    const outOfScopeVariants = [
       "../outside.ts",
       "../../etc/passwd",
       "/etc/shadow",
       "C:\\Windows\\System32\\cmd.exe",
       "src/foo/bar/../../../../../../etc/hosts",
       "%TEMP%\\malicious.bat",
+      "src/sub/../index.ts", // Contains .. traversal segment
     ];
 
-    for (const p of pathVariants) {
+    for (const p of outOfScopeVariants) {
       const writeRes = kernel.safeWriteWorkspaceFile(p, "content", "m-fuzz");
+      assert.equal(writeRes.success, false, `Path ${p} write must be refused`);
+    }
 
-      if (p.startsWith("..") || p.startsWith("/") || p.includes(":") || p.includes("%") || p.includes("etc")) {
-        assert.equal(writeRes.success, false, `Path ${p} write must be refused`);
-      } else {
-        assert.equal(writeRes.success, true, `In-scope path ${p} write must succeed`);
-      }
+    const inScopeVariants = [
+      "src/index.ts",
+      "src/sub/index.ts",
+    ];
+
+    for (const p of inScopeVariants) {
+      const writeRes = kernel.safeWriteWorkspaceFile(p, "content", "m-fuzz");
+      assert.equal(writeRes.success, true, `In-scope path ${p} write must succeed`);
     }
   } finally {
     rmSync(ws, { recursive: true, force: true });

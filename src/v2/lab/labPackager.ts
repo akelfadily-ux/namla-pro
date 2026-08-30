@@ -76,12 +76,19 @@ export class LabPackager {
       };
     }
 
-    // 4. Verify artifact identity & current disk hashes match candidate specifications
+    // 4. Verify artifact identity & current disk hashes match candidate specifications (P0-CB1)
     const checksums: Record<string, string> = {};
     for (const art of candidate.integratedArtifacts) {
-      const relPath = art.path.startsWith(candidate.workspacePath)
-        ? art.path
-        : `${candidate.workspacePath}/${art.path}`;
+      // Enforce segment-aware candidate workspace boundary containment
+      const candCheck = kernel.isInsideCandidateWorkspace(candidate.workspacePath, art.path);
+      if (!candCheck.ok) {
+        return {
+          success: false,
+          reasonCode: `NAMLA_LAB_REFUSED: Artifact ${art.path} escapes candidate workspace boundary (${candCheck.reasonCode})`,
+        };
+      }
+
+      const relPath = candCheck.resolvedRelPath;
 
       const read = kernel.safeReadWorkspaceFile(relPath);
       if (!read.success || read.content === undefined) {

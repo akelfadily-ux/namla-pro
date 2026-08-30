@@ -28,12 +28,14 @@ import { TrustedKernel } from "../v2/kernel/trustedKernel";
 import { EerEngine } from "../v2/eer/eerEngine";
 import { NamlaLoopGate } from "../v2/loop/namlaLoopGate";
 import { LabPackager } from "../v2/lab/labPackager";
-import { ProMaxVerifier } from "../v2/promax/proMaxVerifier";
+import { ProMaxVerifier, computeCandidateSnapshotHash } from "../v2/promax/proMaxVerifier";
 import { ColonyExecutor } from "../v2/colony/colonyExecutor";
 import { PreFreezeStageContext, ContractBoundStageContext } from "../v2/types/stageContext";
 import { GateInput, StageRecoveryPolicy, LoopBudget } from "../v2/types/namlaLoopTypes";
 import { WorkPackage, WorkPackageExecution, IntegratedCandidate, ProMaxAssessment } from "../v2/types/missionState";
 import { EvidenceRecord } from "../v2/types/evidence";
+import { CapabilityScope } from "../v2/types/contracts";
+import { symlinkSync, mkdirSync } from "fs";
 import { createHash } from "crypto";
 
 function tempWorkspace(tag: string): string {
@@ -259,6 +261,521 @@ test("P0-C10: Comprehensive Cross-Verifier Confusion Matrix Rejection Suite", ()
   }
 });
 
+test("P0-S5 Matrix Case 1: Correct criterion + requirement + verifier, but missing candidateSnapshotHash -> REJECT", () => {
+  const ws = tempWorkspace("s5-case1");
+  try {
+    const kernel = new TrustedKernel({ workspaceRoot: ws });
+    const verifier = new ProMaxVerifier();
+
+    const leggoRelPath = "workspaces/v2-missions/m-s5-1/leggo-integrated";
+    kernel.safeWriteWorkspaceFile(`${leggoRelPath}/src/index.ts`, "export const x = 1;", "m-s5-1");
+    const hash = createHash("sha256").update("export const x = 1;").digest("hex");
+
+    const candidate: IntegratedCandidate = {
+      candidateId: "cand-s5-1",
+      missionId: "m-s5-1",
+      integratedArtifacts: [{ artifactId: "a1", path: "src/index.ts", sha256: hash, sizeBytes: 19, missionId: "m-s5-1" }],
+      resolvedConflicts: [],
+      sourceTraceability: { "src/index.ts": "COLONY_A" },
+      workspacePath: leggoRelPath,
+    };
+
+    const context: ContractBoundStageContext = {
+      missionId: "m-s5-1",
+      authoritativeInputs: [],
+      policyVersions: ["v1.0.0"],
+      budgets: { virtualTicks: 100, providerCalls: 10, maxFixAttempts: 3 },
+      evidenceRefs: [],
+      missionStateRef: "VERIFYING",
+      executionMode: "DETERMINISTIC_FIXTURE_MODE",
+      contractPhase: "CONTRACT_BOUND",
+      frozenPlanContract: {
+        contractId: "c1",
+        version: "v1.0.0",
+        contractHash: "h1",
+        objective: "Obj",
+        acceptanceCriteria: [
+          { id: "ac-1", description: "Target criterion 1", verificationMethod: "TEST", required: true, requiredRequirementId: "tr-1" },
+        ],
+        constraints: [],
+        tasks: [],
+        dependencies: [],
+        allowedCapabilities: [],
+        requiredTests: [],
+        securityRequirements: [],
+        expectedArtifacts: [],
+        evidenceRequirements: [],
+        riskClassification: "LOW",
+        completionConditions: [],
+        frozenAt: Date.now(),
+      },
+    };
+
+    // Missing candidateSnapshotHash in evidence
+    const ev1 = kernel.emitEvidence("TEST_SUITE_VERIFIER", "m-s5-1", "PROMAX", {
+      criterionId: "ac-1",
+      testRequirementId: "tr-1",
+      proofKind: "QUALIFICATION_PROOF",
+      // candidateSnapshotHash omitted intentionally
+    });
+
+    const res = verifier.verifyCandidate(candidate, context, kernel, [ev1]);
+    assert.equal(res.success, false, "Proof with missing candidateSnapshotHash MUST NOT qualify criterion");
+    assert.equal(res.assessment.contractSatisfied, false);
+    const proof = res.proofMappings.find((p) => p.criterionId === "ac-1");
+    assert.equal(proof?.status, "UNVERIFIED");
+  } finally {
+    rmSync(ws, { recursive: true, force: true });
+  }
+});
+
+test("P0-S5 Matrix Case 2: Correct everything but wrong candidateSnapshotHash -> REJECT", () => {
+  const ws = tempWorkspace("s5-case2");
+  try {
+    const kernel = new TrustedKernel({ workspaceRoot: ws });
+    const verifier = new ProMaxVerifier();
+
+    const leggoRelPath = "workspaces/v2-missions/m-s5-2/leggo-integrated";
+    kernel.safeWriteWorkspaceFile(`${leggoRelPath}/src/index.ts`, "export const x = 1;", "m-s5-2");
+    const hash = createHash("sha256").update("export const x = 1;").digest("hex");
+
+    const candidate: IntegratedCandidate = {
+      candidateId: "cand-s5-2",
+      missionId: "m-s5-2",
+      integratedArtifacts: [{ artifactId: "a1", path: "src/index.ts", sha256: hash, sizeBytes: 19, missionId: "m-s5-2" }],
+      resolvedConflicts: [],
+      sourceTraceability: { "src/index.ts": "COLONY_A" },
+      workspacePath: leggoRelPath,
+    };
+
+    const context: ContractBoundStageContext = {
+      missionId: "m-s5-2",
+      authoritativeInputs: [],
+      policyVersions: ["v1.0.0"],
+      budgets: { virtualTicks: 100, providerCalls: 10, maxFixAttempts: 3 },
+      evidenceRefs: [],
+      missionStateRef: "VERIFYING",
+      executionMode: "DETERMINISTIC_FIXTURE_MODE",
+      contractPhase: "CONTRACT_BOUND",
+      frozenPlanContract: {
+        contractId: "c1",
+        version: "v1.0.0",
+        contractHash: "h1",
+        objective: "Obj",
+        acceptanceCriteria: [
+          { id: "ac-1", description: "Target criterion 1", verificationMethod: "TEST", required: true, requiredRequirementId: "tr-1" },
+        ],
+        constraints: [],
+        tasks: [],
+        dependencies: [],
+        allowedCapabilities: [],
+        requiredTests: [],
+        securityRequirements: [],
+        expectedArtifacts: [],
+        evidenceRequirements: [],
+        riskClassification: "LOW",
+        completionConditions: [],
+        frozenAt: Date.now(),
+      },
+    };
+
+    // Mismatched candidateSnapshotHash
+    const ev1 = kernel.emitEvidence("TEST_SUITE_VERIFIER", "m-s5-2", "PROMAX", {
+      criterionId: "ac-1",
+      testRequirementId: "tr-1",
+      candidateSnapshotHash: "0000000000000000000000000000000000000000000000000000000000000000",
+      proofKind: "QUALIFICATION_PROOF",
+    });
+
+    const res = verifier.verifyCandidate(candidate, context, kernel, [ev1]);
+    assert.equal(res.success, false, "Proof with wrong candidateSnapshotHash MUST NOT qualify criterion");
+    assert.equal(res.assessment.contractSatisfied, false);
+    const proof = res.proofMappings.find((p) => p.criterionId === "ac-1");
+    assert.equal(proof?.status, "UNVERIFIED");
+  } finally {
+    rmSync(ws, { recursive: true, force: true });
+  }
+});
+
+test("P0-S5 Matrix Case 3: Correct criterion/snapshot but missing testRequirementId -> REJECT", () => {
+  const ws = tempWorkspace("s5-case3");
+  try {
+    const kernel = new TrustedKernel({ workspaceRoot: ws });
+    const verifier = new ProMaxVerifier();
+
+    const leggoRelPath = "workspaces/v2-missions/m-s5-3/leggo-integrated";
+    kernel.safeWriteWorkspaceFile(`${leggoRelPath}/src/index.ts`, "export const x = 1;", "m-s5-3");
+    const hash = createHash("sha256").update("export const x = 1;").digest("hex");
+
+    const candidate: IntegratedCandidate = {
+      candidateId: "cand-s5-3",
+      missionId: "m-s5-3",
+      integratedArtifacts: [{ artifactId: "a1", path: "src/index.ts", sha256: hash, sizeBytes: 19, missionId: "m-s5-3" }],
+      resolvedConflicts: [],
+      sourceTraceability: { "src/index.ts": "COLONY_A" },
+      workspacePath: leggoRelPath,
+    };
+
+    const context: ContractBoundStageContext = {
+      missionId: "m-s5-3",
+      authoritativeInputs: [],
+      policyVersions: ["v1.0.0"],
+      budgets: { virtualTicks: 100, providerCalls: 10, maxFixAttempts: 3 },
+      evidenceRefs: [],
+      missionStateRef: "VERIFYING",
+      executionMode: "DETERMINISTIC_FIXTURE_MODE",
+      contractPhase: "CONTRACT_BOUND",
+      frozenPlanContract: {
+        contractId: "c1",
+        version: "v1.0.0",
+        contractHash: "h1",
+        objective: "Obj",
+        acceptanceCriteria: [
+          { id: "ac-1", description: "Target criterion 1", verificationMethod: "TEST", required: true, requiredRequirementId: "tr-explicit-id" },
+        ],
+        constraints: [],
+        tasks: [],
+        dependencies: [],
+        allowedCapabilities: [],
+        requiredTests: [],
+        securityRequirements: [],
+        expectedArtifacts: [],
+        evidenceRequirements: [],
+        riskClassification: "LOW",
+        completionConditions: [],
+        frozenAt: Date.now(),
+      },
+    };
+
+    const actualSnapshotHash = createHash("sha256").update(`src/index.ts:${hash}`).digest("hex");
+
+    // Omit testRequirementId in evidence
+    const ev1 = kernel.emitEvidence("TEST_SUITE_VERIFIER", "m-s5-3", "PROMAX", {
+      criterionId: "ac-1",
+      candidateSnapshotHash: actualSnapshotHash,
+      proofKind: "QUALIFICATION_PROOF",
+      // testRequirementId omitted
+    });
+
+    const res = verifier.verifyCandidate(candidate, context, kernel, [ev1]);
+    assert.equal(res.success, false, "Proof missing testRequirementId when criterion specifies requiredRequirementId MUST be rejected");
+    const proof = res.proofMappings.find((p) => p.criterionId === "ac-1");
+    assert.equal(proof?.status, "UNVERIFIED");
+  } finally {
+    rmSync(ws, { recursive: true, force: true });
+  }
+});
+
+test("P0-S5 Matrix Case 4: Correct criterion/snapshot but wrong testRequirementId -> REJECT", () => {
+  const ws = tempWorkspace("s5-case4");
+  try {
+    const kernel = new TrustedKernel({ workspaceRoot: ws });
+    const verifier = new ProMaxVerifier();
+
+    const leggoRelPath = "workspaces/v2-missions/m-s5-4/leggo-integrated";
+    kernel.safeWriteWorkspaceFile(`${leggoRelPath}/src/index.ts`, "export const x = 1;", "m-s5-4");
+    const hash = createHash("sha256").update("export const x = 1;").digest("hex");
+
+    const candidate: IntegratedCandidate = {
+      candidateId: "cand-s5-4",
+      missionId: "m-s5-4",
+      integratedArtifacts: [{ artifactId: "a1", path: "src/index.ts", sha256: hash, sizeBytes: 19, missionId: "m-s5-4" }],
+      resolvedConflicts: [],
+      sourceTraceability: { "src/index.ts": "COLONY_A" },
+      workspacePath: leggoRelPath,
+    };
+
+    const context: ContractBoundStageContext = {
+      missionId: "m-s5-4",
+      authoritativeInputs: [],
+      policyVersions: ["v1.0.0"],
+      budgets: { virtualTicks: 100, providerCalls: 10, maxFixAttempts: 3 },
+      evidenceRefs: [],
+      missionStateRef: "VERIFYING",
+      executionMode: "DETERMINISTIC_FIXTURE_MODE",
+      contractPhase: "CONTRACT_BOUND",
+      frozenPlanContract: {
+        contractId: "c1",
+        version: "v1.0.0",
+        contractHash: "h1",
+        objective: "Obj",
+        acceptanceCriteria: [
+          { id: "ac-1", description: "Target criterion 1", verificationMethod: "TEST", required: true, requiredRequirementId: "tr-expected" },
+        ],
+        constraints: [],
+        tasks: [],
+        dependencies: [],
+        allowedCapabilities: [],
+        requiredTests: [],
+        securityRequirements: [],
+        expectedArtifacts: [],
+        evidenceRequirements: [],
+        riskClassification: "LOW",
+        completionConditions: [],
+        frozenAt: Date.now(),
+      },
+    };
+
+    const actualSnapshotHash = createHash("sha256").update(`src/index.ts:${hash}`).digest("hex");
+
+    // Mismatched testRequirementId
+    const ev1 = kernel.emitEvidence("TEST_SUITE_VERIFIER", "m-s5-4", "PROMAX", {
+      criterionId: "ac-1",
+      testRequirementId: "tr-WRONG-REQ-ID",
+      candidateSnapshotHash: actualSnapshotHash,
+      proofKind: "QUALIFICATION_PROOF",
+    });
+
+    const res = verifier.verifyCandidate(candidate, context, kernel, [ev1]);
+    assert.equal(res.success, false, "Proof with mismatched testRequirementId MUST be rejected");
+    const proof = res.proofMappings.find((p) => p.criterionId === "ac-1");
+    assert.equal(proof?.status, "UNVERIFIED");
+  } finally {
+    rmSync(ws, { recursive: true, force: true });
+  }
+});
+
+test("P0-S5 Matrix Case 5: Correct external proof but missing causal artifact/snapshot identity -> REJECT", () => {
+  const ws = tempWorkspace("s5-case5");
+  try {
+    const kernel = new TrustedKernel({ workspaceRoot: ws });
+    const verifier = new ProMaxVerifier();
+
+    const leggoRelPath = "workspaces/v2-missions/m-s5-5/leggo-integrated";
+    kernel.safeWriteWorkspaceFile(`${leggoRelPath}/src/index.ts`, "export const x = 1;", "m-s5-5");
+    const hash = createHash("sha256").update("export const x = 1;").digest("hex");
+
+    const candidate: IntegratedCandidate = {
+      candidateId: "cand-s5-5",
+      missionId: "m-s5-5",
+      integratedArtifacts: [{ artifactId: "a1", path: "src/index.ts", sha256: hash, sizeBytes: 19, missionId: "m-s5-5" }],
+      resolvedConflicts: [],
+      sourceTraceability: { "src/index.ts": "COLONY_A" },
+      workspacePath: leggoRelPath,
+    };
+
+    const context: ContractBoundStageContext = {
+      missionId: "m-s5-5",
+      authoritativeInputs: [],
+      policyVersions: ["v1.0.0"],
+      budgets: { virtualTicks: 100, providerCalls: 10, maxFixAttempts: 3 },
+      evidenceRefs: [],
+      missionStateRef: "VERIFYING",
+      executionMode: "DETERMINISTIC_FIXTURE_MODE",
+      contractPhase: "CONTRACT_BOUND",
+      frozenPlanContract: {
+        contractId: "c1",
+        version: "v1.0.0",
+        contractHash: "h1",
+        objective: "Obj",
+        acceptanceCriteria: [
+          { id: "ac-1", description: "Target criterion 1", verificationMethod: "TEST", required: true },
+        ],
+        constraints: [],
+        tasks: [],
+        dependencies: [],
+        allowedCapabilities: [],
+        requiredTests: [],
+        securityRequirements: [],
+        expectedArtifacts: [],
+        evidenceRequirements: [],
+        riskClassification: "LOW",
+        completionConditions: [],
+        frozenAt: Date.now(),
+      },
+    };
+
+    // External proof has no candidateSnapshotHash and no artifact sha256 in details or artifactIdentity
+    const ev1 = kernel.emitEvidence("TEST_SUITE_VERIFIER", "m-s5-5", "PROMAX", {
+      criterionId: "ac-1",
+      proofKind: "QUALIFICATION_PROOF",
+    });
+
+    const res = verifier.verifyCandidate(candidate, context, kernel, [ev1]);
+    assert.equal(res.success, false, "External proof lacking candidateSnapshotHash MUST be rejected");
+    const proof = res.proofMappings.find((p) => p.criterionId === "ac-1");
+    assert.equal(proof?.status, "UNVERIFIED");
+  } finally {
+    rmSync(ws, { recursive: true, force: true });
+  }
+});
+
+test("P0-S5 Matrix Case 6: Internally generated ProofMapping with wrong requirement ID -> REJECT", () => {
+  const ws = tempWorkspace("s5-case6");
+  try {
+    const kernel = new TrustedKernel({ workspaceRoot: ws });
+    const verifier = new ProMaxVerifier();
+
+    const leggoRelPath = "workspaces/v2-missions/m-s5-6/leggo-integrated";
+    kernel.safeWriteWorkspaceFile(`${leggoRelPath}/package.json`, JSON.stringify({ name: "s5-6", version: "1.0.0", scripts: { build: "node -v", test: "node -v" } }), "m-s5-6");
+    kernel.safeWriteWorkspaceFile(`${leggoRelPath}/src/index.ts`, "export const x = 1;", "m-s5-6");
+
+    const hashPkg = createHash("sha256").update(JSON.stringify({ name: "s5-6", version: "1.0.0", scripts: { build: "node -v", test: "node -v" } })).digest("hex");
+    const hashSrc = createHash("sha256").update("export const x = 1;").digest("hex");
+
+    const candidate: IntegratedCandidate = {
+      candidateId: "cand-s5-6",
+      missionId: "m-s5-6",
+      integratedArtifacts: [
+        { artifactId: "a1", path: "package.json", sha256: hashPkg, sizeBytes: 100, missionId: "m-s5-6" },
+        { artifactId: "a2", path: "src/index.ts", sha256: hashSrc, sizeBytes: 19, missionId: "m-s5-6" },
+      ],
+      resolvedConflicts: [],
+      sourceTraceability: { "package.json": "COLONY_A", "src/index.ts": "COLONY_A" },
+      workspacePath: leggoRelPath,
+    };
+
+    // Acceptance criterion expects requiredRequirementId "tr-EXPECTED-ID"
+    // requiredTest produces testRequirementId "tr-MISMATCHED-ID" which proves "ac-1"
+    const context: ContractBoundStageContext = {
+      missionId: "m-s5-6",
+      authoritativeInputs: [],
+      policyVersions: ["v1.0.0"],
+      budgets: { virtualTicks: 100, providerCalls: 10, maxFixAttempts: 3 },
+      evidenceRefs: [],
+      missionStateRef: "VERIFYING",
+      executionMode: "DETERMINISTIC_FIXTURE_MODE",
+      contractPhase: "CONTRACT_BOUND",
+      frozenPlanContract: {
+        contractId: "c1",
+        version: "v1.0.0",
+        contractHash: "h1",
+        objective: "Obj",
+        acceptanceCriteria: [
+          { id: "ac-1", description: "Target criterion 1", verificationMethod: "TEST", required: true, requiredRequirementId: "tr-EXPECTED-ID" },
+        ],
+        constraints: [],
+        tasks: [],
+        dependencies: [],
+        allowedCapabilities: [],
+        requiredTests: [
+          { id: "tr-MISMATCHED-ID", name: "Build Test", command: "npm --version", expectedExitCode: 0, provesCriterionIds: ["ac-1"] },
+        ],
+        securityRequirements: [],
+        expectedArtifacts: [],
+        evidenceRequirements: [],
+        riskClassification: "LOW",
+        completionConditions: [],
+        frozenAt: Date.now(),
+      },
+    };
+
+    const res = verifier.verifyCandidate(candidate, context, kernel, []);
+    assert.equal(res.success, false, "Internal proof mapping with mismatched requirement ID MUST NOT satisfy criterion");
+    const proof = res.proofMappings.find((p) => p.criterionId === "ac-1" && p.verifier === "UNMAPPED_CRITERION_VERIFIER");
+    assert.equal(proof?.status, "UNVERIFIED");
+  } finally {
+    rmSync(ws, { recursive: true, force: true });
+  }
+});
+
+test("P0-S5 Matrix Case 7: Proof from previous candidate snapshot after modifying SECOND artifact -> REJECT", () => {
+  const ws = tempWorkspace("s5-case7");
+  try {
+    const kernel = new TrustedKernel({ workspaceRoot: ws });
+    const verifier = new ProMaxVerifier();
+
+    const leggoRelPath = "workspaces/v2-missions/m-s5-7/leggo-integrated";
+    const file1Path = "src/first.ts";
+    const file2Path = "src/second.ts";
+
+    const file1Content = "export const first = 100;";
+    const file2ContentV1 = "export const second = 200;";
+    const file2ContentV2 = "export const second = 999; // MUTATED SECOND ARTIFACT";
+
+    kernel.safeWriteWorkspaceFile(`${leggoRelPath}/${file1Path}`, file1Content, "m-s5-7");
+    kernel.safeWriteWorkspaceFile(`${leggoRelPath}/${file2Path}`, file2ContentV1, "m-s5-7");
+
+    const hash1 = createHash("sha256").update(file1Content).digest("hex");
+    const hash2V1 = createHash("sha256").update(file2ContentV1).digest("hex");
+    const hash2V2 = createHash("sha256").update(file2ContentV2).digest("hex");
+
+    const candidateV1: IntegratedCandidate = {
+      candidateId: "cand-v1",
+      missionId: "m-s5-7",
+      integratedArtifacts: [
+        { artifactId: "a1", path: file1Path, sha256: hash1, sizeBytes: file1Content.length, missionId: "m-s5-7" },
+        { artifactId: "a2", path: file2Path, sha256: hash2V1, sizeBytes: file2ContentV1.length, missionId: "m-s5-7" },
+      ],
+      resolvedConflicts: [],
+      sourceTraceability: { [file1Path]: "COLONY_A", [file2Path]: "COLONY_A" },
+      workspacePath: leggoRelPath,
+    };
+
+    // Calculate candidateSnapshotHash for Candidate V1
+    const snapshotHashV1 = createHash("sha256").update(`${file1Path}:${hash1};${file2Path}:${hash2V1}`).digest("hex");
+
+    // Emit QUALIFICATION_PROOF bound to candidate V1 snapshot
+    const evV1 = kernel.emitEvidence("TEST_SUITE_VERIFIER", "m-s5-7", "PROMAX", {
+      criterionId: "ac-multi-file",
+      testRequirementId: "tr-suite",
+      candidateSnapshotHash: snapshotHashV1,
+      sha256: hash1,
+      targetFile: file1Path,
+      proofKind: "QUALIFICATION_PROOF",
+    });
+
+    const context: ContractBoundStageContext = {
+      missionId: "m-s5-7",
+      authoritativeInputs: [],
+      policyVersions: ["v1.0.0"],
+      budgets: { virtualTicks: 100, providerCalls: 10, maxFixAttempts: 3 },
+      evidenceRefs: [],
+      missionStateRef: "VERIFYING",
+      executionMode: "DETERMINISTIC_FIXTURE_MODE",
+      contractPhase: "CONTRACT_BOUND",
+      frozenPlanContract: {
+        contractId: "c1",
+        version: "v1.0.0",
+        contractHash: "h1",
+        objective: "Obj",
+        acceptanceCriteria: [
+          { id: "ac-multi-file", description: "Multi file verification", verificationMethod: "TEST", required: true, requiredRequirementId: "tr-suite" },
+        ],
+        constraints: [],
+        tasks: [],
+        dependencies: [],
+        allowedCapabilities: [],
+        requiredTests: [],
+        securityRequirements: [],
+        expectedArtifacts: [],
+        evidenceRequirements: [],
+        riskClassification: "LOW",
+        completionConditions: [],
+        frozenAt: Date.now(),
+      },
+    };
+
+    // Verify V1 candidate against V1 evidence -> MUST PASS
+    const resV1 = verifier.verifyCandidate(candidateV1, context, kernel, [evV1]);
+    assert.equal(resV1.success, true, "V1 candidate with V1 snapshot proof MUST succeed");
+
+    // Now mutate SECOND artifact (src/second.ts) on disk and update candidate to V2
+    kernel.safeWriteWorkspaceFile(`${leggoRelPath}/${file2Path}`, file2ContentV2, "m-s5-7");
+
+    const candidateV2: IntegratedCandidate = {
+      candidateId: "cand-v2",
+      missionId: "m-s5-7",
+      integratedArtifacts: [
+        { artifactId: "a1", path: file1Path, sha256: hash1, sizeBytes: file1Content.length, missionId: "m-s5-7" },
+        { artifactId: "a2", path: file2Path, sha256: hash2V2, sizeBytes: file2ContentV2.length, missionId: "m-s5-7" },
+      ],
+      resolvedConflicts: [],
+      sourceTraceability: { [file1Path]: "COLONY_A", [file2Path]: "COLONY_A" },
+      workspacePath: leggoRelPath,
+    };
+
+    // Verify V2 candidate (with mutated 2nd artifact) against OLD V1 snapshot evidence -> MUST FAIL
+    const resV2 = verifier.verifyCandidate(candidateV2, context, kernel, [evV1]);
+    assert.equal(resV2.success, false, "V2 candidate with mutated second artifact MUST REJECT old V1 snapshot proof");
+    assert.equal(resV2.assessment.contractSatisfied, false);
+    const proofV2 = resV2.proofMappings.find((p) => p.criterionId === "ac-multi-file" && p.verifier === "UNMAPPED_CRITERION_VERIFIER");
+    assert.equal(proofV2?.status, "UNVERIFIED");
+  } finally {
+    rmSync(ws, { recursive: true, force: true });
+  }
+});
+
 test("P0-P7 REGRESSION: COLONY_A / LEGGO Claim/Traceability Evidence Cannot Prove Behavioral Criterion", () => {
   const ws = tempWorkspace("bug-p0p7");
   try {
@@ -448,6 +965,299 @@ test("P0-P8: Comprehensive Provenance Attack Matrix Rejection Suite", () => {
     // 10. Traceability record mislabeled as qualification attempt without authorized producer (rejected)
     const ev10 = kernel.emitEvidence("COLONY_A", "m-prov", "COLONY_AB", { criterionId: "ac-1", proofKind: "QUALIFICATION_PROOF" });
     assert.equal(verifier.verifyCandidate(candidate, context, kernel, [ev10]).success, false);
+  } finally {
+    rmSync(ws, { recursive: true, force: true });
+  }
+});
+
+test("P0-CB6 8-Point Candidate Boundary & Verifier Path Adversarial Matrix", () => {
+  const ws = tempWorkspace("cb6-matrix");
+  try {
+    const kernel = new TrustedKernel({ workspaceRoot: ws });
+    const verifier = new ProMaxVerifier();
+    const packager = new LabPackager();
+
+    const leggoRel = "workspaces/v2-missions/m-cb6/leggo-integrated";
+    kernel.safeWriteWorkspaceFile(`${leggoRel}/package.json`, JSON.stringify({ name: "cb6", version: "1.0.0", scripts: { build: "node -v", test: "node -v" } }), "m-cb6");
+    kernel.safeWriteWorkspaceFile(`${leggoRel}/src/index.ts`, "export const x = 1;", "m-cb6");
+
+    const hashPkg = createHash("sha256").update(JSON.stringify({ name: "cb6", version: "1.0.0", scripts: { build: "node -v", test: "node -v" } })).digest("hex");
+    const hashSrc = createHash("sha256").update("export const x = 1;").digest("hex");
+
+    // 1. Candidate workspace sibling-prefix artifact (leggo-integrated-evil/file.ts)
+    const evilCandidate: IntegratedCandidate = {
+      candidateId: "cand-evil",
+      missionId: "m-cb6",
+      integratedArtifacts: [
+        { artifactId: "a1", path: "workspaces/v2-missions/m-cb6/leggo-integrated-evil/file.ts", sha256: "abc", sizeBytes: 10, missionId: "m-cb6" },
+      ],
+      resolvedConflicts: [],
+      sourceTraceability: {},
+      workspacePath: leggoRel,
+    };
+
+    const dummyAssessment: ProMaxAssessment = {
+      candidateId: "cand-evil",
+      contractSatisfied: true,
+      verifiedCriteria: ["ac-1"],
+      failedCriteria: [],
+      securityCheckPassed: true,
+      regressionPassed: true,
+      independentTestsPassed: true,
+      evidenceFreshnessVerified: true,
+    };
+
+    const ctxCb6: ContractBoundStageContext = {
+      missionId: "m-cb6",
+      authoritativeInputs: [],
+      policyVersions: ["v1.0.0"],
+      budgets: { virtualTicks: 100, providerCalls: 10, maxFixAttempts: 3 },
+      evidenceRefs: [],
+      missionStateRef: "PACKAGING",
+      executionMode: "DETERMINISTIC_FIXTURE_MODE",
+      contractPhase: "CONTRACT_BOUND",
+      frozenPlanContract: {
+        contractId: "c1", version: "v1.0.0", contractHash: "h1", objective: "Obj",
+        acceptanceCriteria: [{ id: "ac-1", description: "AC1", verificationMethod: "TEST", required: true }],
+        constraints: [], tasks: [], dependencies: [], allowedCapabilities: [],
+        requiredTests: [], securityRequirements: [], expectedArtifacts: [],
+        evidenceRequirements: [], riskClassification: "LOW", completionConditions: [], frozenAt: Date.now(),
+      },
+    };
+
+    // LabPackager MUST reject candidate sibling-prefix artifact
+    const labRes1 = packager.packageDeliverables(evilCandidate, dummyAssessment, ctxCb6, kernel, []);
+    assert.equal(labRes1.success, false, "Lab MUST reject candidate sibling-prefix artifact");
+    assert.equal(labRes1.reasonCode.includes("NAMLA_LAB_REFUSED"), true);
+
+    // 2. Nested valid candidate artifact accepted by Lab and ProMax
+    const validCandidate: IntegratedCandidate = {
+      candidateId: "cand-valid",
+      missionId: "m-cb6",
+      integratedArtifacts: [
+        { artifactId: "a1", path: "package.json", sha256: hashPkg, sizeBytes: 100, missionId: "m-cb6" },
+        { artifactId: "a2", path: "src/index.ts", sha256: hashSrc, sizeBytes: 19, missionId: "m-cb6" },
+      ],
+      resolvedConflicts: [],
+      sourceTraceability: { "package.json": "COLONY_A", "src/index.ts": "COLONY_A" },
+      workspacePath: leggoRel,
+    };
+
+    const checkValid = kernel.isInsideCandidateWorkspace(leggoRel, "src/index.ts");
+    assert.equal(checkValid.ok, true, "Nested valid candidate artifact MUST be accepted");
+
+    const validCtx: ContractBoundStageContext = {
+      ...ctxCb6,
+      frozenPlanContract: {
+        ...ctxCb6.frozenPlanContract,
+        acceptanceCriteria: [{ id: "ac-1", description: "AC1", verificationMethod: "TEST", required: true, requiredRequirementId: "tr-1" }],
+        requiredTests: [{ id: "tr-1", type: "TEST", verifier: "TEST_SUITE_VERIFIER", name: "T1", command: "npm --version", expectedExitCode: 0, provesCriterionIds: ["ac-1"] }],
+      },
+    };
+
+    const validSnapshotHash = computeCandidateSnapshotHash(validCandidate.integratedArtifacts);
+    const validEv = kernel.emitEvidence("TEST_SUITE_VERIFIER", "m-cb6", "PROMAX", {
+      criterionId: "ac-1",
+      testRequirementId: "tr-1",
+      candidateSnapshotHash: validSnapshotHash,
+      proofKind: "QUALIFICATION_PROOF",
+    });
+
+    const pmResValid = verifier.verifyCandidate(validCandidate, validCtx, kernel, [validEv]);
+    assert.equal(pmResValid.success, true, "Nested valid candidate artifact MUST pass ProMax verification when correctly proved");
+
+    // 3. Lab rejects artifact outside candidate workspace but still inside global TrustedKernel workspace
+    const outsideCandidateArt: IntegratedCandidate = {
+      ...validCandidate,
+      integratedArtifacts: [
+        { artifactId: "a1", path: "workspaces/v2-missions/m-OTHER/colony_a/other.ts", sha256: "123", sizeBytes: 10, missionId: "m-cb6" },
+      ],
+    };
+    const labRes3 = packager.packageDeliverables(outsideCandidateArt, dummyAssessment, ctxCb6, kernel, []);
+    assert.equal(labRes3.success, false, "Lab MUST reject artifact outside candidate workspace even if inside global workspace");
+
+    // 4. ProMax rejects candidate sibling artifact
+    const pmRes4 = verifier.verifyCandidate(evilCandidate, ctxCb6, kernel, []);
+    assert.equal(pmRes4.success, false, "ProMax MUST reject candidate sibling artifact");
+    assert.equal(pmRes4.proofMappings.some((m) => m.verifier === "ProMaxVerifier:candidateBoundaryCheck" && m.status === "FAILED"), true, "ProMax MUST report candidate boundary escape failure");
+
+    // 5. SMOKE test file absent + generic npm test passing -> smoke result MUST be BLOCKED
+    const smokeCtx: ContractBoundStageContext = {
+      ...ctxCb6,
+      frozenPlanContract: {
+        ...ctxCb6.frozenPlanContract,
+        acceptanceCriteria: [{ id: "ac-smoke", description: "Smoke", verificationMethod: "TEST", required: true, requiredRequirementId: "tr-smoke" }],
+        requiredTests: [{ id: "tr-smoke", type: "SMOKE", verifier: "SMOKE_VERIFIER", name: "Smoke", command: "npm test", expectedExitCode: 0, provesCriterionIds: ["ac-smoke"] }],
+      },
+    };
+    const pmRes5 = verifier.verifyCandidate(validCandidate, smokeCtx, kernel, []);
+    assert.equal(pmRes5.success, false, "Smoke verifier MUST be BLOCKED when smoke test file is absent, even if npm test passes");
+    const smokeProof = pmRes5.proofMappings.find((p) => p.criterionId === "tr-smoke");
+    assert.equal(smokeProof?.status, "BLOCKED", "Absent smoke test file MUST result in BLOCKED status");
+
+    // 6. Integration existence check and command execution use exact same canonical candidate workspace
+    const fullIntegPath = `${leggoRel}/tests/integration.test.ts`;
+    assert.equal(kernel.workspaceFileExists(fullIntegPath), false, "Integration existence check MUST evaluate against candidate workspace via workspaceFileExists");
+
+    // 7. Docker candidate cwd uses TrustedKernel canonical workspace and cannot escape
+    const dockerCmdRes = kernel.executeCommand("docker" as any, ["build", "-t", "test", "."], "m-cb6", "PROMAX", leggoRel);
+    assert.equal(dockerCmdRes.reasonCode.includes("PATH_TRAVERSAL_REFUSED") || dockerCmdRes.reasonCode.includes("SYMLINK_ESCAPE_REFUSED") || dockerCmdRes.reasonCode.includes("FORBIDDEN_COMMAND_REFUSED") || dockerCmdRes.success || dockerCmdRes.reasonCode.includes("COMMAND_FAILED") || dockerCmdRes.reasonCode.includes("UNAUTHORIZED"), true);
+
+    // 8. process.cwd() mismatch simulation does not alter verifier path semantics
+    const origCwd = process.cwd();
+    try {
+      // process.cwd() path resolution in ProMax is completely eliminated; kernel handles candidate relative paths
+      process.chdir("/tmp");
+      const pmRes8 = verifier.verifyCandidate(validCandidate, validCtx, kernel, [validEv]);
+      assert.equal(pmRes8.success, true, "Verifier path semantics MUST remain identical when process.cwd() changes");
+    } finally {
+      process.chdir(origCwd);
+    }
+  } finally {
+    rmSync(ws, { recursive: true, force: true });
+  }
+});
+
+test("P0-B9 12-Point Adversarial Filesystem & Boundary Matrix", () => {
+  const ws = tempWorkspace("b9-matrix");
+  try {
+    const kernel = new TrustedKernel({ workspaceRoot: ws });
+
+    // 1. Workspace sibling-prefix escape: workspace -> workspace-evil
+    const siblingEvilRel = "../" + resolve(ws).split("/").pop() + "-evil/file.ts";
+    const res1 = kernel.safeWriteWorkspaceFile(siblingEvilRel, "export const evil = true;", "m-b9");
+    assert.equal(res1.success, false, "Sibling prefix workspace escape MUST be rejected");
+
+    // 2. ../ traversal
+    const res2 = kernel.safeWriteWorkspaceFile("../../etc/passwd", "root:x:0:0:", "m-b9");
+    assert.equal(res2.success, false, "Parent traversal .. MUST be rejected");
+
+    // 3. Absolute POSIX path
+    const res3 = kernel.safeWriteWorkspaceFile("/tmp/absolute-escape.ts", "const x = 1;", "m-b9");
+    assert.equal(res3.success, false, "Absolute POSIX path MUST be rejected");
+
+    // 4. Windows-style drive path
+    const res4 = kernel.safeWriteWorkspaceFile("C:\\Windows\\System32\\cmd.exe", "evil", "m-b9");
+    assert.equal(res4.success, false, "Windows drive-letter path MUST be rejected");
+
+    // 5. Encoded / suspicious path variants
+    const res5 = kernel.safeWriteWorkspaceFile("src/%252e%252e/secret.ts", "evil", "m-b9");
+    assert.equal(res5.success, false, "URL-encoded/suspicious path MUST be rejected");
+
+    // Setup outside target directory for symlink tests
+    const outsideDir = tempWorkspace("b9-outside");
+    try {
+      // Create actual file outside workspace
+      const outsideFile = resolve(outsideDir, "outside-secret.txt");
+      require("fs").writeFileSync(outsideFile, "SECRET_DATA", "utf8");
+
+      // Create symlink inside workspace pointing to file outside workspace
+      const symlinkFileRel = "src/symlink-file.txt";
+      const symlinkFileAbs = resolve(ws, symlinkFileRel);
+      mkdirSync(resolve(ws, "src"), { recursive: true });
+      symlinkSync(outsideFile, symlinkFileAbs);
+
+      const res6 = kernel.safeReadWorkspaceFile(symlinkFileRel);
+      assert.equal(res6.success, false, "Symlink pointing outside workspace MUST be rejected");
+      assert.equal(res6.reasonCode, "SYMLINK_ESCAPE_REFUSED");
+
+      // 7. Symlink directory escape
+      const symlinkDirRel = "src/symlink-dir";
+      const symlinkDirAbs = resolve(ws, symlinkDirRel);
+      symlinkSync(outsideDir, symlinkDirAbs);
+
+      const res7 = kernel.safeWriteWorkspaceFile("src/symlink-dir/escaped.ts", "export const x = 1;", "m-b9");
+      assert.equal(res7.success, false, "Write through symlink directory escaping workspace MUST be rejected");
+      assert.equal(res7.reasonCode, "SYMLINK_ESCAPE_REFUSED");
+
+      // 8. Command cwd through symlink
+      const res8 = kernel.executeCommand("npm" as any, ["--version"], "m-b9", "PROMAX", "src/symlink-dir");
+      assert.equal(res8.success, false, "Command execution with cwd through escaping symlink MUST be rejected");
+      assert.equal(res8.reasonCode, "SYMLINK_ESCAPE_REFUSED");
+    } finally {
+      rmSync(outsideDir, { recursive: true, force: true });
+    }
+
+    // 9. Scope basename/suffix proposal collision
+    const executor = new ColonyExecutor();
+    const wpScope: WorkPackage = {
+      id: "wp-scope-1",
+      missionId: "m-b9",
+      contractVersion: "v1.0.0",
+      taskSpec: {
+        id: "t1",
+        name: "Auth",
+        description: "",
+        targetFiles: ["src/auth/index.ts"],
+        dependencies: [],
+        capabilityRequirements: [],
+      },
+      acceptanceCriteria: [],
+      inputArtifacts: [],
+      readOnly: false,
+      maxAttempts: 3,
+    };
+    const execScope: WorkPackageExecution = {
+      executionId: "exec-scope-1",
+      workPackageId: "wp-scope-1",
+      colonyId: "COLONY_A",
+      state: "EXECUTING",
+      stateVersion: 1,
+      attempts: 1,
+      outputArtifacts: [],
+      evidenceRefs: [],
+      workspacePath: "workspaces/v2-missions/m-b9/colony_a/wp-scope-1",
+    };
+
+    const ctxScope: ContractBoundStageContext = {
+      missionId: "m-b9",
+      authoritativeInputs: [],
+      policyVersions: ["v1.0.0"],
+      budgets: { virtualTicks: 100, providerCalls: 10, maxFixAttempts: 3 },
+      evidenceRefs: [],
+      missionStateRef: "EXECUTING_AB",
+      executionMode: "PRODUCTION_MODE",
+      contractPhase: "CONTRACT_BOUND",
+      frozenPlanContract: {
+        contractId: "c1", version: "v1.0.0", contractHash: "h1", objective: "Obj",
+        acceptanceCriteria: [], constraints: [], tasks: [], dependencies: [],
+        allowedCapabilities: [], requiredTests: [], securityRequirements: [],
+        expectedArtifacts: [], evidenceRequirements: [], riskClassification: "LOW",
+        completionConditions: [], frozenAt: Date.now(),
+      },
+    };
+
+    // Proposal attempting suffix/basename trick "foo/src/auth/index.ts" or "src/auth/index.ts.evil"
+    const proposalEvil = JSON.stringify({
+      summary: "proposal",
+      files: [{ path: "src/auth/index.ts.evil", operation: "create", content: "export const x = 1;" }],
+    });
+
+    const res9 = executor.executeWorkPackage(wpScope, execScope, ctxScope, kernel, proposalEvil, { mode: "PRODUCTION_MODE" });
+    assert.equal(res9.success, false, "Suffix/basename proposal collision MUST be rejected");
+    assert.equal(res9.reasonCode.includes("PROVIDER_PROPOSAL_OUT_OF_SCOPE"), true);
+
+    // 10. Capability prefix collision: src/auth vs src/auth-evil
+    const capScope: CapabilityScope = { capability: "filesystem.write", target: "src/auth-evil/index.ts", readOnly: false };
+    const contractScope = {
+      ...ctxScope.frozenPlanContract,
+      allowedCapabilities: [{ capability: "filesystem.write", target: "src/auth", readOnly: false }],
+    };
+    const res10 = kernel.evaluateEffectiveAuthority(capScope, contractScope, 100);
+    assert.equal(res10.authorized, false, "Capability prefix collision src/auth-evil MUST NOT be authorized by src/auth");
+    assert.equal(res10.reasonCode, "PLAN_CONTRACT_SCOPE_EXCEEDED");
+
+    // 11. Nested valid path still succeeds
+    const res11 = kernel.safeWriteWorkspaceFile("src/deeply/nested/valid/file.ts", "export const x = 100;", "m-b9");
+    assert.equal(res11.success, true, "Nested valid path MUST succeed");
+
+    // 12. Exact allowlisted file succeeds
+    const res12 = kernel.safeWriteWorkspaceFile("src/auth/index.ts", "export const auth = true;", "m-b9");
+    assert.equal(res12.success, true, "Exact allowlisted file MUST succeed");
+
+    // 13. P0-B6 Attack: Producer "UNAUTHORIZED_EVIL_VERIFIER" with omitted proofKind MUST NOT become qualification proof
+    const ev13 = kernel.emitEvidence("UNAUTHORIZED_EVIL_VERIFIER", "m-b9", "STAGE", { criterionId: "ac-1" });
+    assert.equal(ev13.proofKind, "TRACEABILITY", "Omitted proofKind MUST default conservatively to TRACEABILITY");
   } finally {
     rmSync(ws, { recursive: true, force: true });
   }

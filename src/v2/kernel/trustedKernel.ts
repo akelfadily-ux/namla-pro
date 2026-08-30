@@ -7,15 +7,20 @@
 
 import { SafetyGuard } from "../../core/safetyGuard";
 import { ReceiptLog } from "../../core/receiptLog";
-import { isInsideProjectRoot } from "../../policies/fileBoundaryPolicy";
 import { looksLikeSecret } from "../../policies/secretProtectionPolicy";
 import { isForbiddenCommand } from "../../policies/commandSafetyPolicy";
 import { resolveTrustedExecutable, TrustedExecutableId } from "../../cognitive/trustedExecutableRegistry";
 import { buildSafeChildEnv } from "../../cognitive/safeProviderRequest";
 import { CapabilityScope, PlanContract } from "../types/contracts";
 import { ArtifactIdentity, EnvironmentIdentity, EvidenceRecord, ProofKind } from "../types/evidence";
+import {
+  getCanonicalWorkspaceRoot,
+  resolveWorkspacePath,
+  isInsideCandidateWorkspace,
+  validateCapabilityScope,
+} from "./workspacePathAuthority";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
-import { resolve, join, dirname, isAbsolute } from "path";
+import { dirname } from "path";
 import { createHash } from "crypto";
 import { spawnSync } from "child_process";
 
@@ -54,7 +59,7 @@ export class TrustedKernel {
   private evidenceCounter = 0;
 
   constructor(options: TrustedKernelOptions) {
-    this.workspaceRoot = resolve(options.workspaceRoot);
+    this.workspaceRoot = getCanonicalWorkspaceRoot(options.workspaceRoot);
     this.humanAuthorizationGranted = options.humanAuthorizationGranted ?? true;
     this.securityGateSeam = options.securityGateSeam ?? {};
     this.safetyGuard = new SafetyGuard();
@@ -74,9 +79,11 @@ export class TrustedKernel {
     contract: PlanContract | undefined,
     budgetRemaining: number
   ): EffectiveAuthorityResult {
-    const allowed = this.securityGateSeam.bypassPathContainment || isInsideProjectRoot(capability.target, this.workspaceRoot);
-    if (!allowed) {
-      return { authorized: false, reasonCode: "HARD_POLICY_VIOLATION: Target outside workspace root" };
+    if (!this.securityGateSeam.bypassPathContainment) {
+      const pathRes = resolveWorkspacePath(this.workspaceRoot, capability.target);
+      if (!pathRes.ok) {
+        return { authorized: false, reasonCode: `HARD_POLICY_VIOLATION: ${pathRes.reasonCode}` };
+      }
     }
 
     if (!this.securityGateSeam.bypassSecretDetection && looksLikeSecret(capability.target)) {
@@ -91,7 +98,7 @@ export class TrustedKernel {
       const scopeMatch = contract.allowedCapabilities.some(
         (allowedScope) =>
           allowedScope.capability === capability.capability &&
-          (allowedScope.target === "*" || capability.target.startsWith(allowedScope.target)) &&
+          validateCapabilityScope(capability.target, allowedScope.target) &&
           (!capability.readOnly || allowedScope.readOnly === capability.readOnly)
       );
       if (!scopeMatch) {
@@ -106,6 +113,16 @@ export class TrustedKernel {
     return { authorized: true, reasonCode: "OK" };
   }
 
+  public isInsideCandidateWorkspace(candidateWorkspaceRelPath: string, artifactPath: string) {
+    return isInsideCandidateWorkspace(candidateWorkspaceRelPath, artifactPath);
+  }
+
+  public workspaceFileExists(relativePath: string): boolean {
+    const pathRes = resolveWorkspacePath(this.workspaceRoot, relativePath);
+    if (!pathRes.ok) return false;
+    return existsSync(pathRes.canonicalPath || pathRes.absolutePath);
+  }
+
   public safeWriteWorkspaceFile(
     relativePath: string,
     content: string,
@@ -113,50 +130,52 @@ export class TrustedKernel {
     workPackageId?: string,
     executionId?: string
   ): { readonly success: boolean; readonly artifact?: ArtifactIdentity; readonly reasonCode: string } {
-    if (!this.securityGateSeam.bypassPathContainment) {
-      if (isAbsolute(relativePath) || relativePath.includes(":") || relativePath.includes("%")) {
-        this.receiptLog.create({
-          summary: "KERNEL_FILE_WRITE: FORBIDDEN",
-          status: "blocked",
-          details: { relativePath, reason: "Absolute or environment-expanded path forbidden" },
-        });
-        return { success: false, reasonCode: "PATH_TRAVERSAL_REFUSED" };
-      }
+    let resolvedTarget = relativePath;
+    let targetAbsolutePath = relativePath;
 
-      const absolutePath = resolve(join(this.workspaceRoot, relativePath));
-      if (!absolutePath.startsWith(this.workspaceRoot)) {
+    if (!this.securityGateSeam.bypassPathContainment) {
+      const pathRes = resolveWorkspacePath(this.workspaceRoot, relativePath);
+      if (!pathRes.ok) {
         this.receiptLog.create({
           summary: "KERNEL_FILE_WRITE: FORBIDDEN",
           status: "blocked",
-          details: { relativePath, reason: "Path traversal out of workspace" },
+          details: { relativePath, reason: pathRes.reasonCode },
         });
-        return { success: false, reasonCode: "PATH_TRAVERSAL_REFUSED" };
+        const code = pathRes.reasonCode.startsWith("SYMLINK") ? "SYMLINK_ESCAPE_REFUSED" : "PATH_TRAVERSAL_REFUSED";
+        return { success: false, reasonCode: code };
       }
+      resolvedTarget = pathRes.normalizedRelativePath;
+      targetAbsolutePath = pathRes.absolutePath;
     }
 
     if (!this.securityGateSeam.bypassSecretDetection && looksLikeSecret(content)) {
       this.receiptLog.create({
         summary: "KERNEL_FILE_WRITE: FORBIDDEN",
         status: "blocked",
-        details: { relativePath, reason: "Secret detected in content" },
+        details: { relativePath: resolvedTarget, reason: "Secret detected in content" },
       });
       return { success: false, reasonCode: "SECRET_CONTENT_REFUSED" };
     }
 
-    const absolutePath = resolve(join(this.workspaceRoot, relativePath));
-    const dir = dirname(absolutePath);
+    const dir = dirname(targetAbsolutePath);
     if (!existsSync(dir)) {
       mkdirSync(dir, { recursive: true });
     }
 
-    writeFileSync(absolutePath, content, "utf8");
+    writeFileSync(targetAbsolutePath, content, "utf8");
 
-    const sha256 = createHash("sha256").update(Buffer.from(content, "utf8")).digest("hex");
-    const sizeBytes = Buffer.byteLength(content, "utf8");
+    // TOCTOU Write Revalidation (P0-B8): Re-read file from disk & verify hash identity
+    const verifyRead = this.safeReadWorkspaceFile(resolvedTarget);
+    if (!verifyRead.success || verifyRead.content === undefined) {
+      return { success: false, reasonCode: "WRITE_VERIFICATION_FAILED: File unreadable after write" };
+    }
+
+    const sha256 = createHash("sha256").update(Buffer.from(verifyRead.content, "utf8")).digest("hex");
+    const sizeBytes = Buffer.byteLength(verifyRead.content, "utf8");
 
     const artifact: ArtifactIdentity = {
-      artifactId: `art-${createHash("sha256").update(`${relativePath}:${sha256}`).digest("hex").slice(0, 12)}`,
-      path: relativePath,
+      artifactId: `art-${createHash("sha256").update(`${resolvedTarget}:${sha256}`).digest("hex").slice(0, 12)}`,
+      path: resolvedTarget,
       sha256,
       sizeBytes,
       missionId,
@@ -167,30 +186,29 @@ export class TrustedKernel {
     this.receiptLog.create({
       summary: "KERNEL_FILE_WRITE: APPROVED",
       status: "approved",
-      details: { relativePath, sha256, sizeBytes },
+      details: { relativePath: resolvedTarget, sha256, sizeBytes },
     });
 
     return { success: true, artifact, reasonCode: "OK" };
   }
 
   public safeReadWorkspaceFile(relativePath: string): { readonly success: boolean; readonly content?: string; readonly reasonCode: string } {
-    if (!this.securityGateSeam.bypassPathContainment) {
-      if (isAbsolute(relativePath) || relativePath.includes(":") || relativePath.includes("%")) {
-        return { success: false, reasonCode: "PATH_TRAVERSAL_REFUSED" };
-      }
+    let targetAbsolutePath = relativePath;
 
-      const absolutePath = resolve(join(this.workspaceRoot, relativePath));
-      if (!absolutePath.startsWith(this.workspaceRoot)) {
-        return { success: false, reasonCode: "PATH_TRAVERSAL_REFUSED" };
+    if (!this.securityGateSeam.bypassPathContainment) {
+      const pathRes = resolveWorkspacePath(this.workspaceRoot, relativePath);
+      if (!pathRes.ok) {
+        const code = pathRes.reasonCode.startsWith("SYMLINK") ? "SYMLINK_ESCAPE_REFUSED" : "PATH_TRAVERSAL_REFUSED";
+        return { success: false, reasonCode: code };
       }
+      targetAbsolutePath = pathRes.canonicalPath || pathRes.absolutePath;
     }
 
-    const absolutePath = resolve(join(this.workspaceRoot, relativePath));
-    if (!existsSync(absolutePath)) {
+    if (!existsSync(targetAbsolutePath)) {
       return { success: false, reasonCode: "FILE_NOT_FOUND" };
     }
 
-    const content = readFileSync(absolutePath, "utf8");
+    const content = readFileSync(targetAbsolutePath, "utf8");
     return { success: true, content, reasonCode: "OK" };
   }
 
@@ -241,18 +259,20 @@ export class TrustedKernel {
       };
     }
 
-    const targetCwd = subDirRelative
-      ? resolve(join(this.workspaceRoot, subDirRelative))
-      : this.workspaceRoot;
-
-    if (!targetCwd.startsWith(this.workspaceRoot)) {
-      return {
-        success: false,
-        exitCode: null,
-        stdout: "",
-        stderr: "Target working directory outside workspace root",
-        reasonCode: "PATH_TRAVERSAL_REFUSED",
-      };
+    let targetCwd = this.workspaceRoot;
+    if (subDirRelative) {
+      const cwdRes = resolveWorkspacePath(this.workspaceRoot, subDirRelative);
+      if (!cwdRes.ok) {
+        const code = cwdRes.reasonCode.startsWith("SYMLINK") ? "SYMLINK_ESCAPE_REFUSED" : "PATH_TRAVERSAL_REFUSED";
+        return {
+          success: false,
+          exitCode: null,
+          stdout: "",
+          stderr: `Target working directory invalid: ${cwdRes.reasonCode}`,
+          reasonCode: code,
+        };
+      }
+      targetCwd = cwdRes.canonicalPath || cwdRes.absolutePath;
     }
 
     const outcome = spawnSync(resolved.value.command, [...resolved.value.prefixArgs, ...args], {
@@ -322,13 +342,14 @@ export class TrustedKernel {
       envFingerprint: createHash("sha256").update(`${process.platform}:${process.version}`).digest("hex"),
     };
 
+    // P0-B6: PROOF KIND MUST NOT BE INFERRED FROM PRODUCER NAME
+    // Explicit proofKind required for qualification evidence.
+    // Default conservatively to TRACEABILITY or CLAIM based on explicit parameters only.
     let proofKind: ProofKind = explicitProofKind ?? (typeof details.proofKind === "string" ? (details.proofKind as ProofKind) : "TRACEABILITY");
     if (!explicitProofKind && typeof details.proofKind !== "string") {
-      if (producer.startsWith("PROMAX") || producer.endsWith("VERIFIER") || producer === "TRUSTED_KERNEL_COMMAND") {
-        proofKind = "QUALIFICATION_PROOF";
-      } else if (producer === "COLONY_A" || producer === "COLONY_B" || producer === "COLONY_AB") {
+      if (producer === "COLONY_A" || producer === "COLONY_B" || producer === "COLONY_AB") {
         proofKind = "CLAIM";
-      } else if (producer === "LEGGO") {
+      } else {
         proofKind = "TRACEABILITY";
       }
     }

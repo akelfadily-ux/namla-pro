@@ -23,6 +23,7 @@ import { TestRequirement } from "../types/contracts";
 import { ProjectClass } from "../factory/projectFactory";
 import { TrustedExecutableId } from "../../cognitive/trustedExecutableRegistry";
 import { detectProviderAvailability } from "../../cognitive/nodeProviderProcessDriver";
+import { looksLikeSecret } from "../../policies/secretProtectionPolicy";
 import { createHash } from "crypto";
 import { existsSync } from "fs";
 import { resolve, join } from "path";
@@ -36,6 +37,8 @@ export interface ProofMapping {
   readonly artifactHash?: string;
   readonly candidateSnapshotHash?: string;
   readonly proofKind?: ProofKind;
+  readonly testRequirementId?: string;
+  readonly securityRequirementId?: string;
 }
 
 export interface ProMaxResult {
@@ -100,7 +103,23 @@ export class ProMaxVerifier {
     const artifactHashes: Record<string, string> = {};
 
     for (const art of candidate.integratedArtifacts) {
-      const relPath = this.resolveArtifactPath(candidate.workspacePath, art.path);
+      const candCheck = kernel.isInsideCandidateWorkspace(candidate.workspacePath, art.path);
+      if (!candCheck.ok) {
+        artifactCheckPassed = false;
+        failedCriteria.push(`Artifact ${art.path} escapes candidate workspace boundary`);
+        proofMappings.push({
+          criterionId: `artifact-${art.path}`,
+          verifier: "ProMaxVerifier:candidateBoundaryCheck",
+          observation: `CANDIDATE BOUNDARY ESCAPE DETECTED: ${art.path} escapes candidate ${candidate.workspacePath}`,
+          evidenceRef: "",
+          status: "FAILED",
+          proofKind: "QUALIFICATION_PROOF",
+          candidateSnapshotHash,
+        });
+        continue;
+      }
+
+      const relPath = candCheck.resolvedRelPath;
       const read = kernel.safeReadWorkspaceFile(relPath);
 
       if (!read.success || !read.content) {
@@ -163,7 +182,8 @@ export class ProMaxVerifier {
       }
     }
 
-    // 3. Security Requirements Check (P0.15, P0-C11)
+    // 3. Security Requirements Check (P0.15, P0-C11, P0-B7)
+    // Uses single authoritative secret protection policy (looksLikeSecret)
     let securityCheckPassed = true;
     for (const secReq of contract.securityRequirements) {
       let secFailed = false;
@@ -171,10 +191,10 @@ export class ProMaxVerifier {
         for (const art of candidate.integratedArtifacts) {
           const relPath = this.resolveArtifactPath(candidate.workspacePath, art.path);
           const read = kernel.safeReadWorkspaceFile(relPath);
-          if (read.content && (read.content.includes("BEGIN PRIVATE KEY") || read.content.includes("AWS_SECRET"))) {
+          if (read.content && looksLikeSecret(read.content)) {
             securityCheckPassed = false;
             secFailed = true;
-            failedCriteria.push(`Secret detected in ${art.path}`);
+            failedCriteria.push(`Secret pattern detected in ${art.path}`);
           }
         }
       }
@@ -195,6 +215,7 @@ export class ProMaxVerifier {
         status: secFailed ? "FAILED" : "VERIFIED",
         proofKind: "QUALIFICATION_PROOF",
         candidateSnapshotHash,
+        securityRequirementId: secReq.id,
       });
 
       // Bind QUALIFICATION_PROOF explicitly to declared target criteria (P0-C11)
@@ -217,6 +238,7 @@ export class ProMaxVerifier {
             proofKind: "QUALIFICATION_PROOF",
             candidateSnapshotHash,
             artifactHash: candidate.integratedArtifacts[0]?.sha256,
+            securityRequirementId: secReq.id,
           });
         }
       }
@@ -244,6 +266,7 @@ export class ProMaxVerifier {
         proofKind: "QUALIFICATION_PROOF",
         artifactHash: verifierRes.artifactHash,
         candidateSnapshotHash,
+        testRequirementId: reqTest.id,
       });
 
       // Emit verifier QUALIFICATION_PROOF for explicitly bound criteria ONLY (P0-C1, P0-C2, P0-C3, P0-C6)
@@ -268,6 +291,7 @@ export class ProMaxVerifier {
             proofKind: "QUALIFICATION_PROOF",
             candidateSnapshotHash,
             artifactHash: verifierRes.artifactHash,
+            testRequirementId: reqTest.id,
           });
         }
       }
@@ -308,9 +332,12 @@ export class ProMaxVerifier {
 
         if (!hasCriterionMatch) return false;
 
-        // Requirement Binding Match: If criterion specifies requiredRequirementId, verify evidence matches it
-        if (criterion.requiredRequirementId && ev.details.testRequirementId !== criterion.requiredRequirementId && ev.details.securityRequirementId !== criterion.requiredRequirementId) {
-          return false;
+        // Requirement Binding Match (P0-S3, P0-S4): If criterion specifies requiredRequirementId, verify evidence matches it exactly
+        if (criterion.requiredRequirementId) {
+          const evReqId = ev.details.testRequirementId ?? ev.details.securityRequirementId;
+          if (evReqId !== criterion.requiredRequirementId) {
+            return false;
+          }
         }
 
         // VerificationMethod Binding Gate (P0-P4, P0-C10):
@@ -325,10 +352,11 @@ export class ProMaxVerifier {
           if (!ev.producer.includes("SECURITY")) return false;
         }
 
-        // Candidate Snapshot & Artifact Causal Binding (P0-P5, P0-C7, P0-C8):
+        // Candidate Snapshot & Artifact Causal Binding (P0-S1, P0-S4):
+        // candidateSnapshotHash MUST exist AND MUST equal current candidateSnapshotHash!
         const evSnapshotHash = typeof ev.details.candidateSnapshotHash === "string" ? ev.details.candidateSnapshotHash : undefined;
-        if (evSnapshotHash && evSnapshotHash !== candidateSnapshotHash) {
-          return false; // Snapshot mutated -> proof STALE/INVALID
+        if (!evSnapshotHash || evSnapshotHash !== candidateSnapshotHash) {
+          return false; // Missing or mismatched snapshot hash -> REJECT
         }
 
         const evArtifactHash =
@@ -347,19 +375,24 @@ export class ProMaxVerifier {
         return true;
       });
 
-      // Search for explicit proof mapping generated during semantic verifier dispatch (QUALIFICATION_PROOF)
+      // Search for explicit proof mapping generated during semantic verifier dispatch (QUALIFICATION_PROOF) (P0-S1, P0-S3, P0-S4)
       const matchingProof = proofMappings.find(
         (p) =>
           p.criterionId === criterion.id &&
           p.status === "VERIFIED" &&
           p.proofKind === "QUALIFICATION_PROOF" &&
-          AUTHORIZED_VERIFIER_PRODUCERS.has(p.verifier)
+          AUTHORIZED_VERIFIER_PRODUCERS.has(p.verifier) &&
+          p.candidateSnapshotHash === candidateSnapshotHash && // P0-S1: Mandatory snapshot identity
+          (!criterion.requiredRequirementId ||
+            p.testRequirementId === criterion.requiredRequirementId ||
+            p.securityRequirementId === criterion.requiredRequirementId) // P0-S3: Requirement ID matching
       );
 
       if (matchingEvidence || matchingProof) {
         verifiedCriteria.push(criterion.id);
         const evidenceRef = matchingEvidence?.evidenceId ?? matchingProof?.evidenceRef ?? "";
-        const artifactHash = matchingEvidence?.artifactIdentity?.sha256 ?? matchingProof?.artifactHash ?? candidate.integratedArtifacts[0]?.sha256;
+        // P0-S2: REMOVE POST-HOC ARTIFACT HASH FALLBACK (no ?? candidate.integratedArtifacts[0]?.sha256)
+        const artifactHash = matchingEvidence?.artifactIdentity?.sha256 ?? matchingProof?.artifactHash;
 
         proofMappings.push({
           criterionId: criterion.id,
@@ -486,12 +519,20 @@ export class ProMaxVerifier {
             status: "BLOCKED",
           };
         }
+
+        // P0-CB3: Dedicated Docker Verifier using canonical workspace path authority & safe child env
+        const candCheck = kernel.isInsideCandidateWorkspace(candidate.workspacePath, "Dockerfile");
+        const dockerCwd = resolve(join(process.cwd(), candidate.workspacePath));
+
         const { spawnSync } = require("child_process");
+        const { buildSafeChildEnv } = require("../../cognitive/safeProviderRequest");
+
         const dockerBuild = spawnSync("docker", ["build", "-t", `test-${context.missionId}`, "."], {
-          cwd: resolve(join(process.cwd(), candidate.workspacePath)),
+          cwd: dockerCwd,
           shell: false,
           encoding: "utf8",
           timeout: 30000,
+          env: buildSafeChildEnv(),
         });
 
         if (dockerBuild.status === 0) {
@@ -530,12 +571,20 @@ export class ProMaxVerifier {
           projectClass === "WEB_APPLICATION" || projectClass === "FULLSTACK_APPLICATION" ? "tests/app.test.ts" :
           "tests/index.test.ts";
 
-        const smokeTestFile = resolve(join(process.cwd(), candidate.workspacePath, smokeTestRelPath));
-        const res = existsSync(smokeTestFile)
-          ? kernel.executeCommand("npx", ["node", "--test", smokeTestRelPath], context.missionId, "PROMAX", candidate.workspacePath)
-          : kernel.executeCommand("npm", ["test"], context.missionId, "PROMAX", candidate.workspacePath);
-
+        // P0-CB2 & P0-CB4: Check existence via TrustedKernel workspaceFileExists without process.cwd() probing or fallback
+        const fullCandidateSmokeRelPath = `${candidate.workspacePath}/${smokeTestRelPath}`;
         const verifierName = `${projectClass}_EXECUTABLE_SMOKE_VERIFIER`;
+
+        if (!kernel.workspaceFileExists(fullCandidateSmokeRelPath)) {
+          return {
+            verifier: verifierName,
+            observation: `Specific executable smoke test file (${smokeTestRelPath}) absent in candidate workspace ${candidate.workspacePath}`,
+            evidenceRef: "",
+            status: "BLOCKED",
+          };
+        }
+
+        const res = kernel.executeCommand("npx", ["node", "--test", smokeTestRelPath], context.missionId, "PROMAX", candidate.workspacePath);
         return {
           verifier: verifierName,
           observation: res.success ? `${verifierName} (${reqTest.id}): Observed executable smoke test passage` : `Smoke verification failed: ${res.stderr || res.stdout}`,
@@ -547,11 +596,12 @@ export class ProMaxVerifier {
 
       case "INTEGRATION_VERIFIER":
       case "INTEGRATION_TEST": {
-        const integrationTestFile = resolve(join(process.cwd(), candidate.workspacePath, "tests/integration.test.ts"));
-        if (!existsSync(integrationTestFile)) {
+        // P0-CB2 & P0-CB5: Check existence via TrustedKernel workspaceFileExists without process.cwd() probing
+        const fullCandidateIntegrationRelPath = `${candidate.workspacePath}/tests/integration.test.ts`;
+        if (!kernel.workspaceFileExists(fullCandidateIntegrationRelPath)) {
           return {
             verifier: "DISTINCT_CONTRACT_INTEGRATION_VERIFIER",
-            observation: `Integration requirement ${reqTest.id}: tests/integration.test.ts not present in workspace`,
+            observation: `Integration requirement ${reqTest.id}: tests/integration.test.ts not present in candidate workspace ${candidate.workspacePath}`,
             evidenceRef: "",
             status: "BLOCKED",
           };
@@ -585,10 +635,16 @@ export class ProMaxVerifier {
     }
   }
 
-  private resolveArtifactPath(candidateWorkspacePath: string, artPath: string): string {
-    if (artPath.startsWith(candidateWorkspacePath)) {
-      return artPath;
+  private resolveArtifactPath(candidateWorkspacePath: string, artPath: string, kernel?: TrustedKernel): string {
+    if (kernel) {
+      const check = kernel.isInsideCandidateWorkspace(candidateWorkspacePath, artPath);
+      if (check.ok) return check.resolvedRelPath;
     }
-    return `${candidateWorkspacePath}/${artPath}`;
+    const cleanArt = artPath.replace(/\\/g, "/").replace(/^\.\//, "");
+    const cleanCand = candidateWorkspacePath.replace(/\\/g, "/").replace(/^\.\//, "");
+    if (cleanArt.startsWith(cleanCand + "/")) {
+      return cleanArt;
+    }
+    return `${cleanCand}/${cleanArt}`;
   }
 }
