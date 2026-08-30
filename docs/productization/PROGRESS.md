@@ -1,20 +1,18 @@
 # PROGRESS REPORT — NAMLA PRO Productization
 
 ## CURRENT PHASE
-P0 READY FOR HUMAN REVIEW — Human Review Round 14 Pass Complete (Extreme Quality P0.24)
+P0 READY FOR HUMAN REVIEW — Human Review Round 15 Pass Complete (Extreme Quality P0.26)
 
 ## LAST SAFE COMMIT
-P0.24 Human Review Round 14 Pass complete with 100% test pass.
+P0.26 Human Review Round 15 Pass complete with 100% test pass.
 
 ## COMPLETED
-- **Worker Capability Matching:** Added `workerCapabilities` matching at database claim boundary in `PostgresStateRepository.claimTaskLease` and advisory filtering in `Scheduler.getRunnable`.
-- **Run Completion Critical Operation Evaluation:** Added `hasUnresolvedOperations(runId)` check to `PostgresStateRepository` and `NamlaService.processRun` completion path.
-- **Actual PostgreSQL Concurrency Suite & Valid UUIDs:** Replaced all string IDs with `randomUUID()` in `actualPostgresServerIntegrationTests.ts` and implemented full multi-session concurrency matrix (UnitOfWork, 100-worker lease race, maxConcurrency, maxAgents, cancellation races, operations, budget, accounting recovery).
-- **PostgreSQL Release Runners:** Created `postgresReleaseRunner.ts` (`npm run test:postgres-release`) and `goldenPostgresServerE2ETests.ts` (`npm run test:golden-postgres-release`) requiring mandatory `DATABASE_URL`.
-- **Per-Run Claim Serialization & Atomic DB Limits:** Updated `PostgresStateRepository.claimTaskLease` to execute transaction-scoped per-Run row locking (`SELECT id FROM runs WHERE id = $1 FOR UPDATE`) and count ALL active unexpired task leases across all statuses.
-- **Strict Limit Validation & Safe Integer Bounds:** Implemented `Number.isSafeInteger()` (for concurrency, maxAgents, depth, tokens) and `Number.isFinite()` (for cost) validation with explicit safe upper bounds in `NamlaService` and `BudgetController`.
-- **Ant Identity Allocation:** Introduced `AntAllocator` domain interface and `DefaultAntAllocator` implementation, eliminating string synthesis in `NamlaService.createRun`.
-- **Truthful Test Suite Classification:** Renamed emulator and engine suites truthfully (`pgMemIntegrationTests.ts`, `pglitePostgresEngineTests.ts`) and documented distinct evidence tiers.
+- **Trusted Recovery Authority Security Hardening:** Hardened `mintTrustedRecoveryAuthority` to require mandatory `adminSecretToken` verified against `process.env.ACCOUNTING_RECOVERY_SECRET` (failing closed if absent or invalid), and added adversarial security tests.
+- **Executable Run State Requirement for Claims:** Updated `PostgresStateRepository.claimTaskLease` to enforce `run.status === 'RUNNING'` for task claims, denying claims on `CREATED`, `PLANNING`, `PAUSED`, `CANCELLED`, `FAILED`, and `COMPLETED` runs.
+- **Proportional Accounting Reconciliation:** Updated multi-reservation recovery in `PostgresStateRepository.recoverAccountingState` so `getBudgetUsage()` reports exact evidence values across reservations without usage multiplication.
+- **Full Concurrency & Release Matrix:** Expanded `actualPostgresServerIntegrationTests.ts` with multi-session operation claims, stale authority rejections, PostgreSQL `NOW()` lease expiry, cost budget contention, cancellation races, and forced mid-transaction failure rollback verification.
+- **Full Golden Release Suite with HTTP Contract & Real Build/Test Execution:** Rebuilt `goldenPostgresServerE2ETests.ts` featuring positive path HTTP REST contract verification (`POST`, `GET`, `GET :id`, `PATCH`, `DELETE`, 404), real node syntax/execution gate (`node -c`), and negative gate rejection path, failing closed (EXIT 1) without `DATABASE_URL`.
+- **Truthful Documentation Tier Synchronization:** Updated `QUALITY_GATES.md` and `PROGRESS.md` to keep evidence classifications truthful and synchronized across emulator, engine, and server tiers.
 
 ## IN PROGRESS
 P0 READY FOR HUMAN REVIEW — All P0 blockers resolved. Awaiting human review before P1.

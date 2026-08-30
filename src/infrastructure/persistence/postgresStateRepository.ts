@@ -542,7 +542,8 @@ export class PostgresStateRepository implements StateRepository {
       if (runRes.rows.length === 0) return null;
 
       const runRow = runRes.rows[0];
-      if (["CANCELLED", "FAILED", "COMPLETED", "PAUSED"].includes(runRow.status)) return null;
+      // Rule 3: Authoritative Task claiming requires an explicitly executable RUNNING Run state
+      if (runRow.status !== "RUNNING") return null;
 
       const runLimits: BudgetLimits = typeof runRow.budget_limits === "string" ? JSON.parse(runRow.budget_limits) : runRow.budget_limits || {};
       const maxConc = runLimits.maxConcurrency ?? 10;

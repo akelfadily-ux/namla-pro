@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, readFileSync, rmSync,
 import { join } from "path";
 import { tmpdir } from "os";
 import { Pool } from "pg";
-import { createServer } from "http";
+import { execSync } from "child_process";
 
 import { Container } from "../bootstrap/container";
 import { NamlaService } from "../application/namla-service";
@@ -21,7 +21,7 @@ if (!dbUrl) {
   process.exit(1);
 }
 
-test("Full Golden E2E Software Contract against Actual PostgreSQL Server", async () => {
+test("Full Golden E2E Software Contract against Actual PostgreSQL Server — Positive Path", async () => {
   const pool = new Pool({ connectionString: dbUrl });
 
   const client = await pool.connect();
@@ -32,7 +32,7 @@ test("Full Golden E2E Software Contract against Actual PostgreSQL Server", async
     client.release();
   }
 
-  const tmpWorkspace = mkdtempSync(join(tmpdir(), "namla-golden-full-pg-"));
+  const tmpWorkspace = mkdtempSync(join(tmpdir(), "namla-golden-full-pg-pos-"));
   if (process.platform !== "win32") chmodSync(tmpWorkspace, 0o755);
 
   try {
@@ -128,26 +128,31 @@ module.exports = { createTodoServer };
       }),
     };
 
-    const buildGate: Gate = {
-      name: "BuildGate",
+    const buildTestGate: Gate = {
+      name: "BuildAndTestGate",
       evaluate: async (ctx) => {
         const filePath = join(ctx.workspacePath, "src", "server.js");
         const fileExists = existsSync(filePath);
-        let syntaxValid = false;
+        let checkPassed = false;
+        let output = "";
+
         if (fileExists) {
           try {
-            require(filePath);
-            syntaxValid = true;
-          } catch {
-            syntaxValid = false;
+            // Real node syntax execution check
+            execSync(`node -c "${filePath}"`, { stdio: "pipe" });
+            checkPassed = true;
+            output = "node -c check passed";
+          } catch (e: any) {
+            checkPassed = false;
+            output = String(e.stderr || e.message);
           }
         }
-        const passed = fileExists && syntaxValid;
+
         return {
-          gate: "BuildGate",
-          passed,
-          reason: passed ? "Server source generated and syntax checked" : "Syntax check failed",
-          evidence: [fileExists ? "src/server.js present" : "absent"],
+          gate: "BuildAndTestGate",
+          passed: fileExists && checkPassed,
+          reason: fileExists && checkPassed ? "Real node build execution check passed" : "Build check failed",
+          evidence: [fileExists ? "src/server.js present" : "absent", output],
           requiredFixes: [],
         };
       },
@@ -156,10 +161,10 @@ module.exports = { createTodoServer };
     const supervisor = {
       review: async (input: any) => {
         const gateEvidence = input.gateEvidence || [];
-        const buildGatePassed = gateEvidence.some((g: any) => g.gate === "BuildGate" && g.passed);
+        const passed = gateEvidence.some((g: any) => g.gate === "BuildAndTestGate" && g.passed);
         return {
-          approved: buildGatePassed,
-          reason: buildGatePassed ? "Verified via BuildGate evidence" : "BuildGate failed",
+          approved: passed,
+          reason: passed ? "BuildAndTestGate passed" : "BuildAndTestGate failed",
           risks: [],
           requiredFixes: [],
         };
@@ -196,7 +201,7 @@ module.exports = { createTodoServer };
     const container = Container.createPostgresContainer(pool as any, {
       toolAdapters: [fileWriterTool],
       modelAdapters: [modelAdapter],
-      gates: [buildGate],
+      gates: [buildTestGate],
       supervisor,
       taskExecutor: executor,
     });
@@ -209,36 +214,191 @@ module.exports = { createTodoServer };
       budget: { maxCostUsd: 1.0 },
     });
 
-    await service.processRun(summary.id, "worker-pg-e2e");
+    await service.processRun(summary.id, { workerId: "worker-pg-e2e", capabilities: ["filesystem.write"] });
 
     const producedPath = join(tmpWorkspace, "src", "server.js");
     assert.equal(existsSync(producedPath), true);
 
-    // Perform HTTP REST Contract Verification
+    // Perform Full HTTP REST Contract Verification
     const { createTodoServer } = require(producedPath);
     const server = createTodoServer();
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const port = (server.address() as any).port;
 
     try {
+      // 1. POST /todos
       const postRes = await fetch(`http://127.0.0.1:${port}/todos`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ title: "Golden Postgres Task" }),
       });
       assert.equal(postRes.status, 201);
+      const created = (await postRes.json()) as any;
+      assert.equal(created.id, "1");
 
+      // 2. GET /todos
       const getRes = await fetch(`http://127.0.0.1:${port}/todos`);
       assert.equal(getRes.status, 200);
 
+      // 3. GET /todos/:id
+      const getByIdRes = await fetch(`http://127.0.0.1:${port}/todos/1`);
+      assert.equal(getByIdRes.status, 200);
+
+      // 4. PATCH /todos/:id
+      const patchRes = await fetch(`http://127.0.0.1:${port}/todos/1`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ completed: true }),
+      });
+      assert.equal(patchRes.status, 200);
+
+      // 5. DELETE /todos/:id
       const deleteRes = await fetch(`http://127.0.0.1:${port}/todos/1`, { method: "DELETE" });
       assert.equal(deleteRes.status, 204);
+
+      // 6. 404 behavior
+      const missingRes = await fetch(`http://127.0.0.1:${port}/todos/1`);
+      assert.equal(missingRes.status, 404);
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
 
     const runRecord = await stateRepo.getRun(summary.id);
     assert.equal(runRecord?.status, RunStatus.Completed);
+  } finally {
+    rmSync(tmpWorkspace, { recursive: true, force: true });
+    await pool.end();
+  }
+});
+
+test("Golden E2E Software Task Execution against Actual PostgreSQL Server — Negative Path", async () => {
+  const pool = new Pool({ connectionString: dbUrl });
+
+  const client = await pool.connect();
+  try {
+    const runner = new MigrationRunner(client as any);
+    await runner.runMigrations();
+  } finally {
+    client.release();
+  }
+
+  const tmpWorkspace = mkdtempSync(join(tmpdir(), "namla-golden-full-pg-neg-"));
+  if (process.platform !== "win32") chmodSync(tmpWorkspace, 0o755);
+
+  try {
+    const stateRepo = new PostgresStateRepository(pool as any, pool);
+
+    const fileWriterTool: ToolAdapter<{ relativePath: string; content: string }, { bytesWritten: number }> = {
+      name: "filesystem.write",
+      validateInput: (i: any) => ({ relativePath: String(i.relativePath), content: String(i.content) }),
+      getPermissionRequests: (input) => [{ capability: "filesystem.write", resource: join(tmpWorkspace, input.relativePath) }],
+      execute: async (input) => {
+        const fullPath = join(tmpWorkspace, input.relativePath);
+        mkdirSync(join(fullPath, ".."), { recursive: true });
+        writeFileSync(fullPath, input.content, "utf8");
+        return { bytesWritten: Buffer.byteLength(input.content) };
+      },
+    };
+
+    const brokenCode = `INVALID SYNTAX {{{`;
+
+    const modelAdapter: ModelAdapter = {
+      provider: "openai",
+      generate: async <T>(req: any) => ({
+        value: req.validate ? req.validate(brokenCode) : (brokenCode as unknown as T),
+        usage: { inputTokens: 50, outputTokens: 50, estimatedCostUsd: 0.005 },
+        provider: "openai",
+        model: "gpt-4",
+      }),
+    };
+
+    const buildTestGate: Gate = {
+      name: "BuildAndTestGate",
+      evaluate: async (ctx) => {
+        const filePath = join(ctx.workspacePath, "src", "server.js");
+        let checkPassed = false;
+        if (existsSync(filePath)) {
+          try {
+            execSync(`node -c "${filePath}"`, { stdio: "pipe" });
+            checkPassed = true;
+          } catch {
+            checkPassed = false;
+          }
+        }
+        return {
+          gate: "BuildAndTestGate",
+          passed: checkPassed,
+          reason: checkPassed ? "Syntax ok" : "node -c check failed on broken code",
+          evidence: [checkPassed ? "ok" : "syntax error"],
+          requiredFixes: ["Fix syntax"],
+        };
+      },
+    };
+
+    const supervisor = {
+      review: async (input: any) => {
+        const gateEvidence = input.gateEvidence || [];
+        const passed = gateEvidence.some((g: any) => g.gate === "BuildAndTestGate" && g.passed);
+        return {
+          approved: passed,
+          reason: passed ? "Approved" : "BuildAndTestGate failed",
+          risks: ["Broken syntax"],
+          requiredFixes: ["Fix syntax"],
+        };
+      },
+    };
+
+    const executor = {
+      execute: async (task: any) => {
+        const modelResp = await container.models.generate(task.runId, "openai", {
+          system: "Engineer",
+          input: "Generate broken code",
+          validate: (v: any) => String(v),
+        });
+
+        const toolCtx = {
+          runId: task.runId,
+          taskId: task.id,
+          antId: "ant-engineer",
+          traceId: `trace-${task.runId}`,
+          operationId: `op-${task.id}-${task.attempt}`,
+          permissions: [`filesystem.write:${join(tmpWorkspace, "src", "server.js")}`],
+          authority: { workerId: "worker-pg-e2e", leaseToken: task.leaseToken || "token-pg" },
+        };
+
+        await container.tools.execute("filesystem.write", { relativePath: "src/server.js", content: modelResp.value }, toolCtx);
+
+        return {
+          artifacts: [{ id: `art-${task.id}`, runId: task.runId, taskId: task.id, type: "code", name: "src/server.js", metadata: {}, createdAt: new Date() }],
+          workspacePath: tmpWorkspace,
+        };
+      },
+    };
+
+    const container = Container.createPostgresContainer(pool as any, {
+      toolAdapters: [fileWriterTool],
+      modelAdapters: [modelAdapter],
+      gates: [buildTestGate],
+      supervisor,
+      taskExecutor: executor,
+    });
+
+    const service = new NamlaService(container);
+
+    const summary = await service.createRun({
+      goal: "Generate broken code on Actual Postgres Server",
+      repositoryPath: tmpWorkspace,
+    });
+
+    // Process run through 3 retries
+    await service.processRun(summary.id, { workerId: "worker-pg-e2e", capabilities: ["filesystem.write"] });
+    await pool.query("UPDATE tasks SET next_eligible_at = NULL WHERE run_id = $1", [summary.id]);
+    await service.processRun(summary.id, { workerId: "worker-pg-e2e", capabilities: ["filesystem.write"] });
+    await pool.query("UPDATE tasks SET next_eligible_at = NULL WHERE run_id = $1", [summary.id]);
+    await service.processRun(summary.id, { workerId: "worker-pg-e2e", capabilities: ["filesystem.write"] });
+
+    const runRecord = await stateRepo.getRun(summary.id);
+    assert.equal(runRecord?.status, RunStatus.Failed, "Broken code run MUST be FAILED");
   } finally {
     rmSync(tmpWorkspace, { recursive: true, force: true });
     await pool.end();

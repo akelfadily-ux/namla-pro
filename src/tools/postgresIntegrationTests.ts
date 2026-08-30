@@ -161,4 +161,30 @@ test("PostgresStateRepository integration semantics", async (t) => {
     await repo.createTask(task);
     await assert.rejects(() => repo.createTask(task), StateConflictError);
   });
+
+  await t.test("claimTaskLease denies claim when Run status is not RUNNING", async () => {
+    const db = new MockPgClient();
+    const repo = new PostgresStateRepository(db);
+
+    await repo.createRun({ id: "run-planning", status: RunStatus.Planning, goal: "Goal", budgetLimits: {}, createdAt: new Date(), updatedAt: new Date() });
+    await repo.createTask({
+      id: "t-planning",
+      runId: "run-planning",
+      title: "Title",
+      description: "Desc",
+      status: TaskStatus.Created,
+      role: AntRole.Engineer,
+      assignedAntId: "ant-1",
+      attempt: 0,
+      maxAttempts: 3,
+      depth: 0,
+      requirements: [],
+      dependencies: [],
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const claimInPlanning = await repo.claimTaskLease("t-planning", "worker-1");
+    assert.equal(claimInPlanning, null, "Claim MUST be denied when Run is in PLANNING state");
+  });
 });

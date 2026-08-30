@@ -281,6 +281,10 @@ test("PostgresStateRepository & Scheduler atomic state logic", async (t) => {
     const claimDenied = await repo.claimTaskLease("task-docker", "worker-1", 60_000, ["shell", "git"]);
     assert.equal(claimDenied, null, "Database claim Task requiring docker is denied for worker lacking docker");
 
+    // Ensure run status is RUNNING for claim requirement (Rule 3)
+    const runRef = db.runs.get("run-cap-1");
+    if (runRef) runRef.status = RunStatus.Running;
+
     // Database claim enforcement: worker possessing docker capability succeeds
     const claimGranted = await repo.claimTaskLease("task-docker", "worker-1", 60_000, ["shell", "docker"]);
     assert.ok(claimGranted, "Database claim succeeds when worker possesses required capabilities");

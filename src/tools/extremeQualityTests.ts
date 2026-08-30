@@ -347,6 +347,31 @@ test("Extreme Quality Suite — PolicyEngine Resource Scoping and Path Security"
     assert.strictEqual(adapterExecuted, false, `GitAdapter.execute MUST NEVER be called for forbidden Git operation '${action}'`);
   }
 
+  // Adversarial Recovery Authority Minting Test
+  const { mintTrustedRecoveryAuthority } = require("../bootstrap/trustedRecoveryBootstrap");
+  const { ConfigurationError } = require("../domain/errors");
+  const oldSecret = process.env.ACCOUNTING_RECOVERY_SECRET;
+  try {
+    process.env.ACCOUNTING_RECOVERY_SECRET = "super-secret-recovery-key-123";
+
+    // Attempt self-mint with wrong secret token fails
+    assert.throws(() => {
+      mintTrustedRecoveryAuthority({ adminIdentity: "hacker-1", adminSecretToken: "wrong-secret" });
+    }, ConfigurationError, "Self-minting with wrong secret token MUST be denied");
+
+    // Attempt self-mint with missing secret token fails
+    assert.throws(() => {
+      mintTrustedRecoveryAuthority({ adminIdentity: "hacker-1", adminSecretToken: "" });
+    }, ConfigurationError, "Self-minting with empty secret token MUST be denied");
+
+    // Minting with valid secret succeeds
+    const validAuth = mintTrustedRecoveryAuthority({ adminIdentity: "admin-real", adminSecretToken: "super-secret-recovery-key-123" });
+    assert.strictEqual(validAuth.identity, "admin-real");
+  } finally {
+    if (oldSecret) process.env.ACCOUNTING_RECOVERY_SECRET = oldSecret;
+    else delete process.env.ACCOUNTING_RECOVERY_SECRET;
+  }
+
   // Human-only Git operation policy test & shell command variant matrix
   const gitPolicy = { permissions: ["*"] };
   const forbiddenShellVariants = [

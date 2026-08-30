@@ -20,6 +20,7 @@
 | Scheduler       | UNIT TESTED | UNIT TESTED | MOCK TESTED | MOCK TESTED | UNIT TESTED | MOCK TESTED | UNIT TESTED | UNIT | `src/application/scheduler.ts` |
 | NamlaLoop       | UNIT TESTED | UNIT TESTED | MOCK TESTED | MOCK TESTED | UNIT TESTED | MOCK TESTED | UNIT TESTED | UNIT | `src/application/namla-loop.ts` |
 | Golden E2E      | UNIT TESTED | UNIT TESTED | PGLITE TESTED | PGLITE TESTED | UNIT TESTED | PGLITE TESTED | UNIT TESTED | Golden emulator | `src/tools/goldenRuntimeE2ETests.ts` |
+| Golden PG Server | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN (REQUIRES DATABASE_URL) | `src/tools/goldenPostgresServerE2ETests.ts` |
 | Security        | UNIT TESTED | UNIT TESTED | MOCK TESTED | MOCK TESTED | UNIT TESTED | MOCK TESTED | UNIT TESTED | UNIT | `src/tools/extremeQualityTests.ts` |
 
 ---
