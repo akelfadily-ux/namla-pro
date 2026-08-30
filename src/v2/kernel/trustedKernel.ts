@@ -427,24 +427,16 @@ export class TrustedKernel {
 
   /**
    * Single authoritative entry point to run ProMax verification with an unforgeable verifier permit token (P0-RA1).
-   * Validates that verifier is an instanceof ProMaxVerifier (rejecting arbitrary caller objects).
+   * Instantiates and owns the canonical ProMaxVerifier internally.
+   * Caller-supplied verifiers or subclass overrides are strictly NOT accepted (Fix 1 & Fix 5).
    */
   public runProMaxVerification<TCandidate extends IntegratedCandidate, TContext extends StageContextBase>(
     candidate: TCandidate,
     context: TContext,
-    evidencePool: readonly EvidenceRecord[] = [],
-    verifier?: any
+    evidencePool: readonly EvidenceRecord[] = []
   ): import("../promax/proMaxVerifier").ProMaxResult {
     const { ProMaxVerifier, computeCandidateSnapshotHash } = require("../promax/proMaxVerifier");
-    const activeVerifier = verifier ?? new ProMaxVerifier();
-    if (!(activeVerifier instanceof ProMaxVerifier)) {
-      this.receiptLog.create({
-        summary: "RUN_PROMAX_VERIFICATION: FORBIDDEN",
-        status: "blocked",
-        details: { reason: "Verifier object is not an authorized ProMaxVerifier instance" },
-      });
-      throw new Error("UNAUTHORIZED_VERIFIER_INSTANCE: runProMaxVerification requires an authorized ProMaxVerifier instance");
-    }
+    const canonicalVerifier = new ProMaxVerifier();
 
     const candidateSnapshotHash = computeCandidateSnapshotHash(candidate.integratedArtifacts);
     const sessionId = `sess-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -452,7 +444,7 @@ export class TrustedKernel {
 
     this.activeVerifierPermits.add(permit);
     try {
-      return activeVerifier.verifyCandidate(candidate, context, this, permit, evidencePool);
+      return canonicalVerifier.verifyCandidate(candidate, context, this, permit, evidencePool);
     } finally {
       this.activeVerifierPermits.delete(permit);
     }

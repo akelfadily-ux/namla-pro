@@ -426,7 +426,7 @@ export class NamlaRuntime {
 
     // -------------------------------------------------------- 8. PROMAX STAGE ---
     currentState = "VERIFYING";
-    const proMaxRes = kernel.runProMaxVerification(primaryCandidate, boundContext, evidencePool, this.proMaxVerifier);
+    const proMaxRes = kernel.runProMaxVerification(primaryCandidate, boundContext, evidencePool);
     if (proMaxRes.evidenceRecord) {
       evidencePool.push(proMaxRes.evidenceRecord);
     }
