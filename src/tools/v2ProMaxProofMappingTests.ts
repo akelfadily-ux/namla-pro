@@ -1,5 +1,5 @@
 /**
- * V2 ProMax Proof Mapping & Evidence Verification Tests (P0.1, P0.15, P0.16, P0.17).
+ * V2 ProMax Proof Mapping & Evidence Verification Tests (P0.1, P0.15, P0.16, P0.17, P0-T2, P0-P1..P0-P5).
  *
  * Verifies that ProMax requires evidence-backed proof mapping for every verified criterion,
  * independently recomputes SHA-256 hashes from raw file bytes to detect post-acceptance mutation,
@@ -66,7 +66,7 @@ test("ProMaxVerifier: Generates Proof Mappings and Verifies Observed Evidence", 
         tasks: [],
         dependencies: [],
         allowedCapabilities: [],
-        requiredTests: [{ id: "t1", name: "Version Check", command: "npm --version", expectedExitCode: 0 }],
+        requiredTests: [{ id: "t1", name: "Version Check", command: "npm --version", expectedExitCode: 0, provesCriterionIds: ["ac-1"] }],
         securityRequirements: [{ id: "sec-1", rule: "NO_SECRET_LEAKAGE", failClosed: true }],
         expectedArtifacts: [],
         evidenceRequirements: [],
@@ -76,7 +76,14 @@ test("ProMaxVerifier: Generates Proof Mappings and Verifies Observed Evidence", 
       },
     };
 
-    const result = verifier.verifyCandidate(candidate, context, kernel, []);
+    const acEv = kernel.emitEvidence("TEST_SUITE_VERIFIER", "m-promax", "PROMAX", {
+      criterionId: "ac-1",
+      targetFile: "src/index.ts",
+      sha256,
+      proofKind: "QUALIFICATION_PROOF",
+    });
+
+    const result = verifier.verifyCandidate(candidate, context, kernel, [acEv]);
 
     assert.equal(result.success, true);
     assert.equal(result.proofMappings.length >= 2, true, "Proof mappings must exist");

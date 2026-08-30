@@ -1,12 +1,13 @@
 /**
- * PROTOCOL Engine (§04, §09, P0.14, FINAL-P0-9, Gap 1).
+ * PROTOCOL Engine (§04, §09, P0.14, FINAL-P0-9, P0-T1, P0-C1..P0-C3, P0-C11).
  *
  * Validates draft plans and freezes canonical PlanContract bytes.
  * Derives explicit typed verification requirements (BUILD, TYPECHECK, TEST, SMOKE, DOCKER_BUILD)
- * mapped directly from actual project class characteristics and task specifications.
+ * with dedicated semantic verifier identifiers (BUILD_VERIFIER, TYPECHECK_VERIFIER, etc.)
+ * and explicit provesCriterionIds bindings mapping verifiers strictly to target acceptance criteria.
  */
 
-import { DraftPlan, PlanContract, TestRequirement, TestRequirementType } from "../types/contracts";
+import { DraftPlan, PlanContract, TestRequirement, TestRequirementType, VerifierIdentifier, SecurityRequirement } from "../types/contracts";
 import { WorkPackage } from "../types/missionState";
 import { PreFreezeStageContext } from "../types/stageContext";
 import { ProjectClass } from "../factory/projectFactory";
@@ -55,36 +56,50 @@ export class ProtocolEngine {
     const version = "v1.0.0";
     const frozenAt = Date.now();
 
-    // Derive explicit typed verification test requirements based on project class (Gap 1)
+    // Derive explicit typed verification test requirements based on project class (P0-T1, P0-C2)
     const projectClass: ProjectClass = context.projectClass ?? "TYPESCRIPT_LIBRARY";
     const requiredTests: TestRequirement[] = [];
 
-    // All supported classes require BUILD, TYPECHECK, and TEST
+    // Helper to find criteria strictly bound to a requirement ID
+    const findCriteriaForReq = (reqId: string): string[] | undefined => {
+      const matched = draftPlan.acceptanceCriteria
+        .filter((ac) => ac.requiredRequirementId === reqId)
+        .map((ac) => ac.id);
+      return matched.length > 0 ? matched : undefined;
+    };
+
+    // All supported classes require BUILD, TYPECHECK, and TEST with dedicated verifier IDs & provesCriterionIds
     requiredTests.push(
       {
         id: "test-verif-build",
         type: "BUILD",
+        verifier: "BUILD_VERIFIER",
         name: "Project Build Contract",
         command: "npm run build",
         expectedExitCode: 0,
+        provesCriterionIds: findCriteriaForReq("test-verif-build"),
       },
       {
         id: "test-verif-typecheck",
         type: "TYPECHECK",
+        verifier: "TYPECHECK_VERIFIER",
         name: "TypeScript Compiler Verification",
         command: "npx --package=typescript tsc --noEmit",
         expectedExitCode: 0,
+        provesCriterionIds: findCriteriaForReq("test-verif-typecheck"),
       },
       {
         id: "test-verif-suite",
         type: "TEST",
+        verifier: "TEST_SUITE_VERIFIER",
         name: "Unit & Integration Test Suite",
         command: "npm test",
         expectedExitCode: 0,
+        provesCriterionIds: findCriteriaForReq("test-verif-suite"),
       }
     );
 
-    // Add class-specific verification requirements
+    // Add class-specific verification requirements with semantic verifiers (P0-T1, P0-C2)
     switch (projectClass) {
       case "CLI_APPLICATION":
       case "REST_API":
@@ -93,9 +108,11 @@ export class ProtocolEngine {
         requiredTests.push({
           id: "test-verif-smoke",
           type: "SMOKE",
+          verifier: "SMOKE_VERIFIER",
           name: `${projectClass} Executable Smoke Verification`,
           command: "npm test",
           expectedExitCode: 0,
+          provesCriterionIds: findCriteriaForReq("test-verif-smoke"),
         });
         break;
 
@@ -103,9 +120,11 @@ export class ProtocolEngine {
         requiredTests.push({
           id: "test-verif-integration",
           type: "INTEGRATION_TEST",
+          verifier: "INTEGRATION_VERIFIER",
           name: "Fullstack Contract Integration Verification",
           command: "npm test",
           expectedExitCode: 0,
+          provesCriterionIds: findCriteriaForReq("test-verif-integration"),
         });
         break;
 
@@ -113,15 +132,30 @@ export class ProtocolEngine {
         requiredTests.push({
           id: "test-verif-docker",
           type: "DOCKER_BUILD",
+          verifier: "DOCKER_BUILD_VERIFIER",
           name: "Docker Build Environment Verification",
-          command: "npm test",
+          command: "docker build -t test .",
           expectedExitCode: 0,
+          provesCriterionIds: findCriteriaForReq("test-verif-docker"),
         });
         break;
 
       default:
         break;
     }
+
+    const securityCriteriaIds = draftPlan.acceptanceCriteria
+      .filter((ac) => ac.verificationMethod === "SECURITY_CHECK" || ac.requiredRequirementId === "sec-1")
+      .map((ac) => ac.id);
+
+    const securityRequirements: SecurityRequirement[] = [
+      {
+        id: "sec-1",
+        rule: "NO_SECRET_LEAKAGE",
+        failClosed: true,
+        provesCriterionIds: securityCriteriaIds.length > 0 ? securityCriteriaIds : undefined,
+      },
+    ];
 
     const rawContract = {
       contractId: `contract-${context.missionId}`,
@@ -148,13 +182,7 @@ export class ProtocolEngine {
         }))
       ),
       requiredTests,
-      securityRequirements: [
-        {
-          id: "sec-1",
-          rule: "NO_SECRET_LEAKAGE",
-          failClosed: true,
-        },
-      ],
+      securityRequirements,
       expectedArtifacts: draftPlan.tasks.flatMap((t) =>
         t.targetFiles.map((path) => ({
           path,

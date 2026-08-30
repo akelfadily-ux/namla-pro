@@ -1,5 +1,5 @@
 /**
- * Trusted Kernel Implementation (§08).
+ * Trusted Kernel Implementation (§08, P0-T4, P0-P1, P0-P2).
  *
  * Single authoritative effect and trust boundary for NAMLA PRO V2.
  * Enforces EffectiveAuthority = HardSecurityPolicy ∩ Authorization ∩ Permit ∩ Scope ∩ Budget ∩ Environment.
@@ -13,15 +13,22 @@ import { isForbiddenCommand } from "../../policies/commandSafetyPolicy";
 import { resolveTrustedExecutable, TrustedExecutableId } from "../../cognitive/trustedExecutableRegistry";
 import { buildSafeChildEnv } from "../../cognitive/safeProviderRequest";
 import { CapabilityScope, PlanContract } from "../types/contracts";
-import { ArtifactIdentity, EnvironmentIdentity, EvidenceRecord } from "../types/evidence";
+import { ArtifactIdentity, EnvironmentIdentity, EvidenceRecord, ProofKind } from "../types/evidence";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
 import { resolve, join, dirname, isAbsolute } from "path";
 import { createHash } from "crypto";
 import { spawnSync } from "child_process";
 
+export interface SecurityGateSeam {
+  readonly bypassPathContainment?: boolean;
+  readonly bypassSecretDetection?: boolean;
+  readonly bypassCommandSafety?: boolean;
+}
+
 export interface TrustedKernelOptions {
   readonly workspaceRoot: string;
   readonly humanAuthorizationGranted?: boolean;
+  readonly securityGateSeam?: SecurityGateSeam;
 }
 
 export interface EffectiveAuthorityResult {
@@ -43,12 +50,19 @@ export class TrustedKernel {
   private readonly receiptLog: ReceiptLog;
   private readonly workspaceRoot: string;
   private readonly humanAuthorizationGranted: boolean;
+  private securityGateSeam: SecurityGateSeam;
+  private evidenceCounter = 0;
 
   constructor(options: TrustedKernelOptions) {
     this.workspaceRoot = resolve(options.workspaceRoot);
     this.humanAuthorizationGranted = options.humanAuthorizationGranted ?? true;
+    this.securityGateSeam = options.securityGateSeam ?? {};
     this.safetyGuard = new SafetyGuard();
     this.receiptLog = new ReceiptLog();
+  }
+
+  public setSecurityGateSeam(seam: SecurityGateSeam): void {
+    this.securityGateSeam = seam;
   }
 
   public getReceiptLog(): ReceiptLog {
@@ -60,12 +74,12 @@ export class TrustedKernel {
     contract: PlanContract | undefined,
     budgetRemaining: number
   ): EffectiveAuthorityResult {
-    const allowed = isInsideProjectRoot(capability.target, this.workspaceRoot);
+    const allowed = this.securityGateSeam.bypassPathContainment || isInsideProjectRoot(capability.target, this.workspaceRoot);
     if (!allowed) {
       return { authorized: false, reasonCode: "HARD_POLICY_VIOLATION: Target outside workspace root" };
     }
 
-    if (looksLikeSecret(capability.target)) {
+    if (!this.securityGateSeam.bypassSecretDetection && looksLikeSecret(capability.target)) {
       return { authorized: false, reasonCode: "HARD_POLICY_VIOLATION: Secret pattern detected in target path" };
     }
 
@@ -99,26 +113,28 @@ export class TrustedKernel {
     workPackageId?: string,
     executionId?: string
   ): { readonly success: boolean; readonly artifact?: ArtifactIdentity; readonly reasonCode: string } {
-    if (isAbsolute(relativePath) || relativePath.includes(":") || relativePath.includes("%")) {
-      this.receiptLog.create({
-        summary: "KERNEL_FILE_WRITE: FORBIDDEN",
-        status: "blocked",
-        details: { relativePath, reason: "Absolute or environment-expanded path forbidden" },
-      });
-      return { success: false, reasonCode: "PATH_TRAVERSAL_REFUSED" };
+    if (!this.securityGateSeam.bypassPathContainment) {
+      if (isAbsolute(relativePath) || relativePath.includes(":") || relativePath.includes("%")) {
+        this.receiptLog.create({
+          summary: "KERNEL_FILE_WRITE: FORBIDDEN",
+          status: "blocked",
+          details: { relativePath, reason: "Absolute or environment-expanded path forbidden" },
+        });
+        return { success: false, reasonCode: "PATH_TRAVERSAL_REFUSED" };
+      }
+
+      const absolutePath = resolve(join(this.workspaceRoot, relativePath));
+      if (!absolutePath.startsWith(this.workspaceRoot)) {
+        this.receiptLog.create({
+          summary: "KERNEL_FILE_WRITE: FORBIDDEN",
+          status: "blocked",
+          details: { relativePath, reason: "Path traversal out of workspace" },
+        });
+        return { success: false, reasonCode: "PATH_TRAVERSAL_REFUSED" };
+      }
     }
 
-    const absolutePath = resolve(join(this.workspaceRoot, relativePath));
-    if (!absolutePath.startsWith(this.workspaceRoot)) {
-      this.receiptLog.create({
-        summary: "KERNEL_FILE_WRITE: FORBIDDEN",
-        status: "blocked",
-        details: { relativePath, reason: "Path traversal out of workspace" },
-      });
-      return { success: false, reasonCode: "PATH_TRAVERSAL_REFUSED" };
-    }
-
-    if (looksLikeSecret(content)) {
+    if (!this.securityGateSeam.bypassSecretDetection && looksLikeSecret(content)) {
       this.receiptLog.create({
         summary: "KERNEL_FILE_WRITE: FORBIDDEN",
         status: "blocked",
@@ -127,6 +143,7 @@ export class TrustedKernel {
       return { success: false, reasonCode: "SECRET_CONTENT_REFUSED" };
     }
 
+    const absolutePath = resolve(join(this.workspaceRoot, relativePath));
     const dir = dirname(absolutePath);
     if (!existsSync(dir)) {
       mkdirSync(dir, { recursive: true });
@@ -157,15 +174,18 @@ export class TrustedKernel {
   }
 
   public safeReadWorkspaceFile(relativePath: string): { readonly success: boolean; readonly content?: string; readonly reasonCode: string } {
-    if (isAbsolute(relativePath) || relativePath.includes(":") || relativePath.includes("%")) {
-      return { success: false, reasonCode: "PATH_TRAVERSAL_REFUSED" };
+    if (!this.securityGateSeam.bypassPathContainment) {
+      if (isAbsolute(relativePath) || relativePath.includes(":") || relativePath.includes("%")) {
+        return { success: false, reasonCode: "PATH_TRAVERSAL_REFUSED" };
+      }
+
+      const absolutePath = resolve(join(this.workspaceRoot, relativePath));
+      if (!absolutePath.startsWith(this.workspaceRoot)) {
+        return { success: false, reasonCode: "PATH_TRAVERSAL_REFUSED" };
+      }
     }
 
     const absolutePath = resolve(join(this.workspaceRoot, relativePath));
-    if (!absolutePath.startsWith(this.workspaceRoot)) {
-      return { success: false, reasonCode: "PATH_TRAVERSAL_REFUSED" };
-    }
-
     if (!existsSync(absolutePath)) {
       return { success: false, reasonCode: "FILE_NOT_FOUND" };
     }
@@ -190,7 +210,7 @@ export class TrustedKernel {
     timeoutMs = 15000
   ): CommandExecutionResult {
     const rawCmd = `${executableId} ${args.join(" ")}`;
-    if (isForbiddenCommand(rawCmd)) {
+    if (!this.securityGateSeam.bypassCommandSafety && isForbiddenCommand(rawCmd)) {
       this.receiptLog.create({
         summary: "EXECUTE_COMMAND: FORBIDDEN",
         status: "blocked",
@@ -260,7 +280,11 @@ export class TrustedKernel {
         success,
         stdoutSnippet: stdout.slice(0, 500),
         stderrSnippet: stderr.slice(0, 500),
-      }
+      },
+      undefined,
+      undefined,
+      undefined,
+      "QUALIFICATION_PROOF"
     );
 
     this.receiptLog.create({
@@ -286,9 +310,11 @@ export class TrustedKernel {
     details: Record<string, unknown>,
     artifactIdentity?: ArtifactIdentity,
     workPackageId?: string,
-    executionId?: string
+    executionId?: string,
+    explicitProofKind?: ProofKind
   ): EvidenceRecord {
-    const sequenceNumber = Date.now();
+    this.evidenceCounter += 1;
+    const sequenceNumber = Date.now() + this.evidenceCounter;
     const envIdentity: EnvironmentIdentity = {
       platform: process.platform,
       nodeVersion: process.version,
@@ -296,8 +322,19 @@ export class TrustedKernel {
       envFingerprint: createHash("sha256").update(`${process.platform}:${process.version}`).digest("hex"),
     };
 
-    const evidenceId = `ev-${createHash("sha256").update(`${producer}:${missionId}:${stageId}:${sequenceNumber}`).digest("hex").slice(0, 12)}`;
-    const recordContent = JSON.stringify({ evidenceId, producer, missionId, stageId, details, artifactIdentity, sequenceNumber });
+    let proofKind: ProofKind = explicitProofKind ?? (typeof details.proofKind === "string" ? (details.proofKind as ProofKind) : "TRACEABILITY");
+    if (!explicitProofKind && typeof details.proofKind !== "string") {
+      if (producer.startsWith("PROMAX") || producer.endsWith("VERIFIER") || producer === "TRUSTED_KERNEL_COMMAND") {
+        proofKind = "QUALIFICATION_PROOF";
+      } else if (producer === "COLONY_A" || producer === "COLONY_B" || producer === "COLONY_AB") {
+        proofKind = "CLAIM";
+      } else if (producer === "LEGGO") {
+        proofKind = "TRACEABILITY";
+      }
+    }
+
+    const evidenceId = `ev-${createHash("sha256").update(`${producer}:${missionId}:${stageId}:${sequenceNumber}:${this.evidenceCounter}`).digest("hex").slice(0, 12)}`;
+    const recordContent = JSON.stringify({ evidenceId, producer, missionId, stageId, proofKind, details, artifactIdentity, sequenceNumber });
     const hash = createHash("sha256").update(recordContent).digest("hex");
 
     const record: EvidenceRecord = {
@@ -307,19 +344,20 @@ export class TrustedKernel {
       stageId,
       workPackageId,
       executionId,
+      proofKind,
       artifactIdentity,
       environmentIdentity: envIdentity,
       timestamp: sequenceNumber,
       sequenceNumber,
       status: "VALID",
-      details,
+      details: { ...details, proofKind },
       hash,
     };
 
     this.receiptLog.create({
       summary: "EMIT_EVIDENCE: APPROVED",
       status: "approved",
-      details: { evidenceId, producer, stageId, hash },
+      details: { evidenceId, producer, stageId, proofKind, hash },
     });
 
     return record;

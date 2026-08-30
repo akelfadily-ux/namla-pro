@@ -1,5 +1,5 @@
 /**
- * Colony Executor Implementation (§04, §10, P0, P0.3, P0.4, FINAL-P0-1, FINAL-P0-2, FINAL-P0-3, FINAL-P0-5).
+ * Colony Executor Implementation (§04, §10, P0, P0.3, P0.4, FINAL-P0-1, FINAL-P0-2, FINAL-P0-3, FINAL-P0-5, P0-T3, P0-A3).
  *
  * Provides isolated execution paths for Colony A and Colony B.
  * Ensures execution identity, workspace, state, evidence, and session isolation.
@@ -7,6 +7,8 @@
  * Distinguishes TEST_MODE / DETERMINISTIC_FIXTURE_MODE from PRODUCTION_MODE.
  * Enforces structural guard preventing PRODUCTION_MODE from executing deterministic fallback generators.
  * Parses structured provider stdout in PRODUCTION_MODE and applies validated file proposals through TrustedKernel.
+ * Synchronizes real provider request prompt schema with RawProviderPayload parser schema.
+ * Emits explicit acceptanceCriteria claims in evidence details for downstream ProMax criterion binding.
  */
 
 import { WorkPackage, WorkPackageExecution } from "../types/missionState";
@@ -36,6 +38,34 @@ export interface ColonyExecutionResult {
   readonly reasonCode: string;
 }
 
+export function buildStructuredProviderPrompt(taskName: string, targetFiles: readonly string[], objective: string): string {
+  return [
+    `Objective: ${objective}`,
+    `WorkPackage Task: ${taskName}`,
+    `Target Files Allowlist: ${targetFiles.join(", ")}`,
+    "",
+    "STRICT PROVIDER RESPONSE CONTRACT:",
+    "Return ONLY valid JSON matching the following schema:",
+    "{",
+    '  "summary": "Short description of changes",',
+    '  "files": [',
+    "    {",
+    '      "path": "relative/target/path.ts",',
+    '      "operation": "create",',
+    '      "content": "...complete source file content..."',
+    "    }",
+    "  ]",
+    "}",
+    "",
+    "RULES:",
+    "1. Every proposed path MUST be relative (no leading slash or drive letter).",
+    "2. Every proposed path MUST appear in the Target Files Allowlist.",
+    "3. Do NOT use path traversal (../).",
+    "4. Do NOT include prose, explanation, or markdown fences outside the JSON object.",
+    "5. Return complete file contents, not partial diffs or placeholders.",
+  ].join("\n");
+}
+
 export class ColonyExecutor {
   public executeWorkPackage(
     workPackage: WorkPackage,
@@ -52,7 +82,7 @@ export class ColonyExecutor {
     const colonySubdir = execution.colonyId.toLowerCase();
     const colonyWorkspaceRelPath = `workspaces/v2-missions/${context.missionId}/${colonySubdir}/${workPackage.id}`;
 
-    // 1. Production Mode Real Cognition Invocation & Gate (P0.11, FINAL-P0-1, FINAL-P0-2)
+    // 1. Production Mode Real Cognition Invocation & Gate (P0.11, FINAL-P0-1, FINAL-P0-2, P0-T3)
     if (mode === "PRODUCTION_MODE") {
       let rawStdout = simulatedCodeContent ?? "";
       if (!rawStdout) {
@@ -68,12 +98,18 @@ export class ColonyExecutor {
           };
         }
 
+        const structuredPrompt = buildStructuredProviderPrompt(
+          workPackage.taskSpec.name,
+          workPackage.taskSpec.targetFiles,
+          context.frozenPlanContract.objective
+        );
+
         const safeReq = buildSafeProviderRequest({
           requestId: `req-${execution.executionId}`,
           providerId: provider,
           role: "colony-code-generator",
           objective: context.frozenPlanContract.objective,
-          promptBody: `WorkPackage Task: ${workPackage.taskSpec.name}\nTarget Files: ${workPackage.taskSpec.targetFiles.join(", ")}`,
+          promptBody: structuredPrompt,
           workingDirectoryAbsolute: resolve(process.cwd()),
           timeoutMs: 15000,
           maxStdoutBytes: 60000,
@@ -236,6 +272,7 @@ export class ColonyExecutor {
             sha256: writeResult.artifact.sha256,
             sizeBytes: writeResult.artifact.sizeBytes,
             executionMode: mode,
+            acceptanceCriteria: workPackage.acceptanceCriteria.map((ac) => ac.id),
           },
           writeResult.artifact,
           workPackage.id,
@@ -308,6 +345,7 @@ export class ColonyExecutor {
           sha256: writeResult.artifact.sha256,
           sizeBytes: writeResult.artifact.sizeBytes,
           executionMode: mode,
+          acceptanceCriteria: workPackage.acceptanceCriteria.map((ac) => ac.id),
         },
         writeResult.artifact,
         workPackage.id,

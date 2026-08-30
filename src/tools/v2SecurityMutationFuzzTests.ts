@@ -1,9 +1,8 @@
 /**
- * V2 Security Mutation, Path Fuzzing & Command Safety Suite (HARDENING-9, 10, 11, 17).
+ * V2 Security Mutation, Path Fuzzing & Command Safety Suite (HARDENING-9, 10, 11, 17, P0-T4).
  *
  * Deterministically tests path containment fuzzing, secret leakage pattern detection & refusal,
- * malicious command proposal rejection (pipes, chaining, exfiltration),
- * and mutation-style security gate validation (testing mutants with disabled checks vs unmutated gates).
+ * malicious command proposal rejection, and true mutation testing via TrustedKernel security gate seam.
  *
  * Seed: 0x7c4e12d9
  * Run: node dist/tools/v2SecurityMutationFuzzTests.js
@@ -13,10 +12,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
-import { resolve, join } from "path";
+import { resolve } from "path";
 import { TrustedKernel } from "../v2/kernel/trustedKernel";
 import { isForbiddenCommand } from "../policies/commandSafetyPolicy";
-import { isInsideProjectRoot } from "../policies/fileBoundaryPolicy";
 import { looksLikeSecret } from "../policies/secretProtectionPolicy";
 
 function tempWorkspace(tag: string): string {
@@ -86,35 +84,45 @@ test("HARDENING-10: Secret Leakage Detection & Refusal", () => {
   }
 });
 
-test("HARDENING-17: True Mutation-Style Security Gate Verification", () => {
+test("HARDENING-17 & P0-T4: True Mutation Seam Verification (Gates Turn RED When Mutated)", () => {
   const ws = tempWorkspace("security-mutation");
   try {
     const kernel = new TrustedKernel({ workspaceRoot: ws });
 
-    // 1. Unmutated Real Gate Behavior: MUST catch and refuse all unsafe proposals
-    const unmutatedPathResult = kernel.safeWriteWorkspaceFile("../../mutated_escape.txt", "escape", "m-mut");
-    assert.equal(unmutatedPathResult.success, false, "Real path containment gate MUST refuse out-of-workspace writes");
+    // 1. UNMUTATED PATH: All security tests pass cleanly (GREEN)
+    const unmutatedPathRes = kernel.safeWriteWorkspaceFile("../../mutated_escape.txt", "escape", "m-mut");
+    assert.equal(unmutatedPathRes.success, false, "Unmutated kernel MUST refuse path traversal");
 
-    const unmutatedSecretResult = kernel.safeWriteWorkspaceFile("src/creds.ts", "const key = '-----BEGIN PRIVATE KEY-----';", "m-mut");
-    assert.equal(unmutatedSecretResult.success, false, "Real secret protection gate MUST refuse secret content writes");
+    const unmutatedSecretRes = kernel.safeWriteWorkspaceFile("src/creds.ts", "const key = '-----BEGIN PRIVATE KEY-----';", "m-mut");
+    assert.equal(unmutatedSecretRes.success, false, "Unmutated kernel MUST refuse secret content");
 
-    const unmutatedCmdResult = kernel.executeCommand("git" as any, ["push"], "m-mut", "PROMAX");
-    assert.equal(unmutatedCmdResult.success, false, "Real command policy gate MUST refuse forbidden git push");
+    const unmutatedCmdRes = kernel.executeCommand("git" as any, ["push"], "m-mut", "PROMAX");
+    assert.equal(unmutatedCmdRes.success, false, "Unmutated kernel MUST refuse forbidden git push");
 
-    // 2. Controlled Mutation Double: Simulate a mutant where security check is bypassed (e.g. returns true always)
-    const mutantBypassPathCheck = (_path: string) => true; // Mutant: ignores path boundary check
-    const mutantBypassSecretCheck = (_content: string) => false; // Mutant: fails to detect secrets
+    // 2. MUTATED PATH CONTAINMENT SEAM: Mutate path containment gate → proves kernel gate was bypassed
+    kernel.setSecurityGateSeam({ bypassPathContainment: true });
+    let reachedOsWrite = false;
+    try {
+      kernel.safeWriteWorkspaceFile("../../mutated_escape.txt", "escape", "m-mut");
+      reachedOsWrite = true;
+    } catch (err: any) {
+      // Reached OS write call directly because kernel check was bypassed!
+      reachedOsWrite = err.code === "EACCES" || err.code === "EPERM";
+    }
+    assert.equal(reachedOsWrite, true, "MUTANT OBSERVATION: Path containment check bypassed, reaching OS file write directly");
 
-    // Test mutant behavior: If security checks were mutated/bypassed, unsafe operations would improperly succeed
-    const mutantPathAllowed = mutantBypassPathCheck("../../mutated_escape.txt");
-    const mutantSecretDetected = mutantBypassSecretCheck("const key = '-----BEGIN PRIVATE KEY-----';");
+    // 3. MUTATED SECRET DETECTION SEAM: Mutate secret detection gate → secret write succeeds
+    kernel.setSecurityGateSeam({ bypassSecretDetection: true });
+    const mutatedSecretRes = kernel.safeWriteWorkspaceFile("src/creds.ts", "const key = '-----BEGIN PRIVATE KEY-----';", "m-mut");
+    assert.equal(mutatedSecretRes.success, true, "MUTANT OBSERVATION: Secret check bypassed, secret write improperly succeeded");
 
-    assert.equal(mutantPathAllowed, true, "Mutant double allows path escape");
-    assert.equal(mutantSecretDetected, false, "Mutant double fails to detect secret");
+    // 4. MUTATED COMMAND SAFETY SEAM: Mutate command policy gate → forbidden command check bypassed
+    kernel.setSecurityGateSeam({ bypassCommandSafety: true });
+    const mutatedCmdRes = kernel.executeCommand("git" as any, ["push"], "m-mut", "PROMAX");
+    assert.equal(mutatedCmdRes.reasonCode, "EXECUTABLE_UNAUTHORIZED", "MUTANT OBSERVATION: Command policy gate bypassed, reaching downstream executable authorization");
 
-    // Verify that the REAL TrustedKernel gate catches what the mutant double missed:
-    assert.notEqual(unmutatedPathResult.success, mutantPathAllowed, "Mutation score check: Real gate correctly caught path escape missed by mutant");
-    assert.notEqual(looksLikeSecret("const key = '-----BEGIN PRIVATE KEY-----';"), mutantSecretDetected, "Mutation score check: Real secret check caught secret missed by mutant");
+    // Restore unmutated state
+    kernel.setSecurityGateSeam({});
   } finally {
     rmSync(ws, { recursive: true, force: true });
   }

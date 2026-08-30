@@ -1,16 +1,25 @@
 /**
- * V2 PlanContract & Engineering Types (§04, §09).
+ * V2 PlanContract & Engineering Types (§04, §09, P0-C1..P0-C3).
  */
 
 export type RiskClass = "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
 
 export type TestRequirementType = "BUILD" | "TYPECHECK" | "TEST" | "INTEGRATION_TEST" | "SMOKE" | "DOCKER_BUILD";
 
+export type VerifierIdentifier =
+  | "BUILD_VERIFIER"
+  | "TYPECHECK_VERIFIER"
+  | "TEST_SUITE_VERIFIER"
+  | "SMOKE_VERIFIER"
+  | "INTEGRATION_VERIFIER"
+  | "DOCKER_BUILD_VERIFIER";
+
 export interface AcceptanceCriterion {
   readonly id: string;
   readonly description: string;
   readonly verificationMethod: "TEST" | "INVARIANT" | "INSPECTION" | "SECURITY_CHECK";
   readonly required: boolean;
+  readonly requiredRequirementId?: string;
 }
 
 export interface Constraint {
@@ -43,15 +52,18 @@ export interface CapabilityScope {
 export interface TestRequirement {
   readonly id: string;
   readonly type?: TestRequirementType;
+  readonly verifier?: VerifierIdentifier;
   readonly name: string;
   readonly command: string;
   readonly expectedExitCode: number;
+  readonly provesCriterionIds?: readonly string[];
 }
 
 export interface SecurityRequirement {
   readonly id: string;
   readonly rule: string;
   readonly failClosed: boolean;
+  readonly provesCriterionIds?: readonly string[];
 }
 
 export interface ArtifactRequirement {

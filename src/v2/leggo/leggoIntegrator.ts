@@ -1,8 +1,9 @@
 /**
- * LEGGO Component Integrator (§04, §11, P0.18).
+ * LEGGO Component Integrator (§04, §11, P0.18, P0-A3).
  *
  * Integrates compatible, validated components from Colony A and B into a unified candidate.
  * Preserves all cumulative artifacts across all WorkPackages in the mission DAG so the final candidate represents the complete project state.
+ * Emits explicit acceptanceCriteria claims in evidence details for downstream ProMax criterion binding.
  */
 
 import { ComparisonAssessment, IntegratedCandidate, WorkPackage } from "../types/missionState";
@@ -135,6 +136,7 @@ export class LeggoIntegrator {
         candidateId,
         integratedArtifactCount: integratedArtifacts.length,
         sourceTraceability,
+        acceptanceCriteria: workPackage.acceptanceCriteria.map((ac) => ac.id),
       },
       lastArtifact,
       workPackage.id

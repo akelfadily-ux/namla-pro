@@ -128,6 +128,7 @@ export class NamlaRuntime {
       evidenceRefs: [],
       missionStateRef: currentState,
       executionMode,
+      projectClass,
       contractPhase: "PRE_FREEZE",
     };
 
@@ -225,6 +226,7 @@ export class NamlaRuntime {
       evidenceRefs: evidencePool.map((e) => e.evidenceId),
       missionStateRef: currentState,
       executionMode,
+      projectClass,
       contractPhase: "CONTRACT_BOUND",
       frozenPlanContract: frozenContract,
     };

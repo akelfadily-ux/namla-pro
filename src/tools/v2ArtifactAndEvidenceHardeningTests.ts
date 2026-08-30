@@ -1,5 +1,5 @@
 /**
- * V2 Artifact Tampering, Stale Evidence & Lab Gate Hardening Suite (HARDENING-3, 4, 5, 8, 14).
+ * V2 Artifact Tampering, Stale Evidence & Lab Gate Hardening Suite (HARDENING-3, 4, 5, 8, 14, P0-T6).
  *
  * Tests write atomicity, post-acceptance artifact modification/deletion/renaming/substitution,
  * stale evidence causality across versions/missions, build/test/typecheck/smoke signal contradictions,
@@ -25,6 +25,126 @@ import { createHash } from "crypto";
 function tempWorkspace(tag: string): string {
   return mkdtempSync(resolve(tmpdir(), `namla-v2-fuzz-p3-${tag}-`));
 }
+
+test("P0-T6: Lab Packaging Direct Refusal Gate Tests", () => {
+  const ws = tempWorkspace("lab-gates");
+  try {
+    const kernel = new TrustedKernel({ workspaceRoot: ws });
+    const packager = new LabPackager();
+
+    kernel.safeWriteWorkspaceFile("workspaces/v2-missions/m-lab/leggo-integrated/src/index.ts", "export const ok = true;", "m-lab");
+    const content = "export const ok = true;";
+    const hash = createHash("sha256").update(content).digest("hex");
+
+    const candidate: IntegratedCandidate = {
+      candidateId: "cand-lab",
+      missionId: "m-lab",
+      integratedArtifacts: [{ artifactId: "a1", path: "src/index.ts", sha256: hash, sizeBytes: content.length, missionId: "m-lab" }],
+      resolvedConflicts: [],
+      sourceTraceability: { "src/index.ts": "COLONY_A" },
+      workspacePath: "workspaces/v2-missions/m-lab/leggo-integrated",
+    };
+
+    const context: ContractBoundStageContext = {
+      missionId: "m-lab",
+      authoritativeInputs: [],
+      policyVersions: ["v1.0.0"],
+      budgets: { virtualTicks: 100, providerCalls: 10, maxFixAttempts: 3 },
+      evidenceRefs: [],
+      missionStateRef: "PACKAGING",
+      executionMode: "DETERMINISTIC_FIXTURE_MODE",
+      contractPhase: "CONTRACT_BOUND",
+      frozenPlanContract: {
+        contractId: "c1",
+        version: "v1.0.0",
+        contractHash: "h1",
+        objective: "Obj",
+        acceptanceCriteria: [],
+        constraints: [],
+        tasks: [],
+        dependencies: [],
+        allowedCapabilities: [],
+        requiredTests: [],
+        securityRequirements: [],
+        expectedArtifacts: [],
+        evidenceRequirements: [],
+        riskClassification: "LOW",
+        completionConditions: [],
+        frozenAt: Date.now(),
+      },
+    };
+
+    // Case 1: Required test requirement FAILED or BLOCKED -> Refuse
+    const assessmentTestFailed: ProMaxAssessment = {
+      candidateId: "cand-lab",
+      contractSatisfied: false,
+      verifiedCriteria: [],
+      failedCriteria: ["test-verif-build"],
+      securityCheckPassed: true,
+      regressionPassed: true,
+      independentTestsPassed: false, // Failed/Blocked test
+      evidenceFreshnessVerified: true,
+    };
+    const res1 = packager.packageDeliverables(candidate, assessmentTestFailed, context, kernel, []);
+    assert.equal(res1.success, false);
+    assert.equal(res1.reasonCode.startsWith("NAMLA_LAB_REFUSED"), true);
+
+    // Case 2: Acceptance criterion UNVERIFIED or FAILED -> Refuse
+    const assessmentUnverified: ProMaxAssessment = {
+      candidateId: "cand-lab",
+      contractSatisfied: false,
+      verifiedCriteria: [],
+      failedCriteria: ["ac-unverified-1"],
+      securityCheckPassed: true,
+      regressionPassed: true,
+      independentTestsPassed: true,
+      evidenceFreshnessVerified: true,
+    };
+    const res2 = packager.packageDeliverables(candidate, assessmentUnverified, context, kernel, []);
+    assert.equal(res2.success, false);
+    assert.equal(res2.reasonCode.startsWith("NAMLA_LAB_REFUSED"), true);
+
+    // Case 3: Stale / Invalidated evidence in stage evidence pool -> Refuse
+    const validAssessment: ProMaxAssessment = {
+      candidateId: "cand-lab",
+      contractSatisfied: true,
+      verifiedCriteria: ["ac-1"],
+      failedCriteria: [],
+      securityCheckPassed: true,
+      regressionPassed: true,
+      independentTestsPassed: true,
+      evidenceFreshnessVerified: true,
+    };
+
+    const staleEvidence: EvidenceRecord = {
+      evidenceId: "ev-stale-1",
+      producer: "COLONY_A",
+      missionId: "m-lab",
+      stageId: "COLONY_AB",
+      environmentIdentity: { platform: "linux", nodeVersion: "v20", cwd: "/app", envFingerprint: "fp" },
+      timestamp: Date.now(),
+      sequenceNumber: 1,
+      status: "INVALIDATED",
+      details: {},
+      hash: "stalehash",
+    };
+
+    const res3 = packager.packageDeliverables(candidate, validAssessment, context, kernel, [staleEvidence]);
+    assert.equal(res3.success, false);
+    assert.equal(res3.reasonCode.includes("Stale or invalidated evidence"), true);
+
+    // Case 4: Artifact identity / Hash mismatch -> Refuse
+    const tamperedCandidate: IntegratedCandidate = {
+      ...candidate,
+      integratedArtifacts: [{ artifactId: "a1", path: "src/index.ts", sha256: "WRONG_HASH_123", sizeBytes: content.length, missionId: "m-lab" }],
+    };
+    const res4 = packager.packageDeliverables(tamperedCandidate, validAssessment, context, kernel, []);
+    assert.equal(res4.success, false);
+    assert.equal(res4.reasonCode.includes("Artifact hash mismatch"), true);
+  } finally {
+    rmSync(ws, { recursive: true, force: true });
+  }
+});
 
 test("HARDENING-4 & HARDENING-14: Artifact Deletion/Tampering Detected by ProMax & Rejected by Lab", () => {
   const ws = tempWorkspace("artifact-tamper");

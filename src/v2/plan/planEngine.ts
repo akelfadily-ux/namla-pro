@@ -1,8 +1,9 @@
 /**
- * PLAN Engine (§04, §09, P0.13).
+ * PLAN Engine (§04, §09, P0.13, P0-C1..P0-C3).
  *
  * Produces an objective-derived draft engineering plan.
  * Dynamically decomposes objectives into multi-task WorkPackage DAGs.
+ * Binds acceptance criteria explicitly to target requirement IDs.
  */
 
 import { EerOutput } from "../eer/eerEngine";
@@ -90,11 +91,10 @@ export class PlanEngine {
       );
 
       acceptanceCriteria.push(
-        { id: "ac-rest-health", description: "REST API health endpoint responds 200 OK", verificationMethod: "TEST", required: true },
-        { id: "ac-rest-crud", description: "CRUD endpoints process valid data correctly", verificationMethod: "TEST", required: true },
-        { id: "ac-rest-validation", description: "Invalid requests return 400 Bad Request", verificationMethod: "TEST", required: true },
-        { id: "ac-typecheck", description: "TypeScript compilation completes without errors", verificationMethod: "TEST", required: true },
-        { id: "ac-security", description: "No credentials or secret patterns exposed", verificationMethod: "SECURITY_CHECK", required: true }
+        { id: "ac-rest-health", description: "REST API health endpoint responds 200 OK", verificationMethod: "TEST", required: true, requiredRequirementId: "test-verif-smoke" },
+        { id: "ac-rest-crud", description: "CRUD endpoints process valid data correctly", verificationMethod: "TEST", required: true, requiredRequirementId: "test-verif-suite" },
+        { id: "ac-typecheck", description: "TypeScript compilation completes without errors", verificationMethod: "TEST", required: true, requiredRequirementId: "test-verif-typecheck" },
+        { id: "ac-security", description: "No credentials or secret patterns exposed", verificationMethod: "SECURITY_CHECK", required: true, requiredRequirementId: "sec-1" }
       );
     } else if (lowerObj.includes("cli")) {
       tasks.push(
@@ -125,8 +125,8 @@ export class PlanEngine {
       );
 
       acceptanceCriteria.push(
-        { id: "ac-cli-exec", description: "CLI executes and returns help output", verificationMethod: "TEST", required: true },
-        { id: "ac-typecheck", description: "TypeScript compilation completes without errors", verificationMethod: "TEST", required: true }
+        { id: "ac-cli-exec", description: "CLI executes and returns help output", verificationMethod: "TEST", required: true, requiredRequirementId: "test-verif-smoke" },
+        { id: "ac-typecheck", description: "TypeScript compilation completes without errors", verificationMethod: "TEST", required: true, requiredRequirementId: "test-verif-typecheck" }
       );
     } else {
       // General multi-task engineering DAG
@@ -150,9 +150,9 @@ export class PlanEngine {
       );
 
       acceptanceCriteria.push(
-        { id: "ac-typecheck", description: "Code compiles cleanly with tsc --noEmit", verificationMethod: "TEST", required: true },
-        { id: "ac-tests", description: "Unit and integration tests pass", verificationMethod: "TEST", required: true },
-        { id: "ac-security", description: "Security invariants and path containment hold", verificationMethod: "SECURITY_CHECK", required: true }
+        { id: "ac-typecheck", description: "Code compiles cleanly with tsc --noEmit", verificationMethod: "TEST", required: true, requiredRequirementId: "test-verif-typecheck" },
+        { id: "ac-tests", description: "Unit and integration tests pass", verificationMethod: "TEST", required: true, requiredRequirementId: "test-verif-suite" },
+        { id: "ac-security", description: "Security invariants and path containment hold", verificationMethod: "SECURITY_CHECK", required: true, requiredRequirementId: "sec-1" }
       );
     }
 

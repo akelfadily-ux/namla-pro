@@ -1,10 +1,11 @@
 /**
- * V2 Provider Parser Fuzzing & Execution Hardening Suite (HARDENING-1, 2, 12).
+ * V2 Provider Parser Fuzzing & Execution Hardening Suite (HARDENING-1, 2, 12, P0-T3).
  *
  * Deterministically fuzzes provider JSON/JSONL output parsing and tests execution failures:
  * - Malformed JSON, truncated JSON, malformed JSONL
  * - Duplicate proposals, out-of-scope paths, path traversal, Unicode normalization
  * - Provider timeouts, non-zero exits, crashes, empty stdout, stderr noise
+ * - Provider prompt schema ↔ parser schema synchronization contract tests
  *
  * Seed: 0x5a3f89b1
  * Run: node dist/tools/v2ProviderParserFuzzTests.js
@@ -16,7 +17,7 @@ import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { resolve } from "path";
 import { parseClaudeJson, parseCodexJsonl, extractJsonObject } from "../cognitive/liveProviderExecution";
-import { ColonyExecutor } from "../v2/colony/colonyExecutor";
+import { ColonyExecutor, buildStructuredProviderPrompt } from "../v2/colony/colonyExecutor";
 import { TrustedKernel } from "../v2/kernel/trustedKernel";
 import { WorkPackage, WorkPackageExecution } from "../v2/types/missionState";
 import { ContractBoundStageContext } from "../v2/types/stageContext";
@@ -24,6 +25,35 @@ import { ContractBoundStageContext } from "../v2/types/stageContext";
 function tempWorkspace(tag: string): string {
   return mkdtempSync(resolve(tmpdir(), `namla-v2-fuzz-p1-${tag}-`));
 }
+
+test("P0-T3: Provider Prompt Instructions ↔ Parser Schema Synchronization", () => {
+  const prompt = buildStructuredProviderPrompt("Implement REST endpoints", ["src/server.ts"], "Build REST API");
+
+  // Verify prompt explicitly contains parser requirements
+  assert.equal(prompt.includes("STRICT PROVIDER RESPONSE CONTRACT"), true);
+  assert.equal(prompt.includes('"files"'), true);
+  assert.equal(prompt.includes('"path"'), true);
+  assert.equal(prompt.includes('"content"'), true);
+  assert.equal(prompt.includes("Target Files Allowlist"), true);
+  assert.equal(prompt.includes("src/server.ts"), true);
+
+  // Simulate provider responding according to prompt instructions
+  const simulatedProviderResponse = JSON.stringify({
+    summary: "Implemented health endpoint",
+    files: [
+      {
+        path: "src/server.ts",
+        operation: "create",
+        content: 'export function handleRequest() { return { statusCode: 200 }; }',
+      },
+    ],
+  });
+
+  const parsedClaude = parseClaudeJson(simulatedProviderResponse, 60000, 16);
+  assert.equal(parsedClaude.malformed, undefined);
+  assert.equal(parsedClaude.files.length, 1);
+  assert.equal(parsedClaude.files[0].path, "src/server.ts");
+});
 
 test("HARDENING-1: Provider Output Extraction & Fuzzing", () => {
   // 1. Fuzzing extractJsonObject & parseClaudeJson

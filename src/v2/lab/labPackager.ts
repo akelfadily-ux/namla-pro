@@ -1,11 +1,19 @@
 /**
- * NAMLA LAB Packager (§04, §12).
+ * NAMLA LAB Packager (§04, §12, P0-T6).
+ *
+ * Package only accepted results. Fail closed if:
+ * - ProMax contractSatisfied is false
+ * - any required TestRequirement is FAILED or BLOCKED
+ * - any acceptance criterion is UNVERIFIED or FAILED
+ * - evidence is stale/invalidated
+ * - artifact identity or SHA-256 hash no longer matches proof
  */
 
 import { DeliveryPackage, IntegratedCandidate, ProMaxAssessment } from "../types/missionState";
 import { ContractBoundStageContext } from "../types/stageContext";
 import { TrustedKernel } from "../kernel/trustedKernel";
 import { EvidenceRecord } from "../types/evidence";
+import { createHash } from "crypto";
 
 export interface LabResult {
   readonly success: boolean;
@@ -22,6 +30,7 @@ export class LabPackager {
     kernel: TrustedKernel,
     stageEvidence: readonly EvidenceRecord[]
   ): LabResult {
+    // 1. Check contractSatisfied
     if (!proMaxAssessment.contractSatisfied) {
       return {
         success: false,
@@ -29,8 +38,67 @@ export class LabPackager {
       };
     }
 
+    // 2. Check evidence freshness
+    if (!proMaxAssessment.evidenceFreshnessVerified) {
+      return {
+        success: false,
+        reasonCode: "NAMLA_LAB_REFUSED: Stale or invalidated evidence detected in mission assessment",
+      };
+    }
+
+    const staleInStage = stageEvidence.some((e) => e.status === "INVALIDATED" || e.status === "SUPERSEDED");
+    if (staleInStage) {
+      return {
+        success: false,
+        reasonCode: "NAMLA_LAB_REFUSED: Stale or invalidated evidence present in stage evidence pool",
+      };
+    }
+
+    // 3. Check test requirements and criteria
+    if (!proMaxAssessment.independentTestsPassed) {
+      return {
+        success: false,
+        reasonCode: "NAMLA_LAB_REFUSED: Required test requirements failed or blocked",
+      };
+    }
+
+    if (!proMaxAssessment.securityCheckPassed) {
+      return {
+        success: false,
+        reasonCode: "NAMLA_LAB_REFUSED: Security requirements check failed",
+      };
+    }
+
+    if (proMaxAssessment.failedCriteria.length > 0) {
+      return {
+        success: false,
+        reasonCode: `NAMLA_LAB_REFUSED: ${proMaxAssessment.failedCriteria.length} acceptance criteria failed or unverified`,
+      };
+    }
+
+    // 4. Verify artifact identity & current disk hashes match candidate specifications
     const checksums: Record<string, string> = {};
     for (const art of candidate.integratedArtifacts) {
+      const relPath = art.path.startsWith(candidate.workspacePath)
+        ? art.path
+        : `${candidate.workspacePath}/${art.path}`;
+
+      const read = kernel.safeReadWorkspaceFile(relPath);
+      if (!read.success || read.content === undefined) {
+        return {
+          success: false,
+          reasonCode: `NAMLA_LAB_REFUSED: Artifact ${art.path} missing or unreadable on disk`,
+        };
+      }
+
+      const diskHash = createHash("sha256").update(Buffer.from(read.content, "utf8")).digest("hex");
+      if (diskHash !== art.sha256) {
+        return {
+          success: false,
+          reasonCode: `NAMLA_LAB_REFUSED: Artifact hash mismatch for ${art.path}: expected ${art.sha256}, found ${diskHash}`,
+        };
+      }
+
       checksums[art.path] = art.sha256;
     }
 

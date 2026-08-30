@@ -1,6 +1,8 @@
 /**
- * V2 Evidence and Identity Contracts (§07, §28).
+ * V2 Evidence and Identity Contracts (§07, §28, P0-P1, P0-P2).
  */
+
+export type ProofKind = "TRACEABILITY" | "CLAIM" | "QUALIFICATION_PROOF";
 
 export interface ArtifactIdentity {
   readonly artifactId: string;
@@ -26,6 +28,7 @@ export interface EvidenceRecord {
   readonly stageId: string;
   readonly workPackageId?: string;
   readonly executionId?: string;
+  readonly proofKind?: ProofKind;
   readonly artifactIdentity?: ArtifactIdentity;
   readonly environmentIdentity: EnvironmentIdentity;
   readonly timestamp: number;
