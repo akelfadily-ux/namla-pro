@@ -29,6 +29,7 @@ import { EerEngine } from "../v2/eer/eerEngine";
 import { NamlaLoopGate } from "../v2/loop/namlaLoopGate";
 import { LabPackager } from "../v2/lab/labPackager";
 import { ProMaxVerifier, computeCandidateSnapshotHash } from "../v2/promax/proMaxVerifier";
+import * as proMaxModule from "../v2/promax/proMaxVerifier";
 import { ColonyExecutor } from "../v2/colony/colonyExecutor";
 import { PreFreezeStageContext, ContractBoundStageContext } from "../v2/types/stageContext";
 import { GateInput, StageRecoveryPolicy, LoopBudget } from "../v2/types/namlaLoopTypes";
@@ -114,6 +115,97 @@ test("P0-C9 REGRESSION: Passing Test For AC-1 Must NOT Prove Unbound AC-2", () =
     const labResult = packager.packageDeliverables(candidate, result.assessment, context, kernel, []);
     assert.equal(labResult.success, false);
     assert.equal(labResult.reasonCode.startsWith("NAMLA_LAB_REFUSED"), true);
+  } finally {
+    rmSync(ws, { recursive: true, force: true });
+  }
+});
+
+test("P0-RA9 Prototype & Module Function Monkey-Patching Adversarial Regression", () => {
+  // 1. Prove Object.isFrozen(ProMaxVerifier.prototype), ProMaxVerifier, and runCanonicalProMaxVerification are frozen
+  assert.equal(Object.isFrozen(ProMaxVerifier.prototype), true, "ProMaxVerifier.prototype MUST be frozen");
+  assert.equal(Object.isFrozen(ProMaxVerifier), true, "ProMaxVerifier constructor MUST be frozen");
+  assert.equal(Object.isFrozen(proMaxModule.runCanonicalProMaxVerification), true, "proMaxModule.runCanonicalProMaxVerification MUST be frozen");
+
+  // 2. Attempt direct property assignment and Object.defineProperty mutation on prototype AND exported module function
+  let maliciousExecuted = false;
+  const maliciousFunction = function (..._args: any[]) {
+    maliciousExecuted = true;
+    throw new Error("MALICIOUS_FUNCTION_EXECUTION");
+  };
+
+  // Attempt 1: Direct prototype method assignment
+  assert.throws(
+    () => {
+      (ProMaxVerifier.prototype as any).verifyCandidate = maliciousFunction;
+    },
+    /Cannot assign to read only property/
+  );
+
+  // Attempt 2: Prototype Object.defineProperty
+  assert.throws(
+    () => {
+      Object.defineProperty(ProMaxVerifier.prototype, "verifyCandidate", {
+        value: maliciousFunction,
+      });
+    },
+    /Cannot redefine property/
+  );
+
+  // Attempt 3: Direct module export assignment
+  assert.throws(
+    () => {
+      (proMaxModule as any).runCanonicalProMaxVerification = maliciousFunction;
+    },
+    /Cannot assign to read only property/
+  );
+
+  // Attempt 4: Module export Object.defineProperty
+  assert.throws(
+    () => {
+      Object.defineProperty(proMaxModule, "runCanonicalProMaxVerification", {
+        value: maliciousFunction,
+      });
+    },
+    /Cannot redefine property/
+  );
+
+  // 3. Call kernel.runProMaxVerification and assert canonical execution
+  const ws = tempWorkspace("ra9-prototype");
+  try {
+    const kernel = new TrustedKernel({ workspaceRoot: ws });
+    const leggoRel = "workspaces/v2-missions/m-ra9/leggo-integrated";
+    kernel.safeWriteWorkspaceFile(`${leggoRel}/package.json`, JSON.stringify({ name: "ra9", version: "1.0.0", scripts: { build: "node -v", test: "node -v" } }), "m-ra9");
+    kernel.safeWriteWorkspaceFile(`${leggoRel}/src/index.ts`, "export const x = 1;", "m-ra9");
+
+    const cand: IntegratedCandidate = {
+      candidateId: "cand-ra9",
+      missionId: "m-ra9",
+      integratedArtifacts: [{ artifactId: "a1", path: "src/index.ts", sha256: createHash("sha256").update("export const x = 1;").digest("hex"), sizeBytes: 19, missionId: "m-ra9" }],
+      resolvedConflicts: [],
+      sourceTraceability: { "src/index.ts": "COLONY_A" },
+      workspacePath: leggoRel,
+    };
+    const ctx: ContractBoundStageContext = {
+      missionId: "m-ra9",
+      authoritativeInputs: [],
+      policyVersions: ["v1.0.0"],
+      budgets: { virtualTicks: 100, providerCalls: 10, maxFixAttempts: 3 },
+      evidenceRefs: [],
+      missionStateRef: "VERIFYING",
+      executionMode: "DETERMINISTIC_FIXTURE_MODE",
+      contractPhase: "CONTRACT_BOUND",
+      frozenPlanContract: {
+        contractId: "c1", version: "v1.0.0", contractHash: "h1", objective: "Obj",
+        acceptanceCriteria: [{ id: "ac-1", description: "AC1", verificationMethod: "TEST", required: true, requiredRequirementId: "tr-1" }],
+        constraints: [], tasks: [], dependencies: [], allowedCapabilities: [],
+        requiredTests: [{ id: "tr-1", type: "TEST", verifier: "TEST_SUITE_VERIFIER", name: "T1", command: "npm test", expectedExitCode: 0, provesCriterionIds: ["ac-1"] }],
+        securityRequirements: [], expectedArtifacts: [], evidenceRequirements: [], riskClassification: "LOW", completionConditions: [], frozenAt: Date.now(),
+      },
+    };
+
+    const res = kernel.runProMaxVerification(cand, ctx, []);
+    assert.equal(maliciousExecuted, false, "Malicious prototype override MUST NOT be executed");
+    assert.equal(res.success, true, "Canonical verification MUST execute safely");
   } finally {
     rmSync(ws, { recursive: true, force: true });
   }

@@ -129,6 +129,10 @@ export function getExpectedSourceExecution(
 }
 
 export class ProMaxVerifier {
+  constructor() {
+    Object.freeze(this);
+  }
+
   public verifyCandidate(
     candidate: IntegratedCandidate,
     context: ContractBoundStageContext,
@@ -136,7 +140,22 @@ export class ProMaxVerifier {
     permit: TrustedVerifierPermit,
     evidencePool: readonly EvidenceRecord[] = []
   ): ProMaxResult {
-    const verifiedCriteria: string[] = [];
+    return runCanonicalProMaxVerification(candidate, context, kernel, permit, evidencePool);
+  }
+}
+
+Object.freeze(ProMaxVerifier.prototype);
+Object.freeze(ProMaxVerifier);
+Object.freeze(computeCandidateSnapshotHash);
+
+export function runCanonicalProMaxVerification(
+  candidate: IntegratedCandidate,
+  context: ContractBoundStageContext,
+  kernel: TrustedKernel,
+  permit: TrustedVerifierPermit,
+  evidencePool: readonly EvidenceRecord[] = []
+): ProMaxResult {
+  const verifiedCriteria: string[] = [];
     const failedCriteria: string[] = [];
     const unverifiedCriteria: string[] = [];
     const proofMappings: ProofMapping[] = [];
@@ -246,7 +265,7 @@ export class ProMaxVerifier {
       let secFailed = false;
       if (secReq.rule === "NO_SECRET_LEAKAGE") {
         for (const art of candidate.integratedArtifacts) {
-          const relPath = this.resolveArtifactPath(candidate.workspacePath, art.path);
+          const relPath = resolveArtifactPath(candidate.workspacePath, art.path);
           const read = kernel.safeReadWorkspaceFile(relPath);
           if (read.content && looksLikeSecret(read.content)) {
             securityCheckPassed = false;
@@ -308,7 +327,7 @@ export class ProMaxVerifier {
     let regressionPassed = true;
 
     for (const reqTest of contract.requiredTests) {
-      const verifierRes = this.dispatchSemanticVerifier(reqTest, candidate, context, kernel);
+      const verifierRes = dispatchSemanticVerifier(reqTest, candidate, context, kernel);
       if (verifierRes.evidenceRecord) {
         accumulatedPool.push(verifierRes.evidenceRecord);
       }
@@ -605,12 +624,12 @@ export class ProMaxVerifier {
     };
   }
 
-  private dispatchSemanticVerifier(
-    reqTest: TestRequirement,
-    candidate: IntegratedCandidate,
-    context: ContractBoundStageContext,
-    kernel: TrustedKernel
-  ): { verifier: string; observation: string; evidenceRef: string; status: "VERIFIED" | "FAILED" | "BLOCKED"; artifactHash?: string; evidenceRecord?: EvidenceRecord } {
+function dispatchSemanticVerifier(
+  reqTest: TestRequirement,
+  candidate: IntegratedCandidate,
+  context: ContractBoundStageContext,
+  kernel: TrustedKernel
+): { verifier: string; observation: string; evidenceRef: string; status: "VERIFIED" | "FAILED" | "BLOCKED"; artifactHash?: string; evidenceRecord?: EvidenceRecord } {
     const verifierType = reqTest.verifier ?? reqTest.type ?? "TEST";
     const projectClass: ProjectClass = context.projectClass ?? "TYPESCRIPT_LIBRARY";
     const primaryArtifactHash = candidate.integratedArtifacts[0]?.sha256;
@@ -774,7 +793,7 @@ export class ProMaxVerifier {
     }
   }
 
-  private resolveArtifactPath(candidateWorkspacePath: string, artPath: string, kernel?: TrustedKernel): string {
+function resolveArtifactPath(candidateWorkspacePath: string, artPath: string, kernel?: TrustedKernel): string {
     if (kernel) {
       const check = kernel.isInsideCandidateWorkspace(candidateWorkspacePath, artPath);
       if (check.ok) return check.resolvedRelPath;
@@ -785,5 +804,10 @@ export class ProMaxVerifier {
       return cleanArt;
     }
     return `${cleanCand}/${cleanArt}`;
-  }
+}
+
+Object.freeze(runCanonicalProMaxVerification);
+
+if (typeof exports !== "undefined") {
+  Object.freeze(exports);
 }

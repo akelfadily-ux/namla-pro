@@ -15,6 +15,12 @@ import { CapabilityScope, PlanContract } from "../types/contracts";
 import { ArtifactIdentity, EnvironmentIdentity, EvidenceRecord, ProofKind } from "../types/evidence";
 import { IntegratedCandidate } from "../types/missionState";
 import { StageContextBase } from "../types/stageContext";
+import { runCanonicalProMaxVerification, computeCandidateSnapshotHash, ProMaxResult } from "../promax/proMaxVerifier";
+
+const capturedRunCanonicalProMaxVerification = runCanonicalProMaxVerification;
+const capturedComputeCandidateSnapshotHash = computeCandidateSnapshotHash;
+Object.freeze(capturedRunCanonicalProMaxVerification);
+Object.freeze(capturedComputeCandidateSnapshotHash);
 import {
   getCanonicalWorkspaceRoot,
   resolveWorkspacePath,
@@ -440,17 +446,14 @@ export class TrustedKernel {
     candidate: TCandidate,
     context: TContext,
     evidencePool: readonly EvidenceRecord[] = []
-  ): import("../promax/proMaxVerifier").ProMaxResult {
-    const { ProMaxVerifier, computeCandidateSnapshotHash } = require("../promax/proMaxVerifier");
-    const canonicalVerifier = new ProMaxVerifier();
-
-    const candidateSnapshotHash = computeCandidateSnapshotHash(candidate.integratedArtifacts);
+  ): ProMaxResult {
+    const candidateSnapshotHash = capturedComputeCandidateSnapshotHash(candidate.integratedArtifacts);
     const sessionId = `sess-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const permit = new InternalVerifierPermit(context.missionId, candidateSnapshotHash, sessionId);
 
     this.#activeVerifierPermits.add(permit);
     try {
-      return canonicalVerifier.verifyCandidate(candidate, context, this, permit, evidencePool);
+      return capturedRunCanonicalProMaxVerification(candidate, context as any, this, permit, evidencePool);
     } finally {
       this.#activeVerifierPermits.delete(permit);
     }
