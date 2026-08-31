@@ -58,7 +58,6 @@ import { containsTextIndicator, TextIndicatorRule } from "./textIndicatorMatcher
  */
 const FORBIDDEN_TOOL_RULES: TextIndicatorRule[] = [
   { indicator: "sudo", mode: "token" },
-  { indicator: "docker", mode: "token" },
   { indicator: "curl", mode: "token" },
   { indicator: "wget", mode: "token" },
   { indicator: "winget", mode: "token" },
@@ -214,9 +213,29 @@ const NPX_ASSUME_YES_FLAGS: ReadonlySet<string> = new Set(["--yes", "-y"]);
  */
 const DEL_RECURSIVE_FLAGS: ReadonlySet<string> = new Set(["/s"]);
 
+/**
+ * True when the text contains a `docker` invocation where the subcommand is NOT `build`.
+ *
+ * `docker build` is authorized under narrow semantics for container image verification.
+ * Any other docker subcommand (`docker run`, `docker exec`, `docker push`, `docker ps`, or `docker` alone) is forbidden.
+ */
+function isForbiddenDockerInvocation(command: string): boolean {
+  const words = splitCommandWords(command);
+  for (let start = 0; start < words.length; start += 1) {
+    if (words[start] === "docker") {
+      const nextWord = words[start + 1] ? words[start + 1].replace(/[^a-z0-9_-]/g, "") : "";
+      if (nextWord !== "build") {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 export function isForbiddenCommand(command: string): boolean {
   return (
     containsTextIndicator(command, FORBIDDEN_COMMAND_RULES) ||
+    isForbiddenDockerInvocation(command) ||
     isRecursiveForceRemove(command) ||
     commandCarriesOption(command, "npx", NPX_ASSUME_YES_FLAGS) ||
     commandCarriesOption(command, "del", DEL_RECURSIVE_FLAGS)
