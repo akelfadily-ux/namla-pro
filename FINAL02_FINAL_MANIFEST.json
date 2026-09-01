@@ -1,0 +1,34 @@
+{
+  "handoffArtifacts": [
+    {
+      "filename": "FINAL02_FINAL_CLEAN_HANDOFF.zip",
+      "byteLength": 1548291,
+      "sha256": "170ce01db0851047bbaee4eae443f5c388bbb101c3e9a155be2b2f1146b4fd08"
+    },
+    {
+      "filename": "FINAL02_FINAL_VALIDATION.json",
+      "byteLength": 875,
+      "sha256": "199af8b387b80f9c44a64805f3916c5ca11b95c81c6be35f325e1d429bf1a2c4"
+    },
+    {
+      "filename": "FINAL02_FINAL_TEST_REPORT.json",
+      "byteLength": 393,
+      "sha256": "da523f987f68f9612c0108fedd5a4b762dee6e566789e94726f616137895efc0"
+    },
+    {
+      "filename": "FINAL02_FINAL_BASELINE_PARITY.json",
+      "byteLength": 1708,
+      "sha256": "dab66b0144fd2ca8e01f056160243e2b0892a37d7ff7dce104b02e4715a7afd9"
+    },
+    {
+      "filename": "FINAL02_FINAL_CHANGED_FILES.md",
+      "byteLength": 1188,
+      "sha256": "ec16eda19151305ace99fcf70f6b300883cd6692ee7c831883e00674fe918239"
+    },
+    {
+      "filename": "FINAL02_FINAL_GIT_READONLY_STATE.json",
+      "byteLength": 1399,
+      "sha256": "1af2b2bad94013643d15cbbef8c4060c5f0f51d10e2f2127d7c56188e4f93ca3"
+    }
+  ]
+}

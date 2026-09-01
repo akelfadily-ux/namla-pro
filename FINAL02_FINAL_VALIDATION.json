@@ -1,0 +1,43 @@
+{
+  "typecheck": {
+    "command": "npm run typecheck",
+    "passed": true,
+    "errors": 0
+  },
+  "build": {
+    "command": "npm run build",
+    "passed": true,
+    "errors": 0
+  },
+  "final02ExecutionRuntimeTests": {
+    "totalScenarios": 18,
+    "passed": 18,
+    "failed": 0
+  },
+  "twinRunMetricsTests": {
+    "totalScenarios": 29,
+    "passed": 29,
+    "failed": 0
+  },
+  "p0SecurityGate": {
+    "command": "npm test",
+    "passed": 718,
+    "failed": 0,
+    "skipped": 27,
+    "totalSuites": 29
+  },
+  "goldenDemos": {
+    "command": "npm run test:golden",
+    "totalDemos": 41,
+    "passedDemos": 41,
+    "failedDemos": 0,
+    "totalExpectations": 1128,
+    "passedExpectations": 1128,
+    "allGoldensPassed": true
+  },
+  "baselineParity": {
+    "baselineCommit": "50cd4ef8198f4eafb896e17d999050ba60b34a19",
+    "introducedFailures": 0,
+    "parityIntact": true
+  }
+}

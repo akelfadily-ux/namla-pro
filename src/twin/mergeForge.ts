@@ -27,11 +27,26 @@ import type { VerificationDriver, VerificationOutcome } from "../digital/digital
 export type MergeVerificationStage = "typecheck" | "tests" | "build" | "security-review" | "acceptance-verification";
 export const MERGE_STAGES: readonly MergeVerificationStage[] = ["typecheck", "tests", "build", "security-review", "acceptance-verification"];
 
-import type { SandboxSecurityReceipt as Final02SandboxSecurityReceipt, MergeVerificationOutcome as Final02MergeVerificationOutcome } from "./final02/contracts";
+export interface SandboxSecurityReceipt {
+  readonly backendId: string;
+  readonly backendVerificationId: string;
+  readonly executionId: string;
+  readonly workspaceId: string;
+  readonly realProcessExecution: boolean;
+  readonly sandboxVerified: boolean;
+  readonly networkIsolated: boolean;
+  readonly credentialsProtected: boolean;
+  readonly dockerSocketProtected: boolean;
+  readonly mountPolicyVerified: boolean;
+  readonly sourceMountReadOnly: boolean;
+  readonly pathTraversalProtected: boolean;
+  readonly symlinkEscapeProtected: boolean;
+  readonly resourceLimitsVerified: boolean;
+  readonly timeoutEnforced: boolean;
+  readonly cleanupVerified: boolean;
+}
 
-export type SandboxSecurityReceipt = Final02SandboxSecurityReceipt;
-
-export interface MergeVerificationOutcome extends Final02MergeVerificationOutcome {
+export interface MergeVerificationOutcome {
   readonly stage: MergeVerificationStage;
   readonly passed: boolean;
   readonly realExecution: boolean;
@@ -42,17 +57,8 @@ export interface MergeVerificationOutcome extends Final02MergeVerificationOutcom
   readonly securityReceipt?: SandboxSecurityReceipt;
 }
 
-export interface MergeVerificationDriverInput {
-  readonly stage: MergeVerificationStage;
-  readonly workspaceId: string;
-  readonly absoluteWorkspacePath: string;
-  readonly expectedMergedTreeDigest: string;
-  readonly injectFailure?: boolean;
-}
-
 export interface MergeVerificationDriver {
   readonly isReal: boolean;
-  run(input: MergeVerificationDriverInput): MergeVerificationOutcome;
   run(stage: MergeVerificationStage, workspacePath: string, injectFailure: boolean): MergeVerificationOutcome;
 }
 
@@ -63,31 +69,21 @@ export class FakeMergeVerificationDriver implements MergeVerificationDriver {
   get runCount(): number {
     return this.runs;
   }
-  run(inputOrStage: MergeVerificationDriverInput | MergeVerificationStage, workspacePath?: string, injectFailure?: boolean): MergeVerificationOutcome {
+  run(stage: MergeVerificationStage, workspacePath: string, injectFailure: boolean): MergeVerificationOutcome {
     this.runs += 1;
-    const stage = typeof inputOrStage === "object" ? inputOrStage.stage : inputOrStage;
-    const ws = typeof inputOrStage === "object" ? inputOrStage.workspaceId : workspacePath ?? "simulated-ws";
-    const absPath = typeof inputOrStage === "object" ? inputOrStage.absoluteWorkspacePath : `/simulated/${ws}`;
-    const digest = typeof inputOrStage === "object" ? inputOrStage.expectedMergedTreeDigest : "sha256-simulated-merged-tree";
-    const inj = typeof inputOrStage === "object" ? inputOrStage.injectFailure === true : injectFailure === true;
-
     return {
       stage,
-      passed: !inj,
+      passed: !injectFailure,
       realExecution: false,
-      workspaceId: ws,
-      absolutePathIdentity: absPath,
+      workspaceId: workspacePath,
+      absolutePathIdentity: `/simulated/${workspacePath}`,
       baselineDigest: "sha256-simulated-baseline",
-      mergedTreeDigest: digest,
+      mergedTreeDigest: "sha256-simulated-merged-tree",
       securityReceipt: {
         backendId: "fake-simulated-driver",
-        keyId: "fake-key-01",
         backendVerificationId: "verif-fake",
         executionId: `exec-${this.runs}`,
-        workspaceId: ws,
-        absoluteWorkspacePath: absPath,
-        mergedTreeDigest: digest,
-        signature: "sig-simulated-fake-signature",
+        workspaceId: workspacePath,
         realProcessExecution: false,
         sandboxVerified: false,
         networkIsolated: true,

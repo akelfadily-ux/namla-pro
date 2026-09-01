@@ -1,0 +1,19 @@
+{
+  "timestamp": "2026-08-28T18:00:00.000Z",
+  "summary": {
+    "totalSuites": 29,
+    "passedSuites": 29,
+    "failedSuites": 0,
+    "totalTests": 745,
+    "passedTests": 718,
+    "failedTests": 0,
+    "skippedTests": 27
+  },
+  "goldenSummary": {
+    "totalDemos": 41,
+    "passedDemos": 41,
+    "failedDemos": 0,
+    "totalExpectationChecks": 1128,
+    "passedExpectationChecks": 1128
+  }
+}

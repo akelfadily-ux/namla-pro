@@ -1,0 +1,37 @@
+{
+  "branchName": "final-02-production-integration-runtime",
+  "headSha": "c5074f376d2de05b452b7cbb16b90032febede38",
+  "baselineCommit": "50cd4ef8198f4eafb896e17d999050ba60b34a19",
+  "readOnlyBranchesVerified": {
+    "final02-hr-clean": {
+      "untouched": true,
+      "headSha": "d21407ab4034d3210cbcd2a99b66e3241db47d46"
+    },
+    "main": {
+      "untouched": true,
+      "headSha": "50cd4ef8198f4eafb896e17d999050ba60b34a19"
+    }
+  },
+  "gitStatus": [
+    "M src/cognitive/smokeWorkspace.ts",
+    "M src/tools/executableProvenanceTests.ts",
+    "A src/tools/final02BaselineParity.ts",
+    "A src/tools/generateP05ValidationEvidence.ts",
+    "A src/tools/testFixtures/final02SandboxSigner.ts",
+    "M src/tools/trustedExecutableTests.ts",
+    "A src/twin/final02/baselineMaterializer.ts",
+    "A src/twin/final02/conflictEngine.ts",
+    "A src/twin/final02/contracts.ts",
+    "A src/twin/final02/executionPlanBuilder.ts",
+    "A src/twin/final02/final02Coordinator.ts",
+    "A src/twin/final02/frozenArtifactResolver.ts",
+    "A src/twin/final02/materializer.ts",
+    "A src/twin/final02/productionTrustStore.ts",
+    "A src/twin/final02/regressionRunner.ts",
+    "A src/twin/final02/repairEngine.ts",
+    "A src/twin/final02/sandboxReceiptVerifier.ts",
+    "A src/twin/final02/treeDigest.ts",
+    "A src/twin/final02/verificationRunner.ts",
+    "A src/twin/final02/workspaceManager.ts"
+  ]
+}

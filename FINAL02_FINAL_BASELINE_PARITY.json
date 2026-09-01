@@ -1,0 +1,31 @@
+{
+  "baseline": {
+    "commit": "50cd4ef8198f4eafb896e17d999050ba60b34a19",
+    "exitCode": 1,
+    "failureIds": [
+      "trustedExecutableTests.js:an ancestor alias such as macOS /var -> var is NOT a symlinked executable",
+      "executableProvenanceTests.js:a REAL on-disk replacement after trust is detected and refused",
+      "executableProvenanceTests.js:a replaced file cannot reach a process, even with probeVersion",
+      "executableProvenanceTests.js:a wrong identity refuses BEFORE any process starts",
+      "executableProvenanceTests.js:a resolver-reported identity cannot vouch for a DIFFERENT candidate"
+    ],
+    "stdoutSha256": "8aca352e6f48a7fbfcc5fc4ff3243a200c542e37f57379530600628fd8331cc7",
+    "stderrSha256": "295905e31d7cd60edd1495b0912b96507935f4342ebb3f65272f5803ac35099c"
+  },
+  "final02": {
+    "treeDigest": "5ac5c11a5832f8c16518494772b421d3c8c2b150f16e83b30493612529be67e3",
+    "exitCode": 0,
+    "failureIds": [],
+    "stdoutSha256": "05610fc25243abf9be371d41f5cdddfc8a72a56902855cb1f6a087a7a2011135",
+    "stderrSha256": "796b2c30fef02f569a9d82f790d2e230ca6fc66a1cd3264fa4062ca1ac5d80cc"
+  },
+  "introducedFailures": [],
+  "resolvedFailures": [
+    "trustedExecutableTests.js:an ancestor alias such as macOS /var -> var is NOT a symlinked executable",
+    "executableProvenanceTests.js:a REAL on-disk replacement after trust is detected and refused",
+    "executableProvenanceTests.js:a replaced file cannot reach a process, even with probeVersion",
+    "executableProvenanceTests.js:a wrong identity refuses BEFORE any process starts",
+    "executableProvenanceTests.js:a resolver-reported identity cannot vouch for a DIFFERENT candidate"
+  ],
+  "unchangedFailures": []
+}

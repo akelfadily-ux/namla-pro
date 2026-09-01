@@ -6,9 +6,9 @@
  * Real executions must bind to exact mergedTreeDigest.
  */
 
-import type { MergeVerificationDriver, MergeVerificationOutcome, MergeVerificationDriverInput } from "../mergeForge";
+import type { MergeVerificationDriver, MergeVerificationOutcome } from "../mergeForge";
 import { MERGE_STAGES } from "../mergeForge";
-import type { VerificationReceipt } from "./contracts";
+import type { VerificationReceipt, MergeVerificationOutcome as ContractStageOutcome } from "./contracts";
 
 export function runZeroTrustVerification(
   workspaceId: string,
@@ -17,23 +17,11 @@ export function runZeroTrustVerification(
   driver: MergeVerificationDriver,
   injectFailureStage: string | null = null
 ): VerificationReceipt {
-  const stageOutcomes: MergeVerificationOutcome[] = [];
+  const stageOutcomes: ContractStageOutcome[] = [];
 
   for (const s of MERGE_STAGES) {
-    const driverInput: MergeVerificationDriverInput = {
-      stage: s,
-      workspaceId,
-      absoluteWorkspacePath,
-      expectedMergedTreeDigest: mergedTreeDigest,
-      injectFailure: s === injectFailureStage,
-    };
-    const outcome = (driver as any).run.length === 1
-      ? driver.run(driverInput)
-      : driver.run(s, workspaceId, s === injectFailureStage);
+    const outcome = driver.run(s, workspaceId, s === injectFailureStage);
 
-    // P0-3: Mandatory Verification Binding Requirement
-    // Every outcome must match expected workspaceId and absoluteWorkspacePath.
-    // For real process executions, mergedTreeDigest MUST match exactly.
     let validBinding = true;
 
     if (!outcome.workspaceId || outcome.workspaceId !== workspaceId) {
@@ -53,6 +41,7 @@ export function runZeroTrustVerification(
     stageOutcomes.push({
       ...outcome,
       passed: outcome.passed && validBinding,
+      securityReceipt: outcome.securityReceipt as any,
     });
   }
 
