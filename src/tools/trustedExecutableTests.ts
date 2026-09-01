@@ -14,7 +14,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync, realpathSync, readFileSync, existsSync } from "fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync, realpathSync, readFileSync, existsSync, chmodSync } from "fs";
 import { createHash } from "crypto";
 import { tmpdir } from "os";
 import { resolve, join, dirname, delimiter, isAbsolute, basename } from "path";
@@ -324,6 +324,13 @@ test("an ancestor alias such as macOS /var -> /private/var is NOT a symlinked ex
     if (!aliased) {
       t.skip("platform does not permit directory link creation - ancestor alias UNVERIFIED here");
       return;
+    }
+
+    // Ensure permissions do not cause untrusted-executable-owner refusal on POSIX
+    if (!IS_WINDOWS) {
+      chmodSync(binDir, 0o755);
+      chmodSync(aliasDir, 0o755);
+      chmodSync(join(binDir, "codex"), 0o755);
     }
 
     // Resolving THROUGH the aliased directory must succeed: the executable

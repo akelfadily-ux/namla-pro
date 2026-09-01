@@ -47,13 +47,20 @@ const IS_WINDOWS = process.platform === "win32";
 const DOCKER_NAME = IS_WINDOWS ? "docker.exe" : "docker";
 
 function tempDir(tag: string): string {
-  return realpathSync(mkdtempSync(join(tmpdir(), `namla-s9-${tag}-`)));
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), `namla-s9-${tag}-`)));
+  if (!IS_WINDOWS) {
+    chmodSync(dir, 0o700);
+  }
+  return dir;
 }
 
 /** Plant an INERT file with an executable-looking name. Never executed. */
 function plant(dir: string, name = DOCKER_NAME): string {
   const p = join(dir, name);
   writeFileSync(p, "inert fixture - not a real executable\n");
+  if (!IS_WINDOWS) {
+    chmodSync(p, 0o755);
+  }
   return p;
 }
 

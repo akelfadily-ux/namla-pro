@@ -34,7 +34,9 @@ export function buildExecutionPlan(
   const workspacePath = `workspaces/namola-twin/${missionId}/merge-forge`;
 
   const plannedOps: PlannedFileOperation[] = provenanceReceipts.map((p) => {
-    const kind = ((p.component as any).operation as "ADD" | "MODIFY" | "DELETE" | "RENAME") ?? "ADD";
+    const componentOp = (p.component as { operation?: string }).operation;
+    const kind: "ADD" | "MODIFY" | "DELETE" | "RENAME" =
+      componentOp === "MODIFY" || componentOp === "DELETE" || componentOp === "RENAME" ? componentOp : "ADD";
     return {
       operationId: `op-${fnv1a(`${p.sourceColony}|${p.relativePath}|${kind}`)}`,
       kind,
