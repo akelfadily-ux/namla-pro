@@ -33,21 +33,34 @@ export function buildExecutionPlan(
   const planId = `plan-${fnv1a(`${decision}|${targetRelativePaths.join(",")}`)}`;
   const workspacePath = `workspaces/namola-twin/${missionId}/merge-forge`;
 
-  const plannedOps: PlannedFileOperation[] = provenanceReceipts.map((p) => {
-    const componentOp = (p.component as { operation?: string }).operation;
-    const kind: "ADD" | "MODIFY" | "DELETE" | "RENAME" =
-      componentOp === "MODIFY" || componentOp === "DELETE" || componentOp === "RENAME" ? componentOp : "ADD";
-    return {
-      operationId: `op-${fnv1a(`${p.sourceColony}|${p.relativePath}|${kind}`)}`,
-      kind,
-      sourceRelativePath: p.relativePath,
-      targetRelativePath: p.relativePath,
+  const plannedOps: PlannedFileOperation[] = [];
+
+  for (const p of provenanceReceipts) {
+    const comp = p.component as any;
+    if (!comp || !comp.operation) {
+      throw new Error("BLOCKED / MISSING_AUTHORITATIVE_FILE_OPERATION");
+    }
+
+    const op = comp.operation;
+
+    if (op.kind === "MODIFY" || op.kind === "DELETE" || op.kind === "RENAME") {
+      if (!op.expectedBaselineSha256) {
+        throw new Error("BLOCKED / MISSING_AUTHORITATIVE_FILE_OPERATION: expectedBaselineSha256 required");
+      }
+    }
+
+    plannedOps.push({
+      operationId: `op-${fnv1a(`${p.sourceColony}|${p.relativePath}|${op.kind}`)}`,
+      kind: op.kind,
+      sourceRelativePath: op.kind === "RENAME" ? op.sourceRelativePath : p.relativePath,
+      targetRelativePath: op.targetRelativePath,
+      expectedBaselineSha256: op.kind !== "ADD" ? op.expectedBaselineSha256 : undefined,
       sourceColonies: [p.sourceColony],
       sourceArtifactId: p.sourceArtifactId,
       sourceFingerprint: p.fnvFingerprint,
       sha256Digest: p.sha256Digest,
-    };
-  });
+    });
+  }
 
   const expectedOperations = plannedOps.map(
     (op) => `${op.kind} ${op.targetRelativePath} (from ${op.sourceColonies.join(",")}:${op.sourceArtifactId}) [sha256:${op.sha256Digest.slice(0, 8)}]`
