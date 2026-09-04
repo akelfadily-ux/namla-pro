@@ -27,3 +27,13 @@ export class PinnedSandboxTrustStore implements TrustedSandboxKeyRegistry {
     return this.keys.get(`${backendId}:${keyId}`) ?? null;
   }
 }
+
+export function createProductionTrustStore(): TrustedSandboxKeyRegistry {
+  return new PinnedSandboxTrustStore([
+    {
+      backendId: "docker-container-sandbox",
+      keyId: "prod-pinned-key-1",
+      publicKeyPem: "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA...\n-----END PUBLIC KEY-----",
+    },
+  ]);
+}

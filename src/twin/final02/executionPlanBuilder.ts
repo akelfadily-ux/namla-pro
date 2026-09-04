@@ -36,12 +36,11 @@ export function buildExecutionPlan(
   const plannedOps: PlannedFileOperation[] = [];
 
   for (const p of provenanceReceipts) {
-    const comp = p.component as any;
-    if (!comp || !comp.operation) {
+    if (!p.component || !p.component.operation) {
       throw new Error("BLOCKED / MISSING_AUTHORITATIVE_FILE_OPERATION");
     }
 
-    const op = comp.operation;
+    const op = p.component.operation;
 
     if (op.kind === "MODIFY" || op.kind === "DELETE" || op.kind === "RENAME") {
       if (!op.expectedBaselineSha256) {

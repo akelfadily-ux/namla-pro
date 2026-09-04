@@ -35,7 +35,7 @@ const ALLOWLIST_ENV_KEYS = new Set([
 /**
  * Builds a sanitized environment object stripping all credential patterns.
  */
-export function buildSanitizedEnvironment(rawEnv: Record<string, string | undefined> = process.env as any): Record<string, string> {
+export function buildSanitizedEnvironment(rawEnv: Record<string, string | undefined> = process.env): Record<string, string> {
   const sanitized: Record<string, string> = {};
 
   for (const [key, val] of Object.entries(rawEnv)) {
@@ -138,7 +138,7 @@ export function runRegressionSuite(opts: RunRegressionOptions): RegressionReceip
       const stderr = result.stderr ?? "";
       const exitCode = result.status;
       const signal = result.signal ? String(result.signal) : null;
-      const timedOut = result.error ? (result.error as any).code === "ETIMEDOUT" : false;
+      const timedOut = result.error ? (result.error as { code?: string }).code === "ETIMEDOUT" : false;
 
       const stdoutSha256 = computeSha256(stdout);
       const stderrSha256 = computeSha256(stderr);

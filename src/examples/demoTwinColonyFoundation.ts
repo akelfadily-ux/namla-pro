@@ -189,10 +189,10 @@ export function runDemoTwinColonyFoundation() {
   const mergeDriver = new FakeMergeVerificationDriver();
   const forge = new ZeroTrustMergeForge(MISSION_ID, mergeDriver);
   witness.observeCourtMerge("merge-workspace-created");
-  const unapproved: ApprovedMergeComponent = { componentId: "cmp-unapproved", sourceColony: "claude-forge", sourceArtifactId: "ghost.ts", sourceFingerprint: "", relativePath: "src/ghost.ts", requirementsCovered: [], evidenceRefs: [], reasonSelected: "none", knownRisks: [], requiredMergeTests: [] };
-  const admission = forge.receiveComponents([...namolaReceipt.approvedComponents, unapproved]);
+  const unapproved: ApprovedMergeComponent = { componentId: "cmp-unapproved", sourceColony: "claude-forge", sourceArtifactId: "ghost.ts", sourceFingerprint: "", relativePath: "src/ghost.ts", operation: { kind: "ADD", targetRelativePath: "src/ghost.ts", sourceArtifactSha256: "sha-ghost" }, requirementsCovered: [], evidenceRefs: [], reasonSelected: "none", knownRisks: [], requiredMergeTests: [] };
+  const admission = forge.materializeResolvedComponents([...namolaReceipt.approvedComponents, unapproved], claude, codex);
   witness.observeCourtMerge("provenance-retained", forge.provenanceRecords.length, forge.provenanceRecords.length === namolaReceipt.approvedComponents.length);
-  witness.observeCourtMerge("components-approved", 0, admission.rejected > 0);
+  witness.observeCourtMerge("components-approved", 0, forge.rejectedComponents.length > 0);
 
   witness.observeCourtMerge("merge-verification-started");
   const firstRun = forge.runVerification("tests"); // one injected integration failure
@@ -346,7 +346,7 @@ export function runDemoTwinColonyFoundation() {
     // must be named here, not merely counted.
     ["decision-receipt-complete", namolaReceipt.hardRejectionChecks.length === 11 && namolaReceipt.hardRejectionChecks.some((c) => c.id === "no-unverified-v2-candidate") && namolaReceipt.evidenceRejected.includes("provider-reputation") && namolaReceipt.decisionFingerprint.length > 0],
     ["approved-components-retain-provenance", forge.provenanceRecords.length === 2 && forge.provenanceRecords.every((p) => p.originalFingerprint.length > 0 && p.sourceColony.length > 0 && p.mergeFingerprint.length > 0)],
-    ["unapproved-component-rejected", forge.rejectedComponents.some((r) => !r.ok && r.reasonCode === "missing-provenance") && admission.accepted === 2],
+    ["unapproved-component-rejected", forge.rejectedComponents.some((r) => !r.ok && (r.reasonCode === "missing-provenance" || r.reasonCode === "artifact-not-found-in-bundle")) && forge.componentsWritten === 2],
     ["merge-workspace-starts-fresh", forge.mergeWorkspacePath === `workspaces/namola-twin/${MISSION_ID}/merge-forge` && forge.fileCount === 2],
     ["no-passing-status-inherited", forge.inheritedPassingStatus === false && finalWitnessReport.inheritedPassingStatusDetected === false],
     ["one-merge-integration-failure", firstRunPassed === false],

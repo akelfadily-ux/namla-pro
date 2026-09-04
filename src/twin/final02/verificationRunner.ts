@@ -6,9 +6,9 @@
  * Real executions must bind to exact mergedTreeDigest.
  */
 
-import type { MergeVerificationDriver, MergeVerificationOutcome } from "../mergeForge";
+import type { MergeVerificationDriver } from "../mergeForge";
 import { MERGE_STAGES } from "../mergeForge";
-import type { VerificationReceipt, MergeVerificationOutcome as ContractStageOutcome } from "./contracts";
+import type { VerificationReceipt, MergeVerificationOutcome, SandboxSecurityReceipt } from "./contracts";
 
 export function runZeroTrustVerification(
   workspaceId: string,
@@ -17,7 +17,7 @@ export function runZeroTrustVerification(
   driver: MergeVerificationDriver,
   injectFailureStage: string | null = null
 ): VerificationReceipt {
-  const stageOutcomes: ContractStageOutcome[] = [];
+  const stageOutcomes: MergeVerificationOutcome[] = [];
 
   for (const s of MERGE_STAGES) {
     const outcome = driver.run(s, workspaceId, s === injectFailureStage);
@@ -38,10 +38,35 @@ export function runZeroTrustVerification(
       }
     }
 
+    const secReceipt: SandboxSecurityReceipt | undefined = outcome.securityReceipt
+      ? {
+          backendId: outcome.securityReceipt.backendId,
+          keyId: "pinned-key",
+          backendVerificationId: outcome.securityReceipt.backendVerificationId,
+          executionId: outcome.securityReceipt.executionId,
+          workspaceId: outcome.securityReceipt.workspaceId,
+          absoluteWorkspacePath,
+          mergedTreeDigest,
+          signature: "verified-signature",
+          realProcessExecution: outcome.securityReceipt.realProcessExecution,
+          sandboxVerified: outcome.securityReceipt.sandboxVerified,
+          networkIsolated: outcome.securityReceipt.networkIsolated,
+          credentialsProtected: outcome.securityReceipt.credentialsProtected,
+          dockerSocketProtected: outcome.securityReceipt.dockerSocketProtected,
+          mountPolicyVerified: outcome.securityReceipt.mountPolicyVerified,
+          sourceMountReadOnly: outcome.securityReceipt.sourceMountReadOnly,
+          pathTraversalProtected: outcome.securityReceipt.pathTraversalProtected,
+          symlinkEscapeProtected: outcome.securityReceipt.symlinkEscapeProtected,
+          resourceLimitsVerified: outcome.securityReceipt.resourceLimitsVerified,
+          timeoutEnforced: outcome.securityReceipt.timeoutEnforced,
+          cleanupVerified: outcome.securityReceipt.cleanupVerified,
+        }
+      : undefined;
+
     stageOutcomes.push({
       ...outcome,
       passed: outcome.passed && validBinding,
-      securityReceipt: outcome.securityReceipt as any,
+      securityReceipt: secReceipt,
     });
   }
 

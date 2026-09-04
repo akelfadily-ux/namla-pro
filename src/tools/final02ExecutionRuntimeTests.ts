@@ -345,8 +345,11 @@ export function runFinal02ExecutionRuntimeTests(): { readonly ok: true; readonly
     });
 
     if (postColonyRes.status === "success") {
-      // Corrupt component fingerprint in decision receipt
-      (postColonyRes.decisionReceipt as any).approvedComponents[0].sourceFingerprint = "corrupted-fp";
+      const receipt = postColonyRes.decisionReceipt;
+      const corruptedCmps = receipt.approvedComponents.map((c, i) =>
+        i === 0 ? { ...c, sourceFingerprint: "corrupted-fp" } : c
+      );
+      Object.assign(receipt, { approvedComponents: corruptedCmps });
     }
 
     const realDriver = new TestRealVerificationDriver("docker-container-sandbox", true);
@@ -394,8 +397,8 @@ export function runFinal02ExecutionRuntimeTests(): { readonly ok: true; readonly
   // 6. 12 Conflict Classes Taxonomy classification tests.
   {
     const dummyComp: ApprovedMergeComponent[] = [
-      { componentId: "c1", sourceColony: "claude-forge", sourceArtifactId: "a1", sourceFingerprint: "fp1", relativePath: "x", requirementsCovered: [], evidenceRefs: [], reasonSelected: "r", knownRisks: [], requiredMergeTests: [] },
-      { componentId: "c2", sourceColony: "codex-crucible", sourceArtifactId: "a2", sourceFingerprint: "fp2", relativePath: "x", requirementsCovered: [], evidenceRefs: [], reasonSelected: "r", knownRisks: [], requiredMergeTests: [] },
+      { componentId: "c1", sourceColony: "claude-forge", sourceArtifactId: "a1", sourceFingerprint: "fp1", relativePath: "x", operation: { kind: "ADD", targetRelativePath: "x", sourceArtifactSha256: "sha-x1" }, requirementsCovered: [], evidenceRefs: [], reasonSelected: "r", knownRisks: [], requiredMergeTests: [] },
+      { componentId: "c2", sourceColony: "codex-crucible", sourceArtifactId: "a2", sourceFingerprint: "fp2", relativePath: "x", operation: { kind: "ADD", targetRelativePath: "x", sourceArtifactSha256: "sha-x2" }, requirementsCovered: [], evidenceRefs: [], reasonSelected: "r", knownRisks: [], requiredMergeTests: [] },
     ];
 
     assert.equal(classifyConflict("src/component.ts", dummyComp).conflictClass, "FILE_ADD_ADD");
@@ -427,6 +430,7 @@ export function runFinal02ExecutionRuntimeTests(): { readonly ok: true; readonly
         sourceArtifactId: "src/securityPolicy.ts",
         sourceFingerprint: "fp-sec1",
         relativePath: "src/securityPolicy.ts",
+        operation: { kind: "ADD", targetRelativePath: "src/securityPolicy.ts", sourceArtifactSha256: "sha-sec1" },
         requirementsCovered: [],
         evidenceRefs: [],
         reasonSelected: "security",
@@ -439,13 +443,14 @@ export function runFinal02ExecutionRuntimeTests(): { readonly ok: true; readonly
         sourceArtifactId: "src/securityPolicy.ts",
         sourceFingerprint: "fp-sec2",
         relativePath: "src/securityPolicy.ts",
+        operation: { kind: "ADD", targetRelativePath: "src/securityPolicy.ts", sourceArtifactSha256: "sha-sec2" },
         requirementsCovered: [],
         evidenceRefs: [],
         reasonSelected: "security",
         knownRisks: [],
         requiredMergeTests: [],
       };
-      (receipt as any).approvedComponents = [secComp, secComp2];
+      Object.assign(receipt, { approvedComponents: [secComp, secComp2] });
     }
 
     const realDriver = new TestRealVerificationDriver();
@@ -481,6 +486,7 @@ export function runFinal02ExecutionRuntimeTests(): { readonly ok: true; readonly
         sourceArtifactId: "db/migration.sql",
         sourceFingerprint: "fp-db1",
         relativePath: "db/migration.sql",
+        operation: { kind: "ADD", targetRelativePath: "db/migration.sql", sourceArtifactSha256: "sha-db1" },
         requirementsCovered: [],
         evidenceRefs: [],
         reasonSelected: "db",
@@ -493,13 +499,14 @@ export function runFinal02ExecutionRuntimeTests(): { readonly ok: true; readonly
         sourceArtifactId: "db/migration.sql",
         sourceFingerprint: "fp-db2",
         relativePath: "db/migration.sql",
+        operation: { kind: "ADD", targetRelativePath: "db/migration.sql", sourceArtifactSha256: "sha-db2" },
         requirementsCovered: [],
         evidenceRefs: [],
         reasonSelected: "db",
         knownRisks: [],
         requiredMergeTests: [],
       };
-      (receipt as any).approvedComponents = [db1, db2];
+      Object.assign(receipt, { approvedComponents: [db1, db2] });
     }
 
     const realDriver = new TestRealVerificationDriver();

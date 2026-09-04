@@ -6,9 +6,12 @@
   "readOnlyStateVerified": true,
   "gitStatus": [
     "M src/cognitive/smokeWorkspace.ts",
+    "M src/examples/demoNamolaTwinEmpireV1.ts",
+    "M src/examples/demoTwinColonyFoundation.ts",
     "M src/tools/executableProvenanceTests.ts",
     "A src/tools/final02AssertionInvariantsTests.ts",
     "A src/tools/final02BaselineParity.ts",
+    "M src/tools/final02ExecutionRuntimeTests.ts",
     "A src/tools/generateP05ValidationEvidence.ts",
     "A src/tools/testFixtures/final02SandboxSigner.ts",
     "M src/tools/trustedExecutableTests.ts",
@@ -25,6 +28,8 @@
     "A src/twin/final02/sandboxReceiptVerifier.ts",
     "A src/twin/final02/treeDigest.ts",
     "A src/twin/final02/verificationRunner.ts",
-    "A src/twin/final02/workspaceManager.ts"
+    "A src/twin/final02/workspaceManager.ts",
+    "M src/twin/mergeForge.ts",
+    "M src/twin/namolaSovereignCourt.ts"
   ]
 }

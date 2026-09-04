@@ -449,6 +449,7 @@ export function runDemoNamolaTwinEmpireV1() {
     sourceArtifactId: "ghost.ts",
     sourceFingerprint: "",
     relativePath: "src/ghost.ts",
+    operation: { kind: "ADD", targetRelativePath: "src/ghost.ts", sourceArtifactSha256: "sha-ghost" },
     requirementsCovered: [],
     evidenceRefs: [],
     reasonSelected: "none",
@@ -456,9 +457,9 @@ export function runDemoNamolaTwinEmpireV1() {
     requiredMergeTests: [],
   };
   const allComponents = [...namolaReceipt.approvedComponents, unapproved];
-  const admission = forge.receiveComponents(allComponents);
+  const admission = forge.materializeResolvedComponents(allComponents, claudeBundle, codexBundle);
   witness.observeCourtMerge("provenance-retained", forge.provenanceRecords.length, forge.provenanceRecords.length === namolaReceipt.approvedComponents.length);
-  witness.observeCourtMerge("components-approved", 0, admission.rejected > 0);
+  witness.observeCourtMerge("components-approved", 0, forge.rejectedComponents.length > 0);
 
   // Inject a merge integration failure
   witness.observeCourtMerge("merge-verification-started");
@@ -545,7 +546,7 @@ export function runDemoNamolaTwinEmpireV1() {
 
   // A fresh forge for the aborted scenario receives the (empty) approved set.
   const fakeForge = new ZeroTrustMergeForge(`${MISSION_ID}-fake`, new FakeMergeVerificationDriver());
-  fakeForge.receiveComponents(fakeNamolaReceipt.approvedComponents);
+  fakeForge.materializeResolvedComponents(fakeNamolaReceipt.approvedComponents, null, null);
   const fakeMergeAttempt = fakeForge.runVerification(null);
   const fakeMergeRefused = "refused" in fakeMergeAttempt && fakeMergeAttempt.refused === true;
   // Optional result is never dereferenced: verificationRuns is empty here.

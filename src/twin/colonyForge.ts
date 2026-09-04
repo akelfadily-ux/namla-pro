@@ -57,19 +57,31 @@ function architectureFor(profile: ColonyProfile, packet: TwinMissionPacket): Col
 
 function artifactFor(profile: ColonyProfile, packet: TwinMissionPacket): ColonyArtifactProposal {
   if (profile.culture === "architecture-first") {
+    const content = "export interface Repository<T> { add(item: T): void; list(): readonly T[]; }\nexport class InMemoryRepository<T> implements Repository<T> {\n  private readonly items: T[] = [];\n  add(item: T): void { this.items.push(item); }\n  list(): readonly T[] { return this.items; }\n}\n";
     return {
       relativePath: "src/repository.ts",
-      content: "export interface Repository<T> { add(item: T): void; list(): readonly T[]; }\nexport class InMemoryRepository<T> implements Repository<T> {\n  private readonly items: T[] = [];\n  add(item: T): void { this.items.push(item); }\n  list(): readonly T[] { return this.items; }\n}\n",
+      content,
       purpose: "Storage boundary that isolates the domain from persistence.",
       acceptanceCriteriaCovered: packet.acceptanceCriteria.slice(0, 1),
-    };
+      operation: {
+        kind: "ADD",
+        targetRelativePath: "src/repository.ts",
+        sourceArtifactSha256: fnv1a(`src/repository.ts|${content}`),
+      },
+    } as any;
   }
+  const content = "export interface Task { id: number; title: string; done: boolean; }\nexport class TaskManager {\n  private tasks: Task[] = [];\n  add(title: string): Task { const t = { id: this.tasks.length + 1, title, done: false }; this.tasks.push(t); return t; }\n  list(): readonly Task[] { return this.tasks; }\n  complete(id: number): boolean { const t = this.tasks.find((x) => x.id === id); if (!t) return false; t.done = true; return true; }\n}\n";
   return {
     relativePath: "src/taskManager.ts",
-    content: "export interface Task { id: number; title: string; done: boolean; }\nexport class TaskManager {\n  private tasks: Task[] = [];\n  add(title: string): Task { const t = { id: this.tasks.length + 1, title, done: false }; this.tasks.push(t); return t; }\n  list(): readonly Task[] { return this.tasks; }\n  complete(id: number): boolean { const t = this.tasks.find((x) => x.id === id); if (!t) return false; t.done = true; return true; }\n}\n",
+    content,
     purpose: "Working task manager delivering CRUD + completion immediately.",
     acceptanceCriteriaCovered: packet.acceptanceCriteria.slice(0, 2),
-  };
+    operation: {
+      kind: "ADD",
+      targetRelativePath: "src/taskManager.ts",
+      sourceArtifactSha256: fnv1a(`src/taskManager.ts|${content}`),
+    },
+  } as any;
 }
 
 /**

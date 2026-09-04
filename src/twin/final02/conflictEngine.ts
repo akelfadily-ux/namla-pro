@@ -456,7 +456,7 @@ export function processConflicts(
 
   for (const r of receipts) {
     const list = grouped.get(r.relativePath) ?? [];
-    list.push({ receipt: r, operationKind: (r.component as any).operation ?? "ADD" });
+    list.push({ receipt: r, operationKind: r.component.operation.kind });
     grouped.set(r.relativePath, list);
   }
 

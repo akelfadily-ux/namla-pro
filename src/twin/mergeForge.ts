@@ -253,7 +253,7 @@ export class ZeroTrustMergeForge {
 
     this.diskHandle = ensured.handle;
     const baselineFingerprint = fnv1a(`${this.mergeWorkspacePath}|baseline`);
-    const baselineDigest = computeSha256(`${this.mergeWorkspacePath}|baseline|${Date.now()}`);
+    const baselineDigest = computeSha256(`${this.mergeWorkspacePath}|baseline`);
 
     this.materializationReceipt = {
       workspaceId: this.mergeWorkspacePath,
@@ -269,42 +269,9 @@ export class ZeroTrustMergeForge {
     return this.materializationReceipt;
   }
 
-  /** Backward-compatible component admission helper for existing demos without explicit frozen bundle. */
-  receiveComponents(components: readonly ApprovedMergeComponent[]): { readonly accepted: number; readonly rejected: number } {
-    let accepted = 0;
-    if (!this.diskHandle) {
-      this.initializeWorkspace();
-    }
-    for (const c of components) {
-      if (!c.sourceFingerprint || c.sourceFingerprint.length === 0 || !c.sourceColony) {
-        this.rejected.push({ ok: false, reasonCode: "missing-provenance", componentId: c.componentId });
-        continue;
-      }
-      if (validateColonyRelPath(c.relativePath) !== "ok") {
-        this.rejected.push({ ok: false, reasonCode: "invalid-path", componentId: c.componentId });
-        continue;
-      }
-      const content = `// merged from ${c.sourceColony}:${c.sourceArtifactId}`;
-      this.files.set(c.relativePath, content);
-      if (this.diskHandle) {
-        writeLiveObjectiveFile(this.diskHandle, c.relativePath, content, 50000, { allowOverwrite: true });
-      }
-      const mergeFingerprint = fnv1a(`${this.mergeWorkspacePath}|${c.relativePath}|${c.sourceFingerprint}`);
-      this.provenance.push({
-        relativePath: c.relativePath,
-        sourceColony: c.sourceColony,
-        sourceArtifactId: c.sourceArtifactId,
-        originalFingerprint: c.sourceFingerprint,
-        mergeFingerprint,
-        sha256Digest: computeSha256(content),
-        reasonSelected: c.reasonSelected,
-        requirementsCovered: c.requirementsCovered,
-        verificationRequired: c.requiredMergeTests,
-      });
-      accepted += 1;
-      this.writtenCount += 1;
-    }
-    return { accepted, rejected: this.rejected.length };
+  /** Legacy merge component reception unconditionally hard disabled. */
+  receiveComponents(_components: readonly ApprovedMergeComponent[]): { readonly accepted: number; readonly rejected: number } {
+    throw new Error("LEGACY_MERGE_FORGE_DISABLED");
   }
 
   /**

@@ -43,6 +43,7 @@ import { buildExecutionPlan } from "./executionPlanBuilder";
 import { DisposableWorkspaceManager } from "./workspaceManager";
 import { materializeOperations } from "./materializer";
 import { verifySandboxSecurityReceipts, type TrustedSandboxKeyRegistry } from "./sandboxReceiptVerifier";
+import { createProductionTrustStore } from "./productionTrustStore";
 import { runZeroTrustVerification } from "./verificationRunner";
 import { runRegressionSuite } from "./regressionRunner";
 import { executeRepair } from "./repairEngine";
@@ -53,7 +54,6 @@ export interface Final02ExecuteInput {
   readonly acceptanceCriteria: readonly string[];
   readonly mergeVerificationDriver?: MergeVerificationDriver | null;
   readonly authorizeMergeRepair?: boolean;
-  readonly keyRegistry?: TrustedSandboxKeyRegistry;
 }
 
 export function executeFinal02Pipeline(input: Final02ExecuteInput): Final02Result {
@@ -61,11 +61,7 @@ export function executeFinal02Pipeline(input: Final02ExecuteInput): Final02Resul
   const checkpoints: Final02CheckpointEntry[] = [];
   let order = 0;
 
-  const keyRegistry: TrustedSandboxKeyRegistry = input.keyRegistry ?? {
-    resolve(_backendId: string, _keyId: string) {
-      return null;
-    },
-  };
+  const keyRegistry: TrustedSandboxKeyRegistry = createProductionTrustStore();
 
   const addCheckpoint = (checkpointId: string, passed: boolean, detail: string) => {
     checkpoints.push(Object.freeze({ checkpointId, passed, order: order++, detail }));
@@ -628,7 +624,7 @@ export function executeFinal02Pipeline(input: Final02ExecuteInput): Final02Resul
   addCheckpoint("FINAL02_REGRESSION_PASS", regressionPassed, regressionPassed ? "regression suite passed cleanly" : "regression gate failed");
 
   // 13. Customer Delivery Composition
-  const stageResultsRecord: Record<string, boolean> = {
+  const stageResultsRecord: Record<"typecheck" | "tests" | "build" | "security-review" | "acceptance-verification", boolean> = {
     typecheck: true,
     tests: true,
     build: true,
@@ -655,7 +651,7 @@ export function executeFinal02Pipeline(input: Final02ExecuteInput): Final02Resul
         mergeFingerprint: p.fnvFingerprint,
         requirementsCovered: p.component.requirementsCovered,
       })),
-      stageResults: stageResultsRecord as any,
+      stageResults: stageResultsRecord,
       incidents: mergePassed ? 0 : 1,
       repairRan: repairReceipt?.ran ?? false,
       verificationRuns: verificationRunsCount,

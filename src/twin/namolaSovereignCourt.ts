@@ -26,12 +26,37 @@ export interface HardRejectionCheck {
   readonly detail: string;
 }
 
+export type ApprovedFileOperation =
+  | {
+      readonly kind: "ADD";
+      readonly targetRelativePath: string;
+      readonly sourceArtifactSha256: string;
+    }
+  | {
+      readonly kind: "MODIFY";
+      readonly targetRelativePath: string;
+      readonly expectedBaselineSha256: string;
+      readonly sourceArtifactSha256: string;
+    }
+  | {
+      readonly kind: "DELETE";
+      readonly targetRelativePath: string;
+      readonly expectedBaselineSha256: string;
+    }
+  | {
+      readonly kind: "RENAME";
+      readonly sourceRelativePath: string;
+      readonly targetRelativePath: string;
+      readonly expectedBaselineSha256: string;
+    };
+
 export interface ApprovedMergeComponent {
   readonly componentId: string;
   readonly sourceColony: ColonyId;
   readonly sourceArtifactId: string;
   readonly sourceFingerprint: string;
   readonly relativePath: string;
+  readonly operation: ApprovedFileOperation;
   readonly requirementsCovered: readonly string[];
   readonly evidenceRefs: readonly string[];
   readonly reasonSelected: string;
@@ -103,12 +128,19 @@ export function evaluateHardRejections(input: NamolaCourtInput): readonly HardRe
 function componentsFor(bundle: ColonyEvidenceBundle, acceptance: readonly string[], reason: string): ApprovedMergeComponent[] {
   return bundle.artifacts.map((artifact, i) => {
     const manifest = bundle.artifactManifest[i];
+    const evidenceOp = (artifact as { operation?: ApprovedFileOperation }).operation ?? {
+      kind: "ADD",
+      targetRelativePath: artifact.relativePath,
+      sourceArtifactSha256: manifest.fingerprint,
+    };
+
     return {
       componentId: `cmp-${fnv1a(`${bundle.colonyId}|${artifact.relativePath}`)}`,
       sourceColony: bundle.colonyId,
       sourceArtifactId: artifact.relativePath,
       sourceFingerprint: manifest.fingerprint,
       relativePath: artifact.relativePath,
+      operation: evidenceOp,
       requirementsCovered: artifact.acceptanceCriteriaCovered.filter((c) => acceptance.includes(c)),
       evidenceRefs: [manifest.fingerprint, bundle.fingerprint],
       reasonSelected: reason,
