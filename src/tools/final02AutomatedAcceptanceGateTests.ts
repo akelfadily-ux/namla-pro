@@ -6,7 +6,13 @@ import { join } from "node:path";
 describe("FINAL-02 Automated Acceptance Gate", () => {
   it("prohibits Court-side default operation generation without evidence", () => {
     const courtContent = readFileSync(join(process.cwd(), "src/twin/namolaSovereignCourt.ts"), "utf8");
+    assert.equal(courtContent.includes('kind: "ADD"') && !courtContent.includes('kind: "ADD";'), false);
     assert.equal(courtContent.includes("BLOCKED / MISSING_AUTHORITATIVE_FILE_OPERATION"), true);
+  });
+
+  it("prohibits placeholder PEM strings in production trust store", () => {
+    const storeContent = readFileSync(join(process.cwd(), "src/twin/final02/productionTrustStore.ts"), "utf8");
+    assert.equal(storeContent.includes("..."), false);
   });
 
   it("prohibits as any in FINAL-02 production and invariant test files", () => {

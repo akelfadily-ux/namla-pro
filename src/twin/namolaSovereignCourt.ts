@@ -128,11 +128,11 @@ export function evaluateHardRejections(input: NamolaCourtInput): readonly HardRe
 function componentsFor(bundle: ColonyEvidenceBundle, acceptance: readonly string[], reason: string): ApprovedMergeComponent[] {
   return bundle.artifacts.map((artifact, i) => {
     const manifest = bundle.artifactManifest[i];
-    const evidenceOp = (artifact as { operation?: ApprovedFileOperation }).operation ?? {
-      kind: "ADD",
-      targetRelativePath: artifact.relativePath,
-      sourceArtifactSha256: manifest.fingerprint,
-    };
+    const evidenceOp = artifact.operation;
+
+    if (!evidenceOp) {
+      throw new Error("BLOCKED / MISSING_AUTHORITATIVE_FILE_OPERATION");
+    }
 
     return {
       componentId: `cmp-${fnv1a(`${bundle.colonyId}|${artifact.relativePath}`)}`,

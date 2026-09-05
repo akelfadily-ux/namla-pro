@@ -56,12 +56,27 @@ export interface Final02ExecuteInput {
   readonly authorizeMergeRepair?: boolean;
 }
 
+export interface Final02ProductionRuntimeOptions {
+  readonly trustStore?: TrustedSandboxKeyRegistry;
+}
+
+export function createProductionFinal02Runtime(options: Final02ProductionRuntimeOptions = {}) {
+  const trustStore = options.trustStore ?? createProductionTrustStore([]);
+  return {
+    execute(input: Final02ExecuteInput): Final02Result {
+      return executeFinal02PipelineWithTrustStore(input, trustStore);
+    },
+  };
+}
+
 export function executeFinal02Pipeline(input: Final02ExecuteInput): Final02Result {
+  return createProductionFinal02Runtime().execute(input);
+}
+
+export function executeFinal02PipelineWithTrustStore(input: Final02ExecuteInput, keyRegistry: TrustedSandboxKeyRegistry): Final02Result {
   const { postColonyResult, missionId, objective, acceptanceCriteria, authorizeMergeRepair = false } = input;
   const checkpoints: Final02CheckpointEntry[] = [];
   let order = 0;
-
-  const keyRegistry: TrustedSandboxKeyRegistry = createProductionTrustStore();
 
   const addCheckpoint = (checkpointId: string, passed: boolean, detail: string) => {
     checkpoints.push(Object.freeze({ checkpointId, passed, order: order++, detail }));

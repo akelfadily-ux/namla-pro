@@ -29,11 +29,14 @@ export interface ColonyArchitectureProposal {
   readonly risks: readonly string[];
 }
 
+import type { ApprovedFileOperation } from "./namolaSovereignCourt";
+
 export interface ColonyArtifactProposal {
   readonly relativePath: string;
   readonly content: string;
   readonly purpose: string;
   readonly acceptanceCriteriaCovered: readonly string[];
+  readonly operation?: ApprovedFileOperation;
 }
 
 export interface ColonyReview {

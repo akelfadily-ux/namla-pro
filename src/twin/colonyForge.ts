@@ -68,7 +68,7 @@ function artifactFor(profile: ColonyProfile, packet: TwinMissionPacket): ColonyA
         targetRelativePath: "src/repository.ts",
         sourceArtifactSha256: fnv1a(`src/repository.ts|${content}`),
       },
-    } as any;
+    };
   }
   const content = "export interface Task { id: number; title: string; done: boolean; }\nexport class TaskManager {\n  private tasks: Task[] = [];\n  add(title: string): Task { const t = { id: this.tasks.length + 1, title, done: false }; this.tasks.push(t); return t; }\n  list(): readonly Task[] { return this.tasks; }\n  complete(id: number): boolean { const t = this.tasks.find((x) => x.id === id); if (!t) return false; t.done = true; return true; }\n}\n";
   return {
@@ -81,7 +81,7 @@ function artifactFor(profile: ColonyProfile, packet: TwinMissionPacket): ColonyA
       targetRelativePath: "src/taskManager.ts",
       sourceArtifactSha256: fnv1a(`src/taskManager.ts|${content}`),
     },
-  } as any;
+  };
 }
 
 /**

@@ -28,12 +28,13 @@ export class PinnedSandboxTrustStore implements TrustedSandboxKeyRegistry {
   }
 }
 
-export function createProductionTrustStore(): TrustedSandboxKeyRegistry {
-  return new PinnedSandboxTrustStore([
-    {
-      backendId: "docker-container-sandbox",
-      keyId: "prod-pinned-key-1",
-      publicKeyPem: "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA...\n-----END PUBLIC KEY-----",
-    },
-  ]);
+export function createProductionTrustStore(configuredKeys: readonly TrustedSandboxKey[] = []): TrustedSandboxKeyRegistry {
+  if (configuredKeys.length === 0) {
+    return {
+      resolve(_backendId: string, _keyId: string): TrustedSandboxKey | null {
+        return null; // Fail closed: unconfigured production key material resolves null
+      },
+    };
+  }
+  return new PinnedSandboxTrustStore(configuredKeys);
 }
