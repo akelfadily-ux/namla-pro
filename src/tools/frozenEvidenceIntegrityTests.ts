@@ -44,7 +44,7 @@ function evidence(status: TwinCandidateVerificationEvidence["finalStatus"]): Twi
 }
 
 function draftFor(colonyId: "claude-forge" | "codex-crucible", relPath: string, version2?: TwinCandidateVerificationEvidence["finalStatus"]) {
-  const artifact = { relativePath: relPath, content: "export const x = 1;", purpose: "p", acceptanceCriteriaCovered: ["works"] };
+  const artifact = { relativePath: relPath, content: "export const x = 1;", purpose: "p", acceptanceCriteriaCovered: ["works"], operation: { kind: "ADD" as const, targetRelativePath: relPath, sourceArtifactSha256: "sha-x" } };
   return {
     colonyId, missionId: "m", culture: colonyId === "claude-forge" ? ("architecture-first" as const) : ("implementation-first" as const),
     workspacePath: `workspaces/namola-twin/m/${colonyId}`,
@@ -150,7 +150,22 @@ test("10: v1 projection and fingerprints are byte-identical to their historical 
   const historical = JSON.stringify({
     colonyId: d.colonyId, missionId: d.missionId, culture: d.culture, workspacePath: d.workspacePath,
     filePlan: d.architecture.filePlan,
-    artifacts: d.artifacts.map((a) => ({ p: a.relativePath, c: a.content.length })),
+    artifacts: d.artifacts.map((a) => {
+      const op = a.operation as any;
+      return {
+        p: a.relativePath,
+        c: a.content.length,
+        op: op
+          ? {
+              k: op.kind,
+              t: op.targetRelativePath,
+              s: op.kind === "RENAME" ? op.sourceRelativePath : undefined,
+              eb: op.kind === "MODIFY" || op.kind === "DELETE" || op.kind === "RENAME" ? op.expectedBaselineSha256 : undefined,
+              sa: op.kind === "ADD" || op.kind === "MODIFY" ? op.sourceArtifactSha256 : undefined,
+            }
+          : undefined,
+      };
+    }),
     manifest: d.artifactManifest.map((m) => ({ p: m.relativePath, b: m.bytes, f: m.fingerprint })),
     reviews: d.reviews.map((r) => ({ d: r.decision, self: r.selfReview })),
     security: { passed: d.securityEvidence.passed, findings: d.securityEvidence.findings.length },

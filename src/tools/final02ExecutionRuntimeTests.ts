@@ -86,7 +86,7 @@ function createTestBundle(opts: {
 
   const artifacts = emptyArtifacts
     ? []
-    : [{ relativePath: artifactRelPath, content: artifactContent, purpose: "core", acceptanceCriteriaCovered: DEFAULT_ACCEPTANCE.slice(0, 2) }];
+    : [{ relativePath: artifactRelPath, content: artifactContent, purpose: "core", acceptanceCriteriaCovered: DEFAULT_ACCEPTANCE.slice(0, 2), operation: { kind: "ADD" as const, targetRelativePath: artifactRelPath, sourceArtifactSha256: fnv1a(`${artifactRelPath}|${artifactContent}`) } }];
 
   const artifactManifest = artifacts.map((a) => ({
     relativePath: a.relativePath,

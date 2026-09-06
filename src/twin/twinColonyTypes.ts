@@ -217,7 +217,19 @@ export function bundleCanonicalProjection(bundle: Omit<ColonyEvidenceBundle, "fi
     culture: bundle.culture,
     workspacePath: bundle.workspacePath,
     filePlan: bundle.architecture.filePlan,
-    artifacts: bundle.artifacts.map((a) => ({ p: a.relativePath, c: a.content.length })),
+    artifacts: bundle.artifacts.map((a) => ({
+      p: a.relativePath,
+      c: a.content.length,
+      op: a.operation
+        ? {
+            k: a.operation.kind,
+            t: a.operation.targetRelativePath,
+            s: a.operation.kind === "RENAME" ? a.operation.sourceRelativePath : undefined,
+            eb: a.operation.kind === "MODIFY" || a.operation.kind === "DELETE" || a.operation.kind === "RENAME" ? a.operation.expectedBaselineSha256 : undefined,
+            sa: a.operation.kind === "ADD" || a.operation.kind === "MODIFY" ? a.operation.sourceArtifactSha256 : undefined,
+          }
+        : undefined,
+    })),
     manifest: bundle.artifactManifest.map((m) => ({ p: m.relativePath, b: m.bytes, f: m.fingerprint })),
     reviews: bundle.reviews.map((r) => ({ d: r.decision, self: r.selfReview })),
     security: { passed: bundle.securityEvidence.passed, findings: bundle.securityEvidence.findings.length },

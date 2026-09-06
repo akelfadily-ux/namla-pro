@@ -173,7 +173,15 @@ export function freezeBundle(draft: Omit<ColonyEvidenceBundle, "fingerprint" | "
       interfaceDecisions: frozenStrings(draft.architecture.interfaceDecisions),
       risks: frozenStrings(draft.architecture.risks),
     }),
-    artifacts: Object.freeze(draft.artifacts.map((a) => Object.freeze({ ...a, acceptanceCriteriaCovered: frozenStrings(a.acceptanceCriteriaCovered) }))),
+    artifacts: Object.freeze(
+      draft.artifacts.map((a) =>
+        Object.freeze({
+          ...a,
+          acceptanceCriteriaCovered: frozenStrings(a.acceptanceCriteriaCovered),
+          operation: a.operation ? Object.freeze({ ...a.operation }) : (undefined as any),
+        })
+      )
+    ),
     artifactManifest: frozenList(draft.artifactManifest),
     reviews: Object.freeze(draft.reviews.map((r) => Object.freeze({ ...r, findings: frozenStrings(r.findings), securityFindings: frozenStrings(r.securityFindings) }))),
     testEvidence: Object.freeze({ ...draft.testEvidence }),
@@ -204,7 +212,7 @@ export function attemptPostFreezeModify(bundle: ColonyEvidenceBundle, newArtifac
   const before = bundle.fingerprint;
   try {
     // A frozen object refuses this; in strict mode it throws, otherwise it is a no-op.
-    (bundle.artifacts as unknown as ColonyArtifactProposal[]).push({ relativePath: newArtifactPath, content: "post-freeze", purpose: "tamper", acceptanceCriteriaCovered: [] });
+    (bundle.artifacts as unknown as ColonyArtifactProposal[]).push({ relativePath: newArtifactPath, content: "post-freeze", purpose: "tamper", acceptanceCriteriaCovered: [], operation: { kind: "ADD", targetRelativePath: newArtifactPath, sourceArtifactSha256: "tamper-sha" } });
   } catch {
     /* frozen — mutation refused */
   }
