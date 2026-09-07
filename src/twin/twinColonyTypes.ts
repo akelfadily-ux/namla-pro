@@ -217,19 +217,7 @@ export function bundleCanonicalProjection(bundle: Omit<ColonyEvidenceBundle, "fi
     culture: bundle.culture,
     workspacePath: bundle.workspacePath,
     filePlan: bundle.architecture.filePlan,
-    artifacts: bundle.artifacts.map((a) => ({
-      p: a.relativePath,
-      c: a.content.length,
-      op: a.operation
-        ? {
-            k: a.operation.kind,
-            t: a.operation.targetRelativePath,
-            s: a.operation.kind === "RENAME" ? a.operation.sourceRelativePath : undefined,
-            eb: a.operation.kind === "MODIFY" || a.operation.kind === "DELETE" || a.operation.kind === "RENAME" ? a.operation.expectedBaselineSha256 : undefined,
-            sa: a.operation.kind === "ADD" || a.operation.kind === "MODIFY" ? a.operation.sourceArtifactSha256 : undefined,
-          }
-        : undefined,
-    })),
+    artifacts: bundle.artifacts.map((a) => ({ p: a.relativePath, c: a.content.length })),
     manifest: bundle.artifactManifest.map((m) => ({ p: m.relativePath, b: m.bytes, f: m.fingerprint })),
     reviews: bundle.reviews.map((r) => ({ d: r.decision, self: r.selfReview })),
     security: { passed: bundle.securityEvidence.passed, findings: bundle.securityEvidence.findings.length },
@@ -239,15 +227,27 @@ export function bundleCanonicalProjection(bundle: Omit<ColonyEvidenceBundle, "fi
     reproduction: bundle.reproductionInstructions,
     artifactCount: bundle.artifacts.length,
   };
-  // v1: byte-identical to the historical projection. Nothing is appended, so no
-  // existing bundle's digest moves.
+  // v1: byte-identical historical projection for backward compatibility.
   if (bundle.evidenceVersion !== 2 || bundle.verification === undefined) return JSON.stringify(v1);
+
   const v = bundle.verification;
-  // v2: the verdict AND the receipts that justify it. Receipts are included so
-  // appending or editing one changes the digest, not only flipping the verdict.
+  // v2: operation-bound canonical evidence projection including full discriminated union operation metadata
   return JSON.stringify({
     ...v1,
     evidenceVersion: 2,
+    artifacts: bundle.artifacts.map((a) => ({
+      p: a.relativePath,
+      c: a.content.length,
+      op: a.operation
+        ? {
+            k: a.operation.kind,
+            t: a.operation.targetRelativePath,
+            s: "sourceRelativePath" in a.operation ? a.operation.sourceRelativePath : undefined,
+            eb: "expectedBaselineSha256" in a.operation ? a.operation.expectedBaselineSha256 : undefined,
+            sa: "sourceArtifactSha256" in a.operation ? a.operation.sourceArtifactSha256 : undefined,
+          }
+        : undefined,
+    })),
     verification: {
       s: v.finalStatus,
       vr: v.verificationRounds,

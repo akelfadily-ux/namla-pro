@@ -35,6 +35,8 @@ export function buildExecutionPlan(
 
   const plannedOps: PlannedFileOperation[] = [];
 
+  const SHA256_HEX_REGEX = /^[0-9a-f]{64}$/;
+
   for (const p of provenanceReceipts) {
     if (!p.component || !p.component.operation) {
       throw new Error("BLOCKED / MISSING_AUTHORITATIVE_FILE_OPERATION");
@@ -42,9 +44,15 @@ export function buildExecutionPlan(
 
     const op = p.component.operation;
 
+    if (op.kind === "ADD" || op.kind === "MODIFY") {
+      if (!SHA256_HEX_REGEX.test(op.sourceArtifactSha256)) {
+        throw new Error(`BLOCKED / INVALID_SHA256_FORMAT: sourceArtifactSha256 must be 64 lowercase hex characters (got: ${op.sourceArtifactSha256})`);
+      }
+    }
+
     if (op.kind === "MODIFY" || op.kind === "DELETE" || op.kind === "RENAME") {
-      if (!op.expectedBaselineSha256) {
-        throw new Error("BLOCKED / MISSING_AUTHORITATIVE_FILE_OPERATION: expectedBaselineSha256 required");
+      if (!op.expectedBaselineSha256 || !SHA256_HEX_REGEX.test(op.expectedBaselineSha256)) {
+        throw new Error(`BLOCKED / MISSING_AUTHORITATIVE_FILE_OPERATION: expectedBaselineSha256 must be 64 lowercase hex characters (got: ${op.expectedBaselineSha256})`);
       }
     }
 

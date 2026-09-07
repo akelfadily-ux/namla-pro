@@ -57,13 +57,26 @@ describe("FINAL-02 Hard Invariants Assertion Tests", () => {
     // Attempting to mutate operation fields must produce a different fingerprint if forced on a clone
     const tampered = freezeBundle({
       ...draft,
+      evidenceVersion: 2,
+      verification: {
+        finalStatus: "VERIFIED",
+        verificationRounds: 1,
+        repairAttempts: 0,
+        filesAppliedByRepair: 0,
+        sandboxBackendId: "test",
+        sandboxVerified: true,
+        stopReason: null,
+        stageReceipts: [],
+        repairReceipts: [],
+        workspaceFingerprint: "ws-fp",
+      },
       artifacts: [
         {
           ...draft.artifacts[0],
           operation: {
             kind: "DELETE" as const,
             targetRelativePath: "src/index.ts",
-            expectedBaselineSha256: "baseline-sha",
+            expectedBaselineSha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           },
         },
       ],
@@ -136,7 +149,7 @@ describe("FINAL-02 Hard Invariants Assertion Tests", () => {
       operation: {
         kind: "MODIFY" as const,
         targetRelativePath: "src/index.ts",
-        sourceArtifactSha256: "sha2",
+        sourceArtifactSha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         expectedBaselineSha256: undefined as unknown as string,
       },
       requirementsCovered: [],

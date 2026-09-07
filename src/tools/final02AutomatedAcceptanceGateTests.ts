@@ -17,11 +17,16 @@ describe("FINAL-02 Automated Acceptance Gate", () => {
 
   it("prohibits as any in FINAL-02 production and invariant test files", () => {
     const filesToScan = [
+      "src/twin/twinColonyTypes.ts",
+      "src/twin/colonyForge.ts",
+      "src/twin/namolaSovereignCourt.ts",
+      "src/twin/frozenBundleValidator.ts",
       "src/twin/final02/executionPlanBuilder.ts",
       "src/twin/final02/final02Coordinator.ts",
       "src/twin/final02/verificationRunner.ts",
       "src/twin/final02/regressionRunner.ts",
       "src/twin/final02/conflictEngine.ts",
+      "src/tools/frozenEvidenceIntegrityTests.ts",
       "src/tools/final02AssertionInvariantsTests.ts",
       "src/tools/final02ExecutionRuntimeTests.ts",
     ];

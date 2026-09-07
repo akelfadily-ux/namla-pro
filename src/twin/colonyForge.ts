@@ -11,11 +11,16 @@
  * no real provider calls. Provider receipts are recorded as `real: false`.
  */
 
+import { createHash } from "node:crypto";
 import { civDraw } from "../civilization/settlementTypes";
 import type { DigitalWorker } from "../digital/digitalWorkers";
 import { bundleCanonicalProjection, fnv1a } from "./twinColonyTypes";
 import type { ArtifactManifestEntry, ColonyArchitectureProposal, ColonyArtifactProposal, ColonyCulture, ColonyEvidenceBundle, ColonyId, ColonyProviderReceipt, ColonyReview } from "./twinColonyTypes";
 import { ColonyWorkspaceAuthority } from "./colonyWorkspace";
+
+function computeSha256Hex(content: string): string {
+  return createHash("sha256").update(content, "utf8").digest("hex");
+}
 
 /** The sealed, equivalent mission packet handed to BOTH colonies (no competitor data). */
 export interface TwinMissionPacket {
@@ -66,7 +71,7 @@ function artifactFor(profile: ColonyProfile, packet: TwinMissionPacket): ColonyA
       operation: {
         kind: "ADD",
         targetRelativePath: "src/repository.ts",
-        sourceArtifactSha256: fnv1a(`src/repository.ts|${content}`),
+        sourceArtifactSha256: computeSha256Hex(content),
       },
     };
   }
@@ -79,7 +84,7 @@ function artifactFor(profile: ColonyProfile, packet: TwinMissionPacket): ColonyA
     operation: {
       kind: "ADD",
       targetRelativePath: "src/taskManager.ts",
-      sourceArtifactSha256: fnv1a(`src/taskManager.ts|${content}`),
+      sourceArtifactSha256: computeSha256Hex(content),
     },
   };
 }
@@ -178,7 +183,7 @@ export function freezeBundle(draft: Omit<ColonyEvidenceBundle, "fingerprint" | "
         Object.freeze({
           ...a,
           acceptanceCriteriaCovered: frozenStrings(a.acceptanceCriteriaCovered),
-          operation: a.operation ? Object.freeze({ ...a.operation }) : (undefined as any),
+          operation: a.operation ? Object.freeze({ ...a.operation }) : undefined,
         })
       )
     ),
