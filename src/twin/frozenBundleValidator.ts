@@ -7,6 +7,7 @@
  * No fs, no child_process, no network, no wall clock.
  */
 
+import { createHash } from "node:crypto";
 import { bundleCanonicalProjection, fnv1a } from "./twinColonyTypes";
 import type { ColonyEvidenceBundle } from "./twinColonyTypes";
 
@@ -45,21 +46,69 @@ export function validateFrozenBundle(bundle: ColonyEvidenceBundle): FrozenBundle
   }
 
   const SHA256_HEX_REGEX = /^[0-9a-f]{64}$/;
+
   if (bundle.evidenceVersion === 2) {
     for (const a of bundle.artifacts) {
       if (!a.operation) {
         issues.push("v2-artifact-missing-operation");
         continue;
       }
-      const op = a.operation;
-      if ("sourceArtifactSha256" in op && op.sourceArtifactSha256) {
-        if (!SHA256_HEX_REGEX.test(op.sourceArtifactSha256)) {
-          issues.push(`invalid-sourceArtifactSha256:${a.relativePath}`);
-        }
+
+      if (!Object.isFrozen(a) || !Object.isFrozen(a.operation)) {
+        issues.push(`artifact-not-deep-frozen:${a.relativePath}`);
       }
-      if ("expectedBaselineSha256" in op && op.expectedBaselineSha256) {
-        if (!SHA256_HEX_REGEX.test(op.expectedBaselineSha256)) {
-          issues.push(`invalid-expectedBaselineSha256:${a.relativePath}`);
+
+      const op = a.operation;
+      switch (op.kind) {
+        case "ADD": {
+          if (!op.targetRelativePath || op.targetRelativePath !== a.relativePath) {
+            issues.push(`invalid-operation-target-path:${a.relativePath}`);
+          }
+          if (!op.sourceArtifactSha256 || !SHA256_HEX_REGEX.test(op.sourceArtifactSha256)) {
+            issues.push(`invalid-sourceArtifactSha256:${a.relativePath}`);
+          }
+          const contentSha = createHash("sha256").update(a.content, "utf8").digest("hex");
+          if (op.sourceArtifactSha256 !== contentSha) {
+            issues.push(`content-sha256-mismatch:${a.relativePath}`);
+          }
+          break;
+        }
+        case "MODIFY": {
+          if (!op.targetRelativePath || op.targetRelativePath !== a.relativePath) {
+            issues.push(`invalid-operation-target-path:${a.relativePath}`);
+          }
+          if (!op.expectedBaselineSha256 || !SHA256_HEX_REGEX.test(op.expectedBaselineSha256)) {
+            issues.push(`invalid-expectedBaselineSha256:${a.relativePath}`);
+          }
+          if (!op.sourceArtifactSha256 || !SHA256_HEX_REGEX.test(op.sourceArtifactSha256)) {
+            issues.push(`invalid-sourceArtifactSha256:${a.relativePath}`);
+          }
+          const contentSha = createHash("sha256").update(a.content, "utf8").digest("hex");
+          if (op.sourceArtifactSha256 !== contentSha) {
+            issues.push(`content-sha256-mismatch:${a.relativePath}`);
+          }
+          break;
+        }
+        case "DELETE": {
+          if (!op.targetRelativePath || op.targetRelativePath !== a.relativePath) {
+            issues.push(`invalid-operation-target-path:${a.relativePath}`);
+          }
+          if (!op.expectedBaselineSha256 || !SHA256_HEX_REGEX.test(op.expectedBaselineSha256)) {
+            issues.push(`invalid-expectedBaselineSha256:${a.relativePath}`);
+          }
+          break;
+        }
+        case "RENAME": {
+          if (!op.sourceRelativePath || !op.targetRelativePath || op.targetRelativePath !== a.relativePath) {
+            issues.push(`invalid-operation-target-path:${a.relativePath}`);
+          }
+          if (!op.expectedBaselineSha256 || !SHA256_HEX_REGEX.test(op.expectedBaselineSha256)) {
+            issues.push(`invalid-expectedBaselineSha256:${a.relativePath}`);
+          }
+          break;
+        }
+        default: {
+          issues.push(`unknown-operation-kind:${a.relativePath}`);
         }
       }
     }
@@ -68,7 +117,22 @@ export function validateFrozenBundle(bundle: ColonyEvidenceBundle): FrozenBundle
   const recomputed = fnv1a(bundleCanonicalProjection(bundle));
   const fingerprintMatches = recomputed === bundle.fingerprint;
   if (!fingerprintMatches) issues.push("fingerprint-mismatch");
-  const deepFrozen = Object.isFrozen(bundle) && Object.isFrozen(bundle.artifacts) && Object.isFrozen(bundle.artifactManifest);
+
+  const receiptsFrozen = bundle.evidenceVersion === 2 && bundle.verification
+    ? Object.isFrozen(bundle.verification) &&
+      Object.isFrozen(bundle.verification.stageReceipts) &&
+      bundle.verification.stageReceipts.every((r) => Object.isFrozen(r)) &&
+      Object.isFrozen(bundle.verification.repairReceipts) &&
+      bundle.verification.repairReceipts.every((r) => Object.isFrozen(r))
+    : true;
+
+  const deepFrozen =
+    Object.isFrozen(bundle) &&
+    Object.isFrozen(bundle.artifacts) &&
+    bundle.artifacts.every((a) => Object.isFrozen(a) && (a.operation ? Object.isFrozen(a.operation) : true) && Object.isFrozen(a.acceptanceCriteriaCovered)) &&
+    Object.isFrozen(bundle.artifactManifest) &&
+    receiptsFrozen;
+
   if (!deepFrozen) issues.push("not-deep-frozen");
 
   return { valid: issues.length === 0, issues, fingerprintMatches, frozen: bundle.frozen, deepFrozen };

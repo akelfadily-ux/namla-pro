@@ -21,6 +21,7 @@ import assert from "node:assert/strict";
 import { freezeBundle } from "../twin/colonyForge";
 import { isVerifiedCandidate, bundleCanonicalProjection, fnv1a } from "../twin/twinColonyTypes";
 import type { ColonyEvidenceBundle, TwinCandidateVerificationEvidence } from "../twin/twinColonyTypes";
+import { createHash } from "node:crypto";
 import { judgeTwinBundles } from "../twin/namolaCourt";
 import { evaluateHardRejections } from "../twin/namolaSovereignCourt";
 import { validateFrozenBundle } from "../twin/frozenBundleValidator";
@@ -44,7 +45,9 @@ function evidence(status: TwinCandidateVerificationEvidence["finalStatus"]): Twi
 }
 
 function draftFor(colonyId: "claude-forge" | "codex-crucible", relPath: string, version2?: TwinCandidateVerificationEvidence["finalStatus"]) {
-  const artifact = { relativePath: relPath, content: "export const x = 1;", purpose: "p", acceptanceCriteriaCovered: ["works"], operation: { kind: "ADD" as const, targetRelativePath: relPath, sourceArtifactSha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" } };
+  const content = "export const x = 1;";
+  const sha = createHash("sha256").update(content, "utf8").digest("hex");
+  const artifact = { relativePath: relPath, content, purpose: "p", acceptanceCriteriaCovered: ["works"], operation: { kind: "ADD" as const, targetRelativePath: relPath, sourceArtifactSha256: sha } };
   return {
     colonyId, missionId: "m", culture: colonyId === "claude-forge" ? ("architecture-first" as const) : ("implementation-first" as const),
     workspacePath: `workspaces/namola-twin/m/${colonyId}`,
@@ -72,9 +75,9 @@ test("1-6: a frozen v2 bundle is frozen at every verification layer", () => {
   assert.equal(Object.isFrozen(b), true, "1. top-level bundle");
   assert.equal(Object.isFrozen(b.verification), true, "2. verification object");
   assert.equal(Object.isFrozen(b.verification?.stageReceipts), true, "3. stageReceipts array");
-  assert.equal(b.verification?.stageReceipts.every((r) => Object.isFrozen(r)), true, "4. each stage receipt");
+  assert.equal(b.verification?.stageReceipts.every((r: unknown) => Object.isFrozen(r)), true, "4. each stage receipt");
   assert.equal(Object.isFrozen(b.verification?.repairReceipts), true, "5. repairReceipts array");
-  assert.equal(b.verification?.repairReceipts.every((r) => Object.isFrozen(r)), true, "6. each repair receipt");
+  assert.equal(b.verification?.repairReceipts.every((r: unknown) => Object.isFrozen(r)), true, "6. each repair receipt");
 });
 
 test("1-6b: the other decision-relevant structures are frozen too", () => {

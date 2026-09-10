@@ -140,13 +140,12 @@ export interface TwinCandidateVerificationEvidence {
   readonly workspaceFingerprint: string;
 }
 
-export interface ColonyEvidenceBundle {
+export interface BaseColonyEvidenceBundle {
   readonly colonyId: ColonyId;
   readonly missionId: string;
   readonly culture: ColonyCulture;
   readonly workspacePath: string;
   readonly architecture: ColonyArchitectureProposal;
-  readonly artifacts: readonly ColonyArtifactProposal[];
   readonly artifactManifest: readonly ArtifactManifestEntry[];
   readonly reviews: readonly ColonyReview[];
   readonly testEvidence: { readonly testsProposed: number; readonly independentReviews: number; readonly artifactCount: number };
@@ -173,15 +172,25 @@ export interface ColonyEvidenceBundle {
    * reinterpreted - v2 only ADDS.
    */
   readonly evidenceVersion?: 2;
-  /**
-   * Present only on evidence version 2. Absence is never "verified": read it
-   * through `isVerifiedCandidate` rather than testing the field directly.
-   */
   readonly verification?: TwinCandidateVerificationEvidence;
   /** Immutable digest computed at freeze over the bundle's canonical projection. */
   readonly fingerprint: string;
   readonly frozen: boolean;
 }
+
+export interface V1ColonyEvidenceBundle extends BaseColonyEvidenceBundle {
+  readonly evidenceVersion?: undefined;
+  readonly verification?: undefined;
+  readonly artifacts: readonly V1ColonyArtifactProposal[];
+}
+
+export interface V2ColonyEvidenceBundle extends BaseColonyEvidenceBundle {
+  readonly evidenceVersion: 2;
+  readonly verification: TwinCandidateVerificationEvidence;
+  readonly artifacts: readonly V2ColonyArtifactProposal[];
+}
+
+export type ColonyEvidenceBundle = V1ColonyEvidenceBundle | V2ColonyEvidenceBundle;
 
 /**
  * The ONLY sanctioned way to ask whether a candidate is verified.
@@ -191,7 +200,7 @@ export interface ColonyEvidenceBundle {
  * directly at a call site would let `undefined` drift into a truthy-ish check;
  * this states the rule once.
  */
-export function isVerifiedCandidate(bundle: Pick<ColonyEvidenceBundle, "evidenceVersion" | "verification">): boolean {
+export function isVerifiedCandidate(bundle: Pick<BaseColonyEvidenceBundle, "evidenceVersion" | "verification">): boolean {
   return bundle.evidenceVersion === 2 && bundle.verification?.finalStatus === "VERIFIED";
 }
 
@@ -239,13 +248,14 @@ export function bundleCanonicalProjection(bundle: Omit<ColonyEvidenceBundle, "fi
   // v1: byte-identical historical projection for backward compatibility.
   if (bundle.evidenceVersion !== 2 || bundle.verification === undefined) return JSON.stringify(v1);
 
-  const v = bundle.verification;
+  const v2Bundle = bundle as V2ColonyEvidenceBundle;
+  const v = v2Bundle.verification;
   // v2: operation-bound canonical evidence projection including full discriminated union operation metadata
   return JSON.stringify({
     ...v1,
     evidenceVersion: 2,
-    artifacts: bundle.artifacts.map((a) => {
-      const op = a.operation!;
+    artifacts: v2Bundle.artifacts.map((a) => {
+      const op = a.operation;
       return {
         p: a.relativePath,
         c: a.content.length,

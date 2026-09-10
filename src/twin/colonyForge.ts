@@ -177,46 +177,81 @@ export function freezeBundle(draft: Omit<ColonyEvidenceBundle, "fingerprint" | "
   const fingerprint = fnv1a(bundleCanonicalProjection(draft));
   const frozenList = <T>(items: readonly T[]): readonly T[] => Object.freeze(items.map((i) => Object.freeze({ ...i })));
   const frozenStrings = (items: readonly string[]): readonly string[] => Object.freeze([...items]);
-  const frozen: ColonyEvidenceBundle = {
-    ...draft,
-    architecture: Object.freeze({
-      ...draft.architecture,
-      filePlan: frozenStrings(draft.architecture.filePlan),
-      acceptanceMapping: frozenStrings(draft.architecture.acceptanceMapping),
-      interfaceDecisions: frozenStrings(draft.architecture.interfaceDecisions),
-      risks: frozenStrings(draft.architecture.risks),
-    }),
-    artifacts: Object.freeze(
-      draft.artifacts.map((a) =>
-        Object.freeze({
-          ...a,
-          acceptanceCriteriaCovered: frozenStrings(a.acceptanceCriteriaCovered),
-          operation: a.operation ? Object.freeze({ ...a.operation }) : undefined,
-        })
-      )
-    ),
-    artifactManifest: frozenList(draft.artifactManifest),
-    reviews: Object.freeze(draft.reviews.map((r) => Object.freeze({ ...r, findings: frozenStrings(r.findings), securityFindings: frozenStrings(r.securityFindings) }))),
-    testEvidence: Object.freeze({ ...draft.testEvidence }),
-    securityEvidence: Object.freeze({ ...draft.securityEvidence, findings: frozenStrings(draft.securityEvidence.findings) }),
-    performanceEvidence: frozenList(draft.performanceEvidence),
-    riskRegister: frozenStrings(draft.riskRegister),
-    failureRegister: frozenStrings(draft.failureRegister),
-    uncertaintyRegister: frozenStrings(draft.uncertaintyRegister),
-    minorityReports: frozenStrings(draft.minorityReports),
-    providerReceipts: frozenList(draft.providerReceipts),
-    costReport: Object.freeze({ ...draft.costReport }),
-    reproductionInstructions: frozenStrings(draft.reproductionInstructions),
-    // v2 only. `undefined` stays `undefined` so a v1 bundle is byte-identical to
-    // what it was before this seal.
-    verification: draft.verification === undefined ? undefined : Object.freeze({
-      ...draft.verification,
-      stageReceipts: frozenList(draft.verification.stageReceipts),
-      repairReceipts: frozenList(draft.verification.repairReceipts),
-    }),
-    fingerprint,
-    frozen: true,
-  };
+  const frozen: ColonyEvidenceBundle = (draft.evidenceVersion === 2
+    ? {
+        ...draft,
+        evidenceVersion: 2,
+        verification: Object.freeze({
+          ...draft.verification!,
+          stageReceipts: frozenList(draft.verification!.stageReceipts),
+          repairReceipts: frozenList(draft.verification!.repairReceipts),
+        }),
+        architecture: Object.freeze({
+          ...draft.architecture,
+          filePlan: frozenStrings(draft.architecture.filePlan),
+          acceptanceMapping: frozenStrings(draft.architecture.acceptanceMapping),
+          interfaceDecisions: frozenStrings(draft.architecture.interfaceDecisions),
+          risks: frozenStrings(draft.architecture.risks),
+        }),
+        artifacts: Object.freeze(
+          draft.artifacts.map((a) =>
+            Object.freeze({
+              ...a,
+              acceptanceCriteriaCovered: frozenStrings(a.acceptanceCriteriaCovered),
+              operation: Object.freeze({ ...a.operation! }),
+            })
+          )
+        ),
+        artifactManifest: frozenList(draft.artifactManifest),
+        reviews: Object.freeze(draft.reviews.map((r) => Object.freeze({ ...r, findings: frozenStrings(r.findings), securityFindings: frozenStrings(r.securityFindings) }))),
+        testEvidence: Object.freeze({ ...draft.testEvidence }),
+        securityEvidence: Object.freeze({ ...draft.securityEvidence, findings: frozenStrings(draft.securityEvidence.findings) }),
+        performanceEvidence: frozenList(draft.performanceEvidence),
+        riskRegister: frozenStrings(draft.riskRegister),
+        failureRegister: frozenStrings(draft.failureRegister),
+        uncertaintyRegister: frozenStrings(draft.uncertaintyRegister),
+        minorityReports: frozenStrings(draft.minorityReports),
+        providerReceipts: frozenList(draft.providerReceipts),
+        costReport: Object.freeze({ ...draft.costReport }),
+        reproductionInstructions: frozenStrings(draft.reproductionInstructions),
+        fingerprint,
+        frozen: true,
+      }
+    : {
+        ...draft,
+        evidenceVersion: undefined,
+        verification: undefined,
+        architecture: Object.freeze({
+          ...draft.architecture,
+          filePlan: frozenStrings(draft.architecture.filePlan),
+          acceptanceMapping: frozenStrings(draft.architecture.acceptanceMapping),
+          interfaceDecisions: frozenStrings(draft.architecture.interfaceDecisions),
+          risks: frozenStrings(draft.architecture.risks),
+        }),
+        artifacts: Object.freeze(
+          draft.artifacts.map((a) =>
+            Object.freeze({
+              ...a,
+              acceptanceCriteriaCovered: frozenStrings(a.acceptanceCriteriaCovered),
+              operation: a.operation ? Object.freeze({ ...a.operation }) : undefined,
+            })
+          )
+        ),
+        artifactManifest: frozenList(draft.artifactManifest),
+        reviews: Object.freeze(draft.reviews.map((r) => Object.freeze({ ...r, findings: frozenStrings(r.findings), securityFindings: frozenStrings(r.securityFindings) }))),
+        testEvidence: Object.freeze({ ...draft.testEvidence }),
+        securityEvidence: Object.freeze({ ...draft.securityEvidence, findings: frozenStrings(draft.securityEvidence.findings) }),
+        performanceEvidence: frozenList(draft.performanceEvidence),
+        riskRegister: frozenStrings(draft.riskRegister),
+        failureRegister: frozenStrings(draft.failureRegister),
+        uncertaintyRegister: frozenStrings(draft.uncertaintyRegister),
+        minorityReports: frozenStrings(draft.minorityReports),
+        providerReceipts: frozenList(draft.providerReceipts),
+        costReport: Object.freeze({ ...draft.costReport }),
+        reproductionInstructions: frozenStrings(draft.reproductionInstructions),
+        fingerprint,
+        frozen: true,
+      }) as ColonyEvidenceBundle;
   return Object.freeze(frozen);
 }
 

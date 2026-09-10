@@ -15,6 +15,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 
 import { runTwinBuildLoop, classifyVerificationOutcome, validateMaxRepairAttempts, buildRepairObjective, TWIN_DEFAULT_MAX_REPAIR_ATTEMPTS, TWIN_MAX_REPAIR_ATTEMPTS_CEILING } from "../twin/twinBuildLoop";
 import type { TwinVerificationBackend, TwinRepairSlot } from "../twin/twinBuildLoop";
@@ -472,7 +473,9 @@ function verificationEvidence(status: TwinCandidateVerificationEvidence["finalSt
 }
 
 function bundleFor(colonyId: "claude-forge" | "codex-crucible", relPath: string, opts: { version2?: TwinCandidateVerificationEvidence["finalStatus"]; realCalls?: number } = {}): ColonyEvidenceBundle {
-  const artifact = { relativePath: relPath, content: "export const x = 1;", purpose: "p", acceptanceCriteriaCovered: ["works"], operation: { kind: "ADD" as const, targetRelativePath: relPath, sourceArtifactSha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" } };
+  const content = "export const x = 1;";
+  const sha256 = createHash("sha256").update(content, "utf8").digest("hex");
+  const artifact = { relativePath: relPath, content, purpose: "p", acceptanceCriteriaCovered: ["works"], operation: { kind: "ADD" as const, targetRelativePath: relPath, sourceArtifactSha256: sha256 } };
   return freezeBundle({
     colonyId, missionId: MISSION, culture: colonyId === "claude-forge" ? "architecture-first" : "implementation-first",
     workspacePath: colonyId === "claude-forge" ? CLAUDE_WS : CODEX_WS,
