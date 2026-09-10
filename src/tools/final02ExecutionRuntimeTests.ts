@@ -397,8 +397,8 @@ export function runFinal02ExecutionRuntimeTests(): { readonly ok: true; readonly
   // 6. 12 Conflict Classes Taxonomy classification tests.
   {
     const dummyComp: ApprovedMergeComponent[] = [
-      { componentId: "c1", sourceColony: "claude-forge", sourceArtifactId: "a1", sourceFingerprint: "fp1", relativePath: "x", operation: { kind: "ADD", targetRelativePath: "x", sourceArtifactSha256: "sha-x1" }, requirementsCovered: [], evidenceRefs: [], reasonSelected: "r", knownRisks: [], requiredMergeTests: [] },
-      { componentId: "c2", sourceColony: "codex-crucible", sourceArtifactId: "a2", sourceFingerprint: "fp2", relativePath: "x", operation: { kind: "ADD", targetRelativePath: "x", sourceArtifactSha256: "sha-x2" }, requirementsCovered: [], evidenceRefs: [], reasonSelected: "r", knownRisks: [], requiredMergeTests: [] },
+      { componentId: "c1", sourceColony: "claude-forge", sourceArtifactId: "a1", sourceFingerprint: "fp1", relativePath: "x", operation: { kind: "ADD", targetRelativePath: "x", sourceArtifactSha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" }, requirementsCovered: [], evidenceRefs: [], reasonSelected: "r", knownRisks: [], requiredMergeTests: [] },
+      { componentId: "c2", sourceColony: "codex-crucible", sourceArtifactId: "a2", sourceFingerprint: "fp2", relativePath: "x", operation: { kind: "ADD", targetRelativePath: "x", sourceArtifactSha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" }, requirementsCovered: [], evidenceRefs: [], reasonSelected: "r", knownRisks: [], requiredMergeTests: [] },
     ];
 
     assert.equal(classifyConflict("src/component.ts", dummyComp).conflictClass, "FILE_ADD_ADD");
@@ -430,7 +430,7 @@ export function runFinal02ExecutionRuntimeTests(): { readonly ok: true; readonly
         sourceArtifactId: "src/securityPolicy.ts",
         sourceFingerprint: "fp-sec1",
         relativePath: "src/securityPolicy.ts",
-        operation: { kind: "ADD", targetRelativePath: "src/securityPolicy.ts", sourceArtifactSha256: "sha-sec1" },
+        operation: { kind: "ADD", targetRelativePath: "src/securityPolicy.ts", sourceArtifactSha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" },
         requirementsCovered: [],
         evidenceRefs: [],
         reasonSelected: "security",
@@ -443,7 +443,7 @@ export function runFinal02ExecutionRuntimeTests(): { readonly ok: true; readonly
         sourceArtifactId: "src/securityPolicy.ts",
         sourceFingerprint: "fp-sec2",
         relativePath: "src/securityPolicy.ts",
-        operation: { kind: "ADD", targetRelativePath: "src/securityPolicy.ts", sourceArtifactSha256: "sha-sec2" },
+        operation: { kind: "ADD", targetRelativePath: "src/securityPolicy.ts", sourceArtifactSha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" },
         requirementsCovered: [],
         evidenceRefs: [],
         reasonSelected: "security",
@@ -486,7 +486,7 @@ export function runFinal02ExecutionRuntimeTests(): { readonly ok: true; readonly
         sourceArtifactId: "db/migration.sql",
         sourceFingerprint: "fp-db1",
         relativePath: "db/migration.sql",
-        operation: { kind: "ADD", targetRelativePath: "db/migration.sql", sourceArtifactSha256: "sha-db1" },
+        operation: { kind: "ADD", targetRelativePath: "db/migration.sql", sourceArtifactSha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" },
         requirementsCovered: [],
         evidenceRefs: [],
         reasonSelected: "db",
@@ -499,7 +499,7 @@ export function runFinal02ExecutionRuntimeTests(): { readonly ok: true; readonly
         sourceArtifactId: "db/migration.sql",
         sourceFingerprint: "fp-db2",
         relativePath: "db/migration.sql",
-        operation: { kind: "ADD", targetRelativePath: "db/migration.sql", sourceArtifactSha256: "sha-db2" },
+        operation: { kind: "ADD", targetRelativePath: "db/migration.sql", sourceArtifactSha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" },
         requirementsCovered: [],
         evidenceRefs: [],
         reasonSelected: "db",

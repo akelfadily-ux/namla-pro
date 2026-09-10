@@ -166,6 +166,14 @@ export function runColonyForge(profile: ColonyProfile, packet: TwinMissionPacket
  * to "frozen" evidence.
  */
 export function freezeBundle(draft: Omit<ColonyEvidenceBundle, "fingerprint" | "frozen">): ColonyEvidenceBundle {
+  if (draft.evidenceVersion === 2) {
+    for (const a of draft.artifacts) {
+      if (!a.operation) {
+        throw new Error("BLOCKED / MISSING_AUTHORITATIVE_FILE_OPERATION: V2 evidence bundle artifacts must structurally require operation");
+      }
+    }
+  }
+
   const fingerprint = fnv1a(bundleCanonicalProjection(draft));
   const frozenList = <T>(items: readonly T[]): readonly T[] => Object.freeze(items.map((i) => Object.freeze({ ...i })));
   const frozenStrings = (items: readonly string[]): readonly string[] => Object.freeze([...items]);
@@ -217,7 +225,7 @@ export function attemptPostFreezeModify(bundle: ColonyEvidenceBundle, newArtifac
   const before = bundle.fingerprint;
   try {
     // A frozen object refuses this; in strict mode it throws, otherwise it is a no-op.
-    (bundle.artifacts as unknown as ColonyArtifactProposal[]).push({ relativePath: newArtifactPath, content: "post-freeze", purpose: "tamper", acceptanceCriteriaCovered: [], operation: { kind: "ADD", targetRelativePath: newArtifactPath, sourceArtifactSha256: "tamper-sha" } });
+    (bundle.artifacts as unknown as ColonyArtifactProposal[]).push({ relativePath: newArtifactPath, content: "post-freeze", purpose: "tamper", acceptanceCriteriaCovered: [], operation: { kind: "ADD", targetRelativePath: newArtifactPath, sourceArtifactSha256: computeSha256Hex("post-freeze") } });
   } catch {
     /* frozen — mutation refused */
   }

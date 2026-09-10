@@ -30,6 +30,7 @@ import type { RoleTimeoutPolicy } from "../civilization/civLiveTimeouts";
 import type { LiveProviderDriver, LiveRole } from "../digital/liveObjectiveRunner";
 import type { LiveRole as CivLiveRole } from "../civilization/civLiveCohort";
 import type { RealProviderId } from "../cognitive/realProviderExecutionPermit";
+import { createHash } from "node:crypto";
 import { acquireProviderSlot, releaseProviderSlot } from "../cognitive/twinEmpireLivePermit";
 import type { TwinColonyId, TwinEmpireLivePermit } from "../cognitive/twinEmpireLivePermit";
 import { freezeBundle } from "./colonyForge";
@@ -227,7 +228,7 @@ export function runTwinColonyLive(input: TwinColonyLiveInput): TwinColonyLiveRes
       continue;
     }
     if (role === "architecture") architecturePlan = roleOut.filePlan.length > 0 ? [...roleOut.filePlan] : [];
-    if (role === "implementation") for (const a of roleOut.artifacts) proposals.push({ relativePath: a.relativePath, content: a.content, purpose: a.purpose, acceptanceCriteriaCovered: input.acceptance.slice(0, 1) });
+    if (role === "implementation") for (const a of roleOut.artifacts) proposals.push({ relativePath: a.relativePath, content: a.content, purpose: a.purpose, acceptanceCriteriaCovered: input.acceptance.slice(0, 1), operation: { kind: "ADD", targetRelativePath: a.relativePath, sourceArtifactSha256: createHash("sha256").update(a.content, "utf8").digest("hex") } });
     if (role === "review") reviewOk = true;
   }
 

@@ -472,7 +472,7 @@ function verificationEvidence(status: TwinCandidateVerificationEvidence["finalSt
 }
 
 function bundleFor(colonyId: "claude-forge" | "codex-crucible", relPath: string, opts: { version2?: TwinCandidateVerificationEvidence["finalStatus"]; realCalls?: number } = {}): ColonyEvidenceBundle {
-  const artifact = { relativePath: relPath, content: "export const x = 1;", purpose: "p", acceptanceCriteriaCovered: ["works"] };
+  const artifact = { relativePath: relPath, content: "export const x = 1;", purpose: "p", acceptanceCriteriaCovered: ["works"], operation: { kind: "ADD" as const, targetRelativePath: relPath, sourceArtifactSha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" } };
   return freezeBundle({
     colonyId, missionId: MISSION, culture: colonyId === "claude-forge" ? "architecture-first" : "implementation-first",
     workspacePath: colonyId === "claude-forge" ? CLAUDE_WS : CODEX_WS,

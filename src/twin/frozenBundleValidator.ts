@@ -44,6 +44,27 @@ export function validateFrozenBundle(bundle: ColonyEvidenceBundle): FrozenBundle
     issues.push("unexpected-real-provider-call");
   }
 
+  const SHA256_HEX_REGEX = /^[0-9a-f]{64}$/;
+  if (bundle.evidenceVersion === 2) {
+    for (const a of bundle.artifacts) {
+      if (!a.operation) {
+        issues.push("v2-artifact-missing-operation");
+        continue;
+      }
+      const op = a.operation;
+      if ("sourceArtifactSha256" in op && op.sourceArtifactSha256) {
+        if (!SHA256_HEX_REGEX.test(op.sourceArtifactSha256)) {
+          issues.push(`invalid-sourceArtifactSha256:${a.relativePath}`);
+        }
+      }
+      if ("expectedBaselineSha256" in op && op.expectedBaselineSha256) {
+        if (!SHA256_HEX_REGEX.test(op.expectedBaselineSha256)) {
+          issues.push(`invalid-expectedBaselineSha256:${a.relativePath}`);
+        }
+      }
+    }
+  }
+
   const recomputed = fnv1a(bundleCanonicalProjection(bundle));
   const fingerprintMatches = recomputed === bundle.fingerprint;
   if (!fingerprintMatches) issues.push("fingerprint-mismatch");

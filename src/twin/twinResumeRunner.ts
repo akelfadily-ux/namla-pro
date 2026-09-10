@@ -22,6 +22,7 @@ import { freezeBundle } from "./colonyForge";
 import { fnv1a } from "./twinColonyTypes";
 import type { ColonyEvidenceBundle, ColonyArtifactProposal, ColonyCulture, ColonyReview } from "./twinColonyTypes";
 import type { TwinWorkspaceApplier, TwinProviderDiagnostic } from "./twinColonyLiveRunner";
+import { createHash } from "node:crypto";
 import { verifyPreservedBundle, MAX_REPAIR_IMPLEMENTATION_TIMEOUT_MS, MAX_RESUME_ADDITIONAL_CALLS } from "./twinResumeState";
 import type { TwinResumeRecord } from "./twinResumeState";
 
@@ -137,7 +138,7 @@ export function runTwinResume(input: TwinResumeInput): TwinResumeResult {
     const category = implOut.failureCategory ?? "no-build-artifacts";
     return fail(category, { additionalProviderCalls, preservedBundleUnchanged: true, reviewSkippedReason: category });
   }
-  const proposals: ColonyArtifactProposal[] = implOut.artifacts.map((a) => ({ relativePath: a.relativePath, content: a.content, purpose: a.purpose, acceptanceCriteriaCovered: input.acceptance.slice(0, 1) }));
+  const proposals: ColonyArtifactProposal[] = implOut.artifacts.map((a) => ({ relativePath: a.relativePath, content: a.content, purpose: a.purpose, acceptanceCriteriaCovered: input.acceptance.slice(0, 1), operation: { kind: "ADD", targetRelativePath: a.relativePath, sourceArtifactSha256: createHash("sha256").update(a.content, "utf8").digest("hex") } }));
 
   // --- call 2 of 2: independent review (only now that artifacts exist) -------
   if (input.reviewAntId === input.implementationAntId) return fail("self-review-forbidden", { additionalProviderCalls, preservedBundleUnchanged: true });

@@ -116,7 +116,7 @@ function createColonyBundle(
             : "export interface Repository<T> { add(item: T): void; list(): readonly T[]; }\nexport class InMemoryRepository<T> implements Repository<T> {\n  private readonly items: T[] = [];\n  add(item: T): void { this.items.push(item); }\n  list(): readonly T[] { return this.items; }\n}\n",
           purpose: "Storage boundary that isolates the domain from persistence.",
           acceptanceCriteriaCovered: packet.acceptanceCriteria.slice(0, 1),
-          operation: { kind: "ADD", targetRelativePath: "src/repository.ts", sourceArtifactSha256: "sha-repo" },
+          operation: { kind: "ADD", targetRelativePath: "src/repository.ts", sourceArtifactSha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" },
         },
       ]
     : [
@@ -127,7 +127,7 @@ function createColonyBundle(
             : "export interface Task { id: number; title: string; done: boolean; }\nexport class TaskManager {\n  private tasks: Task[] = [];\n  add(title: string): Task { const t = { id: this.tasks.length + 1, title, done: false }; this.tasks.push(t); return t; }\n  list(): readonly Task[] { return this.tasks; }\n  complete(id: number): boolean { const t = this.tasks.find((x) => x.id === id); if (!t) return false; t.done = true; return true; }\n}\n",
           purpose: "Working task manager delivering CRUD + completion immediately.",
           acceptanceCriteriaCovered: packet.acceptanceCriteria.slice(0, 2),
-          operation: { kind: "ADD", targetRelativePath: "src/taskManager.ts", sourceArtifactSha256: "sha-tm" },
+          operation: { kind: "ADD", targetRelativePath: "src/taskManager.ts", sourceArtifactSha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" },
         },
       ];
 
@@ -451,7 +451,7 @@ export function runDemoNamolaTwinEmpireV1() {
     sourceArtifactId: "ghost.ts",
     sourceFingerprint: "",
     relativePath: "src/ghost.ts",
-    operation: { kind: "ADD", targetRelativePath: "src/ghost.ts", sourceArtifactSha256: "sha-ghost" },
+    operation: { kind: "ADD", targetRelativePath: "src/ghost.ts", sourceArtifactSha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" },
     requirementsCovered: [],
     evidenceRefs: [],
     reasonSelected: "none",

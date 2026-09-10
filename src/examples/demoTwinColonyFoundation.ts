@@ -189,7 +189,7 @@ export function runDemoTwinColonyFoundation() {
   const mergeDriver = new FakeMergeVerificationDriver();
   const forge = new ZeroTrustMergeForge(MISSION_ID, mergeDriver);
   witness.observeCourtMerge("merge-workspace-created");
-  const unapproved: ApprovedMergeComponent = { componentId: "cmp-unapproved", sourceColony: "claude-forge", sourceArtifactId: "ghost.ts", sourceFingerprint: "", relativePath: "src/ghost.ts", operation: { kind: "ADD", targetRelativePath: "src/ghost.ts", sourceArtifactSha256: "sha-ghost" }, requirementsCovered: [], evidenceRefs: [], reasonSelected: "none", knownRisks: [], requiredMergeTests: [] };
+  const unapproved: ApprovedMergeComponent = { componentId: "cmp-unapproved", sourceColony: "claude-forge", sourceArtifactId: "ghost.ts", sourceFingerprint: "", relativePath: "src/ghost.ts", operation: { kind: "ADD", targetRelativePath: "src/ghost.ts", sourceArtifactSha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" }, requirementsCovered: [], evidenceRefs: [], reasonSelected: "none", knownRisks: [], requiredMergeTests: [] };
   const admission = forge.materializeResolvedComponents([...namolaReceipt.approvedComponents, unapproved], claude, codex);
   witness.observeCourtMerge("provenance-retained", forge.provenanceRecords.length, forge.provenanceRecords.length === namolaReceipt.approvedComponents.length);
   witness.observeCourtMerge("components-approved", 0, forge.rejectedComponents.length > 0);

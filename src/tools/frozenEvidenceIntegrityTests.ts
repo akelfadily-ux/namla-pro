@@ -44,7 +44,7 @@ function evidence(status: TwinCandidateVerificationEvidence["finalStatus"]): Twi
 }
 
 function draftFor(colonyId: "claude-forge" | "codex-crucible", relPath: string, version2?: TwinCandidateVerificationEvidence["finalStatus"]) {
-  const artifact = { relativePath: relPath, content: "export const x = 1;", purpose: "p", acceptanceCriteriaCovered: ["works"], operation: { kind: "ADD" as const, targetRelativePath: relPath, sourceArtifactSha256: "sha-x" } };
+  const artifact = { relativePath: relPath, content: "export const x = 1;", purpose: "p", acceptanceCriteriaCovered: ["works"], operation: { kind: "ADD" as const, targetRelativePath: relPath, sourceArtifactSha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" } };
   return {
     colonyId, missionId: "m", culture: colonyId === "claude-forge" ? ("architecture-first" as const) : ("implementation-first" as const),
     workspacePath: `workspaces/namola-twin/m/${colonyId}`,

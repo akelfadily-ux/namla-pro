@@ -31,13 +31,22 @@ export interface ColonyArchitectureProposal {
 
 import type { ApprovedFileOperation } from "./namolaSovereignCourt";
 
-export interface ColonyArtifactProposal {
+export interface BaseColonyArtifactProposal {
   readonly relativePath: string;
   readonly content: string;
   readonly purpose: string;
   readonly acceptanceCriteriaCovered: readonly string[];
+}
+
+export interface V1ColonyArtifactProposal extends BaseColonyArtifactProposal {
   readonly operation?: ApprovedFileOperation;
 }
+
+export interface V2ColonyArtifactProposal extends BaseColonyArtifactProposal {
+  readonly operation: ApprovedFileOperation;
+}
+
+export type ColonyArtifactProposal = V1ColonyArtifactProposal | V2ColonyArtifactProposal;
 
 export interface ColonyReview {
   readonly reviewerAntId: string;
@@ -235,19 +244,20 @@ export function bundleCanonicalProjection(bundle: Omit<ColonyEvidenceBundle, "fi
   return JSON.stringify({
     ...v1,
     evidenceVersion: 2,
-    artifacts: bundle.artifacts.map((a) => ({
-      p: a.relativePath,
-      c: a.content.length,
-      op: a.operation
-        ? {
-            k: a.operation.kind,
-            t: a.operation.targetRelativePath,
-            s: "sourceRelativePath" in a.operation ? a.operation.sourceRelativePath : undefined,
-            eb: "expectedBaselineSha256" in a.operation ? a.operation.expectedBaselineSha256 : undefined,
-            sa: "sourceArtifactSha256" in a.operation ? a.operation.sourceArtifactSha256 : undefined,
-          }
-        : undefined,
-    })),
+    artifacts: bundle.artifacts.map((a) => {
+      const op = a.operation!;
+      return {
+        p: a.relativePath,
+        c: a.content.length,
+        op: {
+          k: op.kind,
+          t: op.targetRelativePath,
+          s: "sourceRelativePath" in op ? op.sourceRelativePath : undefined,
+          eb: "expectedBaselineSha256" in op ? op.expectedBaselineSha256 : undefined,
+          sa: "sourceArtifactSha256" in op ? op.sourceArtifactSha256 : undefined,
+        },
+      };
+    }),
     verification: {
       s: v.finalStatus,
       vr: v.verificationRounds,
