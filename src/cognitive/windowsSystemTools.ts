@@ -77,6 +77,23 @@ export type WindowsSystemToolResult =
   | { readonly ok: true; readonly value: ResolvedWindowsSystemTool; readonly reasonCode: "ok" }
   | { readonly ok: false; readonly value: null; readonly reasonCode: WindowsSystemToolReasonCode };
 
+export interface WindowsSystemAuthority {
+  readonly systemRoot: string;
+  readonly systemDirectory: string;
+  readonly environment: Readonly<Record<string, string>>;
+}
+
+export type WindowsSystemAuthorityResult =
+  | {
+      readonly ok: true;
+      readonly value: WindowsSystemAuthority;
+      readonly reasonCode: "ok";
+    }
+  | {
+      readonly ok: false;
+      readonly value: null;
+      readonly reasonCode: WindowsSystemToolReasonCode;
+    };
 export interface WindowsSystemToolOptions {
   /** Platform seam, so the rule itself is testable on any host. */
   readonly platform?: NodeJS.Platform;
@@ -310,6 +327,49 @@ export function windowsSystemToolEnvironment(systemRoot: string, systemDirectory
   return Object.freeze(env);
 }
 
+/**
+ * Resolve the shared Windows system authority without selecting a tool.
+ *
+ * This uses the same resolveSystemRoot() proof as resolveWindowsSystemTool():
+ * kernel object-manager SystemRoot, canonical non-reparse System32, and no
+ * environment/PATH/hard-coded-drive fallback.
+ */
+export function resolveWindowsSystemAuthority(
+  opts: WindowsSystemToolOptions = {},
+): WindowsSystemAuthorityResult {
+  const platform = opts.platform ?? process.platform;
+
+  if (platform !== "win32") {
+    return {
+      ok: false,
+      value: null,
+      reasonCode: "not-windows",
+    };
+  }
+
+  const root = resolveSystemRoot(opts);
+
+  if ("failure" in root) {
+    return {
+      ok: false,
+      value: null,
+      reasonCode: root.failure,
+    };
+  }
+
+  return {
+    ok: true,
+    reasonCode: "ok",
+    value: Object.freeze({
+      systemRoot: root.root,
+      systemDirectory: root.systemDirectory,
+      environment: windowsSystemToolEnvironment(
+        root.root,
+        root.systemDirectory,
+      ),
+    }),
+  };
+}
 /**
  * Resolve one Windows system tool, or refuse with a reason.
  *

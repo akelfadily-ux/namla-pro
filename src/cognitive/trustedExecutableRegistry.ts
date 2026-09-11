@@ -1,9 +1,9 @@
 /**
- * trustedExecutableRegistry — the ONE place an executable path is decided.
+ * trustedExecutableRegistry Ã¢â‚¬â€ the ONE place an executable path is decided.
  *
  * Previously the drivers spawned bare names (`claude`, `codex`, `npm.cmd`) and
  * therefore trusted whatever the inherited PATH resolved them to. Anything
- * earlier on PATH — including a file dropped into a generated workspace — would
+ * earlier on PATH Ã¢â‚¬â€ including a file dropped into a generated workspace Ã¢â‚¬â€ would
  * be executed instead of the real provider. This module removes that trust:
  * every executable is resolved to an absolute, canonical, validated path before
  * a process is ever created.
@@ -13,8 +13,8 @@
  *   1. PATH ORDER IS ATTACKER-CONTROLLED. Resolution therefore does not stop at
  *      "the first match on PATH"; each candidate must also pass a trust check,
  *      and untrusted candidates are SKIPPED rather than accepted.
- *   2. `spawnSync("npm.cmd", …, { shell: false })` fails with EINVAL on modern
- *      Node (>= 18.20.2 refuses .cmd/.bat without a shell — the CVE-2024-27980
+ *   2. `spawnSync("npm.cmd", Ã¢â‚¬Â¦, { shell: false })` fails with EINVAL on modern
+ *      Node (>= 18.20.2 refuses .cmd/.bat without a shell Ã¢â‚¬â€ the CVE-2024-27980
  *      batch-injection fix). Resolving to `npm.cmd` at all is therefore not just
  *      unsafe, it does not work. npm/npx are instead resolved to their JS entry
  *      points and run with `process.execPath`, which is absolute by definition,
@@ -32,9 +32,9 @@ import { delimiter, isAbsolute, join, basename, dirname, resolve, sep } from "pa
 import { spawnSync } from "child_process";
 import { buildSafeChildEnv } from "./safeProviderRequest";
 
-export type TrustedExecutableId = "claude" | "codex" | "npm" | "npx" | "docker" | "podman";
+export type TrustedExecutableId = "node" | "claude" | "codex" | "npm" | "npx" | "docker" | "podman" | "wsl";
 
-export const TRUSTED_EXECUTABLE_IDS: readonly TrustedExecutableId[] = ["claude", "codex", "npm", "npx", "docker", "podman"];
+export const TRUSTED_EXECUTABLE_IDS: readonly TrustedExecutableId[] = ["node", "claude", "codex", "npm", "npx", "docker", "podman", "wsl"];
 
 export type ExecutableReasonCode =
   | "ok"
@@ -47,7 +47,7 @@ export type ExecutableReasonCode =
   | "not-a-regular-file"
   | "hash-mismatch"
   | "version-probe-failed"
-  // §38 (S-9): provenance and identity.
+  // Ã‚Â§38 (S-9): provenance and identity.
   | "untrusted-executable-owner"
   | "untrusted-executable-parent"
   | "executable-identity-unpinned"
@@ -67,7 +67,7 @@ export type ExecutableReasonCode =
  */
 export type ExecutableProvenance = "posix-owner-verified" | "unprovable-on-platform";
 
-/** One file whose exact content was sealed at trust establishment (§38). */
+/** One file whose exact content was sealed at trust establishment (Ã‚Â§38). */
 export interface ExecutableIdentityEntry {
   readonly path: string;
   readonly sha256: string;
@@ -79,7 +79,7 @@ export interface ResolvedExecutable {
   readonly id: TrustedExecutableId;
   /** Absolute, canonical path of the binary to execute. */
   readonly command: string;
-  /** Fixed leading arguments (e.g. the npm CLI script) — never mission-derived. */
+  /** Fixed leading arguments (e.g. the npm CLI script) Ã¢â‚¬â€ never mission-derived. */
   readonly prefixArgs: readonly string[];
   readonly realPath: string;
   readonly basename: string;
@@ -91,18 +91,18 @@ export interface ResolvedExecutable {
    * EVERY file whose content this resolution vouches for, sealed at the moment
    * trust was established. For npm/npx that is BOTH the node binary and the CLI
    * script, because both are executed code. Re-checked immediately before any
-   * process starts (§38 TOCTOU).
+   * process starts (Ã‚Â§38 TOCTOU).
    */
   readonly identity: readonly ExecutableIdentityEntry[];
   /** What the platform could prove about ownership. Never assumed. */
   readonly provenance: ExecutableProvenance;
   /**
-   * DISCOVERED is not TRUSTED-FOR-EXECUTION (§38).
+   * DISCOVERED is not TRUSTED-FOR-EXECUTION (Ã‚Â§38).
    *
    * A candidate can be located, canonicalised, type-checked and sealed without
    * anyone having established that it is safe to RUN. Where the platform can
    * prove ownership, provenance supplies that authority. Where it cannot
-   * (Windows), only an externally supplied identity pin does — and if none is
+   * (Windows), only an externally supplied identity pin does Ã¢â‚¬â€ and if none is
    * configured, this stays false and no process may start.
    */
   readonly executionAuthorized: boolean;
@@ -116,20 +116,130 @@ export type ExecutableResolution = { readonly ok: true; readonly value: Resolved
  * Acceptable basenames per id, per platform. Nothing else may ever be executed.
  *
  * NOTE on npm/npx: their entries here are UNREACHABLE for execution. Those two
- * ids return from the CLI-script branch in every case — with a resolution or
- * with `node-cli-script-unavailable` — and never reach the PATH search this
+ * ids return from the CLI-script branch in every case Ã¢â‚¬â€ with a resolution or
+ * with `node-cli-script-unavailable` Ã¢â‚¬â€ and never reach the PATH search this
  * table serves. The entries remain only so the table stays a complete
  * description of the id space; a `.cmd` shim can never become the npm/npx
  * execution target.
  */
 const EXPECTED_BASENAMES: Readonly<Record<TrustedExecutableId, readonly string[]>> =
   process.platform === "win32"
-    ? { claude: ["claude.exe", "claude.cmd", "claude.bat", "claude"], codex: ["codex.exe", "codex.cmd", "codex.bat", "codex"], npm: ["npm.cmd", "npm.exe", "npm"], npx: ["npx.cmd", "npx.exe", "npx"], docker: ["docker.exe", "docker"], podman: ["podman.exe", "podman"] }
-    : { claude: ["claude"], codex: ["codex"], npm: ["npm"], npx: ["npx"], docker: ["docker"], podman: ["podman"] };
+    ? { node: ["node.exe", "node"], claude: ["claude.exe", "claude.cmd", "claude.bat", "claude"], codex: ["codex.exe", "codex.cmd", "codex.bat", "codex"], npm: ["npm.cmd", "npm.exe", "npm"], npx: ["npx.cmd", "npx.exe", "npx"], docker: ["docker.exe", "docker"], podman: ["podman.exe", "podman"], wsl: ["wsl.exe", "wsl"] }
+    : { node: ["node"], claude: ["claude"], codex: ["codex"], npm: ["npm"], npx: ["npx"], docker: ["docker"], podman: ["podman"], wsl: ["wsl"] };
 
 /** Windows executable extensions, in the order PATHEXT would apply them. */
 const WINDOWS_EXTENSIONS: readonly string[] = [".com", ".exe", ".cmd", ".bat"];
 
+export interface ApprovedProviderExecutable {
+  readonly sha256: string;
+  readonly version: string;
+}
+
+export const WINDOWS_APPROVED_PROVIDER_EXECUTABLES:
+  Readonly<Record<"claude" | "codex", readonly ApprovedProviderExecutable[]>> = Object.freeze({
+    claude: Object.freeze([] as readonly ApprovedProviderExecutable[]),
+    codex: Object.freeze([
+      // Codex CLI 0.144.6. Authenticode Valid, signer "OpenAI OpCo, LLC";
+      // human-reviewed on 2026-09-01.
+      Object.freeze({
+        sha256: "4B76DED066D0239115CA97473D010C92072BC5C5550A45DD7CBEBE1E9EB956A7",
+        version: "0.144.6",
+      }),
+    ]),
+  });
+
+export function approvedProviderExecutableDigests(
+  providerId: "claude" | "codex",
+  platform: NodeJS.Platform = process.platform,
+): readonly string[] {
+  if (platform !== "win32") return [];
+  return (WINDOWS_APPROVED_PROVIDER_EXECUTABLES[providerId] ?? []).map((entry) =>
+    entry.sha256.toLowerCase(),
+  );
+}
+
+/**
+ * Repository-owned Windows WSL trust root.
+ *
+ * Exact host executable reviewed on 2026-09-09:
+ * C:\Windows\System32\wsl.exe
+ * File version 10.0.26100.8875, Authenticode status Valid.
+ *
+ * This digest is trusted configuration. It must never be learned from
+ * resolver output, candidate input, mission text, or environment variables.
+ */
+export const WINDOWS_APPROVED_WSL_EXECUTABLES = Object.freeze([
+  Object.freeze({
+    sha256: "27CC8DD52BE326E138A89F8889241B1D8C51DD1978B22EB70BE77036CCDEE3C2",
+    version: "10.0.26100.8875",
+  }),
+] as const);
+
+export function approvedWslExecutableDigests(
+  platform: NodeJS.Platform = process.platform,
+): readonly string[] {
+  if (platform !== "win32") return [];
+  return WINDOWS_APPROVED_WSL_EXECUTABLES.map((entry) =>
+    entry.sha256.toLowerCase(),
+  );
+}
+
+export interface ApprovedWindowsNodeToolchain {
+  readonly nodeSha256: string;
+  readonly npmCliSha256: string;
+  readonly npxCliSha256: string;
+  readonly nodeVersion: string;
+  readonly npmVersion: string;
+  readonly npxVersion: string;
+}
+
+/**
+ * Repository-owned Windows Node toolchain trust roots.
+ *
+ * These digests are human-reviewed configuration, never values learned from
+ * the candidate workspace or copied from resolver output.
+ */
+export const WINDOWS_APPROVED_NODE_TOOLCHAINS:
+  readonly ApprovedWindowsNodeToolchain[] = Object.freeze([
+    Object.freeze({
+      // Node.js v24.18.0. Authenticode Valid, signer "OpenJS Foundation";
+      // npm/npx 11.16.0. Human-reviewed on 2026-09-01.
+      nodeSha256: "9A4EB5F1C29C6A2E93852EAD46B999E284A6A5CA8BAB4D4E241D587D025A52DE",
+      npmCliSha256: "3CE7CBA6F5128DD5F54C98B6A5036B0F850496878CC2E21044B675FE3C594E3E",
+      npxCliSha256: "A9CA027C18C5BD7DA278230EDC7A174FF1D8B6B558E0E0A4A2C9C2FAE346D66B",
+      nodeVersion: "24.18.0",
+      npmVersion: "11.16.0",
+      npxVersion: "11.16.0",
+    }),
+  ]);
+
+export function approvedWindowsNodeToolchainPins(
+  id: "npm" | "npx",
+  platform: NodeJS.Platform = process.platform,
+): readonly {
+  readonly expectedSha256: string;
+  readonly expectedInterpreterSha256: string;
+}[] {
+  if (platform !== "win32") return [];
+
+  return WINDOWS_APPROVED_NODE_TOOLCHAINS.map((toolchain) =>
+    Object.freeze({
+      expectedInterpreterSha256: toolchain.nodeSha256.toLowerCase(),
+      expectedSha256: (
+        id === "npm" ? toolchain.npmCliSha256 : toolchain.npxCliSha256
+      ).toLowerCase(),
+    }),
+  );
+}
+
+export function approvedWindowsNodeRuntimePins(
+  platform: NodeJS.Platform = process.platform,
+): readonly string[] {
+  if (platform !== "win32") return [];
+  return WINDOWS_APPROVED_NODE_TOOLCHAINS.map((toolchain) =>
+    toolchain.nodeSha256.toLowerCase(),
+  );
+}
 export interface ResolveOptions {
   /** PATH string to search. Defaults to the real PATH. */
   readonly searchPath?: string;
@@ -138,7 +248,7 @@ export interface ResolveOptions {
    * refused: generated, untrusted code must never supply its own toolchain.
    */
   readonly workspaceRoots?: readonly string[];
-  /** Run a bounded `--version` probe. Off by default — a probe starts a process. */
+  /** Run a bounded `--version` probe. Off by default Ã¢â‚¬â€ a probe starts a process. */
   readonly probeVersion?: boolean;
   /** Compute the sha256 of the resolved file. Off by default (reads the file). */
   readonly computeHash?: boolean;
@@ -149,7 +259,7 @@ export interface ResolveOptions {
    */
   readonly expectedSha256?: string;
   /**
-   * Require an externally supplied pin (§38). A trusted caller that knows the
+   * Require an externally supplied pin (Ã‚Â§38). A trusted caller that knows the
    * identity it expects can demand it; a resolution with no `expectedSha256`
    * then refuses with `executable-identity-unpinned` instead of falling back to
    * self-derived evidence.
@@ -179,14 +289,14 @@ export interface ResolveOptions {
   readonly processRunner?: (command: string, args: readonly string[]) => { readonly status: number | null; readonly stdout: string; readonly failed: boolean };
 }
 
-// ------------------------------------------------ §38 PROVENANCE (S-9) ---
+// ------------------------------------------------ Ã‚Â§38 PROVENANCE (S-9) ---
 
 /**
  * Can this file be replaced by someone other than its owner or root?
  *
  * THE TRUST MODEL, stated rather than assumed:
  *
- * Linux / macOS — `stat` reports real uid/gid and real mode bits, so two
+ * Linux / macOS Ã¢â‚¬â€ `stat` reports real uid/gid and real mode bits, so two
  * properties are genuinely provable and both are required, for the file AND
  * for its containing directory:
  *   - the owner is root (uid 0) or the current effective user. An executable
@@ -195,15 +305,15 @@ export interface ResolveOptions {
  *   - it is not group- or world-writable (mode & 0o022). A directory anyone can
  *     write is a directory anyone can plant an executable in. There is no
  *     sticky-bit exemption: `/tmp` is 1777, and the sticky bit only stops
- *     deleting OTHER people's files — an attacker can still create their own
+ *     deleting OTHER people's files Ã¢â‚¬â€ an attacker can still create their own
  *     `docker` there, which is exactly the attack.
  *
- * Windows — none of that evidence exists. Node reports uid 0, gid 0 and a
+ * Windows Ã¢â‚¬â€ none of that evidence exists. Node reports uid 0, gid 0 and a
  * synthesised mode, and exposes no ACL API, so ownership is UNPROVABLE. The
  * honest response is to say so, not to run POSIX arithmetic on fabricated
  * numbers and call the result verified. Windows therefore relies on the
- * properties it CAN prove — canonical path, non-symlink, regular file,
- * basename, workspace exclusion — plus the sealed identity and its
+ * properties it CAN prove Ã¢â‚¬â€ canonical path, non-symlink, regular file,
+ * basename, workspace exclusion Ã¢â‚¬â€ plus the sealed identity and its
  * revalidation, and every resolution carries `unprovable-on-platform` so no
  * receipt can overclaim.
  *
@@ -226,7 +336,7 @@ export interface ProvenanceEvidence {
  * THE POSIX provenance rule, as a pure function of the evidence.
  *
  * Separated from `statSync` so the rule itself can be exercised deterministically
- * on ANY host — including Windows, where the real metadata does not exist and a
+ * on ANY host Ã¢â‚¬â€ including Windows, where the real metadata does not exist and a
  * filesystem-driven test could only ever skip. Tests call THIS function, so they
  * exercise production logic rather than restating it.
  */
@@ -275,7 +385,7 @@ function validateProvenance(realPath: string, platform: NodeJS.Platform): { read
 }
 
 /**
- * Decide whether a sealed resolution may actually START A PROCESS (§38).
+ * Decide whether a sealed resolution may actually START A PROCESS (Ã‚Â§38).
  *
  * Measured on win32 BEFORE this split existed: an inert file named
  * `docker.exe` written into a scratch directory resolved ok, sealed an
@@ -287,7 +397,7 @@ function validateProvenance(realPath: string, platform: NodeJS.Platform): { read
  * Where provenance is PROVEN, that proof is the authority.
  *
  * Where it is UNPROVABLE, the only accepted substitute is an externally
- * supplied identity for every executed artifact — `expectedSha256` for the
+ * supplied identity for every executed artifact Ã¢â‚¬â€ `expectedSha256` for the
  * primary file and, for npm/npx, `expectedInterpreterSha256` for the node
  * binary as well. Those values come from trusted configuration, i.e. from
  * outside the candidate. A digest the resolver measured from the candidate
@@ -315,8 +425,8 @@ function decideExecutionAuthorization(provenance: ExecutableProvenance, identity
 /**
  * Seal one file's exact content.
  *
- * WHAT THIS IS AND IS NOT (§38). Hashing a candidate and then declaring that
- * same hash trusted proves nothing — it fingerprints whatever an attacker put
+ * WHAT THIS IS AND IS NOT (Ã‚Â§38). Hashing a candidate and then declaring that
+ * same hash trusted proves nothing Ã¢â‚¬â€ it fingerprints whatever an attacker put
  * there. So this digest is NOT the source of trust and is never copied into
  * `expectedSha256`. Its only job is to detect that a file proven at validation
  * time was swapped before execution.
@@ -331,7 +441,7 @@ function sealFile(filePath: string): ExecutableIdentityEntry | null {
 }
 
 /**
- * Re-prove a resolution immediately before a process starts (§38 TOCTOU).
+ * Re-prove a resolution immediately before a process starts (Ã‚Â§38 TOCTOU).
  *
  * An executable proven at discovery and replaced before spawn is still an
  * executed attacker file. Every sealed file is re-checked for link status,
@@ -376,7 +486,7 @@ function isInsideWorkspace(candidate: string, workspaceRoots: readonly string[])
     try {
       real = realpathSync(p);
     } catch {
-      /* not yet existing — compare lexically */
+      /* not yet existing Ã¢â‚¬â€ compare lexically */
     }
     const withSep = real.endsWith(sep) ? real : real + sep;
     return process.platform === "win32" ? withSep.toLowerCase() : withSep;
@@ -429,7 +539,7 @@ function validateCandidate(id: TrustedExecutableId, candidate: string, opts: Res
   // reader needs, rather than being masked by a directory-permission verdict.
   if (isInsideWorkspace(realPath, opts.workspaceRoots ?? [])) return { ok: false, value: null, reasonCode: "workspace-local-executable-refused" };
 
-  // §38: ownership and parent mutability, BEFORE any identity work and long
+  // Ã‚Â§38: ownership and parent mutability, BEFORE any identity work and long
   // before any process could start.
   const platform = opts.platform ?? process.platform;
   const provenance = validateProvenance(realPath, platform);
@@ -443,7 +553,7 @@ function validateCandidate(id: TrustedExecutableId, candidate: string, opts: Res
 }
 
 /**
- * Seal every executed file and enforce any externally supplied pin (§38).
+ * Seal every executed file and enforce any externally supplied pin (Ã‚Â§38).
  *
  * The seal is now UNCONDITIONAL. Before S-9 it was computed only when a caller
  * asked, so the default path executed a file whose exact content had never been
@@ -472,8 +582,8 @@ function establishIdentity(paths: readonly string[], opts: ResolveOptions): { re
  * The file-level trust checks shared by the PATH path and the npm/npx path.
  *
  * Deliberately excludes the basename rule, which is id-specific and belongs to
- * `validateCandidate`. Everything else — canonical path, link substitution,
- * regular-file status, workspace exclusion, provenance — applies identically to
+ * `validateCandidate`. Everything else Ã¢â‚¬â€ canonical path, link substitution,
+ * regular-file status, workspace exclusion, provenance Ã¢â‚¬â€ applies identically to
  * any file this module is willing to hand to a process, including a JS entry
  * point. Having ONE function makes "npm/npx skipped the checks" a thing that
  * cannot quietly happen again.
@@ -519,12 +629,18 @@ function candidateNames(id: TrustedExecutableId, platform: NodeJS.Platform): str
  *
  * PATH is treated as a list of SUGGESTIONS, not an authority: each directory is
  * tried in order, but a candidate that fails validation is SKIPPED and the
- * search continues. A hostile entry prepended to PATH therefore cannot win — it
+ * search continues. A hostile entry prepended to PATH therefore cannot win Ã¢â‚¬â€ it
  * is refused, and the genuine executable further down PATH is still found.
  */
 export function resolveTrustedExecutable(id: TrustedExecutableId, opts: ResolveOptions = {}): ExecutableResolution {
   if (!TRUSTED_EXECUTABLE_IDS.includes(id)) return { ok: false, value: null, reasonCode: "unknown-executable-id" };
   const platform = opts.platform ?? process.platform;
+
+  // Direct Node execution is bound only to the interpreter already running NAMLA.
+  // Never search PATH for Node: candidate workspaces must not influence verifier runtime.
+  if (id === "node") {
+    return validateCandidate(id, process.execPath, opts);
+  }
 
   // npm/npx: run the JS entry with the CURRENT node binary. `process.execPath`
   // is absolute and cannot be shadowed, and this avoids the EINVAL that makes
@@ -536,14 +652,14 @@ export function resolveTrustedExecutable(id: TrustedExecutableId, opts: ResolveO
     //
     // The previous code fell through to a PATH search, which on Windows could
     // select `npm.cmd`. That is wrong twice over. A `.cmd` shim is a mutable
-    // batch file that PATH happened to find — exactly the untrusted-toolchain
+    // batch file that PATH happened to find Ã¢â‚¬â€ exactly the untrusted-toolchain
     // problem this module exists to prevent. And Node >= 18.20.2 refuses
     // .cmd/.bat with `shell: false` (the CVE-2024-27980 fix), so the apparent
     // safety was really a spawn-time EINVAL: relying on a downstream crash as
     // the refusal mechanism means the trust decision was never actually made.
     if (!script) return { ok: false, value: null, reasonCode: "node-cli-script-unavailable" };
     {
-      // §38: BOTH artifacts are executed code and both are validated. Before
+      // Ã‚Â§38: BOTH artifacts are executed code and both are validated. Before
       // S-9 this branch checked neither: `findNodeCliScript` did an `existsSync`
       // and a LEXICAL `resolve`, so the CLI script was never canonicalised,
       // never lstat-ed for symlink substitution, never checked for regular-file
@@ -558,7 +674,7 @@ export function resolveTrustedExecutable(id: TrustedExecutableId, opts: ResolveO
       if (validatedNode.reasonCode !== "ok") return { ok: false, value: null, reasonCode: validatedNode.reasonCode };
 
       // The node binary is sealed FIRST and the script LAST, so the pin and the
-      // reported hash refer to the CLI script — the artifact a caller means when
+      // reported hash refer to the CLI script Ã¢â‚¬â€ the artifact a caller means when
       // it pins "npm".
       const sealed = establishIdentity([validatedNode.realPath, validatedScript.realPath], opts);
       if (!sealed.ok) return { ok: false, value: null, reasonCode: sealed.reasonCode };
@@ -609,7 +725,7 @@ export function resolveTrustedExecutable(id: TrustedExecutableId, opts: ResolveO
       if (!existsSync(candidate)) continue;
       const validated = validateCandidate(id, candidate, opts);
       if (validated.ok) return maybeProbe(validated, opts);
-      // Record WHY and keep searching — a hostile shadow must not end the search.
+      // Record WHY and keep searching Ã¢â‚¬â€ a hostile shadow must not end the search.
       lastReason = validated.reasonCode;
     }
   }
@@ -623,7 +739,7 @@ export function resolveTrustedExecutable(id: TrustedExecutableId, opts: ResolveO
  * A VERSION PROBE IS EXECUTION, so it can never be part of deciding whether a
  * candidate is trustworthy. Measured before S-9: planting an inert file named
  * `docker.exe` on a search path and asking for `probeVersion: true` changed the
- * result from `ok` to `version-probe-failed` — proof that discovery had
+ * result from `ok` to `version-probe-failed` Ã¢â‚¬â€ proof that discovery had
  * attempted to create a process from a file nothing had vouched for.
  *
  * This function is now reachable ONLY through a successful resolution, i.e.
@@ -635,7 +751,7 @@ export function resolveTrustedExecutable(id: TrustedExecutableId, opts: ResolveO
 function maybeProbe(res: Extract<ExecutableResolution, { ok: true }>, opts: ResolveOptions): ExecutableResolution {
   if (!opts.probeVersion) return res;
 
-  // §38: DISCOVERY IS NOT AUTHORIZATION. A resolution that nobody vouched for
+  // Ã‚Â§38: DISCOVERY IS NOT AUTHORIZATION. A resolution that nobody vouched for
   // may be reported, but it may never be run.
   if (!res.value.executionAuthorized) return { ok: false, value: null, reasonCode: res.value.authorizationReason };
 
@@ -660,8 +776,14 @@ function maybeProbe(res: Extract<ExecutableResolution, { ok: true }>, opts: Reso
 
 /** Fixed argument templates. Never built from mission text. */
 export const VERIFICATION_ARGUMENT_TEMPLATES: Readonly<Record<string, { readonly id: TrustedExecutableId; readonly args: readonly string[] }>> = {
-  typecheck: { id: "npx", args: ["tsc", "--noEmit"] },
+  typecheck: { id: "node", args: ["/opt/namla-toolchain/node_modules/typescript/lib/tsc.js", "--noEmit"] },
   test: { id: "npm", args: ["test"] },
   build: { id: "npm", args: ["run", "build"] },
+  smoke_server: { id: "node", args: ["--test", "tests/server.test.ts"] },
+  smoke_cli: { id: "node", args: ["--test", "tests/cli.test.ts"] },
+  smoke_repository: { id: "node", args: ["--test", "tests/repository.test.ts"] },
+  smoke_app: { id: "node", args: ["--test", "tests/app.test.ts"] },
+  smoke_index: { id: "node", args: ["--test", "tests/index.test.ts"] },
+  integration: { id: "node", args: ["--test", "tests/integration.test.ts"] },
   lint: { id: "npm", args: ["run", "lint"] },
 };

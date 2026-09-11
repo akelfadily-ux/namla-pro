@@ -29,8 +29,7 @@
  */
 
 import { spawnSync } from "child_process";
-import { containerAbsenceProven, containerEnumerationArgs, approvedImageReference, PROBE_HELPER_TIMEOUT_MS, PROBE_KILL_SIGNAL } from "../cognitive/containerSandboxBackend";
-import { resolveTrustedExecutable } from "../cognitive/trustedExecutableRegistry";
+import { containerAbsenceProven, containerEnumerationArgs, approvedImageReference, PROBE_HELPER_TIMEOUT_MS, PROBE_KILL_SIGNAL, resolveRuntimeExecutableUnderPin } from "../cognitive/containerSandboxBackend";
 
 /** One bounded runtime call, killed uncatchably, exactly as the backend does. */
 function run(command: string, args: readonly string[], timeoutMs = PROBE_HELPER_TIMEOUT_MS) {
@@ -43,7 +42,7 @@ function main(): void {
     checks.push({ name, passed });
   };
 
-  const resolved = resolveTrustedExecutable("docker", { workspaceRoots: [] });
+  const resolved = resolveRuntimeExecutableUnderPin("docker", []);
   if (!resolved.ok || !resolved.value.executionAuthorized) {
     console.error("S-16 real-container proof: docker is not resolvable/authorized on this host.");
     process.exit(1);

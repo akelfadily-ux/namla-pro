@@ -1,5 +1,5 @@
 /**
- * trustedExecutableTests — proof that PATH cannot decide what we execute.
+ * trustedExecutableTests â€” proof that PATH cannot decide what we execute.
  *
  * These tests create REAL decoy executables in REAL temp directories and put
  * them FIRST on a PATH string, which is exactly the attack: drop a file named
@@ -7,7 +7,7 @@
  *
  * No real provider is ever executed here. The registry's version probe is
  * opt-in and is exercised only against `npm`, which resolves to
- * `node <npm-cli.js>` — a local, unpaid, offline command.
+ * `node <npm-cli.js>` â€” a local, unpaid, offline command.
  *
  * Run: node --test dist/tools/trustedExecutableTests.js
  */
@@ -18,7 +18,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, rmSync, symlinkSync, 
 import { createHash } from "crypto";
 import { tmpdir } from "os";
 import { resolve, join, dirname, delimiter, isAbsolute, basename } from "path";
-import { resolveTrustedExecutable, TRUSTED_EXECUTABLE_IDS, VERIFICATION_ARGUMENT_TEMPLATES, type TrustedExecutableId } from "../cognitive/trustedExecutableRegistry";
+import { resolveTrustedExecutable, TRUSTED_EXECUTABLE_IDS, VERIFICATION_ARGUMENT_TEMPLATES, approvedWslExecutableDigests, WINDOWS_APPROVED_WSL_EXECUTABLES, type TrustedExecutableId } from "../cognitive/trustedExecutableRegistry";
 
 const IS_WINDOWS = process.platform === "win32";
 
@@ -46,15 +46,15 @@ function plantDecoy(dir: string, id: string): string {
 }
 
 /**
- * The identities a TRUSTED CALLER would configure for npm/npx (§38).
+ * The identities a TRUSTED CALLER would configure for npm/npx (Â§38).
  *
- * npm/npx execute TWO files — the node interpreter and the CLI script — so a
+ * npm/npx execute TWO files â€” the node interpreter and the CLI script â€” so a
  * platform that cannot prove ownership needs an external identity for BOTH.
  *
  * INDEPENDENT BY CONSTRUCTION: both digests are hashed from the filesystem
  * here, never copied from `resolveTrustedExecutable(...).value.identity`. A pin
  * taken from the resolver would only show the resolver agreeing with itself.
- * Production never derives a pin either — the registry only READS
+ * Production never derives a pin either â€” the registry only READS
  * `expectedSha256` and nothing in `src/` writes it.
  */
 function npmTrustPins(id: "npm" | "npx"): { expectedInterpreterSha256: string; expectedSha256: string } {
@@ -84,17 +84,17 @@ test("npm and npx resolve to an absolute, existing, spawnable command", () => {
     assert.equal(r.value.prefixArgs.length, 1, `${id} must run via the node CLI script`);
     assert.equal(isAbsolute(r.value.prefixArgs[0]), true, "the CLI script path must be absolute");
     assert.equal(r.value.prefixArgs[0].endsWith(`${id}-cli.js`), true, `${id} must use ${id}-cli.js`);
-    // The command is the CURRENT node binary — it cannot be shadowed via PATH.
+    // The command is the CURRENT node binary â€” it cannot be shadowed via PATH.
     assert.equal(r.value.command, realpathSync(process.execPath), `${id} must run under the running node binary`);
   }
 });
 
-test("the npm resolution is actually runnable — not the EINVAL that npm.cmd gives", () => {
+test("the npm resolution is actually runnable â€” not the EINVAL that npm.cmd gives", () => {
   // This is the defect that motivated the change: on Node >= 18.20.2,
-  // spawnSync("npm.cmd", …, {shell:false}) fails with EINVAL, so the whole
+  // spawnSync("npm.cmd", â€¦, {shell:false}) fails with EINVAL, so the whole
   // verification path was dead. A version probe proves the new form works.
   //
-  // §38: a probe is EXECUTION, so it requires execution authority. Where the
+  // Â§38: a probe is EXECUTION, so it requires execution authority. Where the
   // platform can prove ownership that comes from provenance; where it cannot
   // (Windows) it comes from the caller-supplied identities below. Either way
   // the runnable form is `node <cli-script>`, never a `.cmd` shim.
@@ -138,7 +138,7 @@ test("a sha256 hash can be computed and a pinned mismatch is refused", () => {
   assert.equal(pinned.ok, false, "a mismatched pinned hash must refuse");
   assert.equal(pinned.reasonCode, "hash-mismatch");
 
-  // The genuine identity, pinned, must be accepted — and it is hashed from the
+  // The genuine identity, pinned, must be accepted â€” and it is hashed from the
   // filesystem by this test rather than copied from the resolver, so acceptance
   // is a genuine cross-check instead of the resolver agreeing with itself.
   const good = resolveTrustedExecutable("npm", npmTrustPins("npm"));
@@ -157,9 +157,45 @@ test("an unknown executable id is refused", () => {
 test("only the approved ids exist", () => {
   // docker/podman were added for SANDBOX RUNTIME DETECTION only (P0.3/P0.4).
   // They are detected and version-probed; they are never used to run a mission.
-  assert.deepEqual([...TRUSTED_EXECUTABLE_IDS].sort(), ["claude", "codex", "docker", "npm", "npx", "podman"]);
+  assert.deepEqual([...TRUSTED_EXECUTABLE_IDS].sort(), ["claude", "codex", "docker", "node", "npm", "npx", "podman", "wsl"]);
 });
 
+test("node resolution is bound to process.execPath and ignores PATH decoys", () => {
+  const evil = tempDir("node-shadow");
+  try {
+    plantDecoy(evil, "node");
+    const expectedSha256 = createHash("sha256")
+      .update(readFileSync(realpathSync(process.execPath)))
+      .digest("hex");
+
+    const r = resolveTrustedExecutable("node", {
+      searchPath: evil,
+      workspaceRoots: [evil],
+      expectedSha256,
+    });
+
+    assert.equal(r.ok, true, "pinned current Node must resolve");
+    if (!r.ok) return;
+    assert.equal(r.value.command, realpathSync(process.execPath));
+    assert.deepEqual([...r.value.prefixArgs], []);
+    assert.equal(r.value.executionAuthorized, true);
+  } finally {
+    rmSync(evil, { recursive: true, force: true });
+  }
+});
+
+test("Windows node resolution without an external identity pin is not execution-authorized", (t) => {
+  if (!IS_WINDOWS) {
+    t.skip("Windows-specific provenance invariant");
+    return;
+  }
+
+  const r = resolveTrustedExecutable("node");
+  assert.equal(r.ok, true, "current Node may be discovered");
+  if (!r.ok) return;
+  assert.equal(r.value.command, realpathSync(process.execPath));
+  assert.equal(r.value.executionAuthorized, false);
+});
 test("a PATH-FIRST decoy is refused and does not become the resolved executable", () => {
   const evil = tempDir("evil");
   try {
@@ -205,7 +241,7 @@ test("an executable inside a generated workspace is refused", () => {
   }
 });
 
-test("a relative PATH entry is refused — it resolves against the untrusted CWD", () => {
+test("a relative PATH entry is refused â€” it resolves against the untrusted CWD", () => {
   const r = resolveTrustedExecutable("codex", { searchPath: "." + delimiter + "bin" });
   assert.equal(r.ok, false);
   assert.equal(r.reasonCode, "relative-path-refused");
@@ -234,7 +270,7 @@ test("a SYMLINKED executable is refused", (t) => {
       symlinkSync(target, linkName, "file");
     } catch {
       // Windows refuses file symlinks without Developer Mode or elevation.
-      // Skip HONESTLY rather than passing silently — this escape is unproven here.
+      // Skip HONESTLY rather than passing silently â€” this escape is unproven here.
       t.skip("platform does not permit file symlink creation");
       return;
     }
@@ -271,14 +307,14 @@ test("executable candidate names are correct for this OS", () => {
   try {
     // Plant the genuine platform-appropriate name OUTSIDE any workspace root.
     const planted = plantDecoy(dir, "codex");
-    // §38 (S-9): where the platform cannot prove ownership, a candidate needs an
+    // Â§38 (S-9): where the platform cannot prove ownership, a candidate needs an
     // independent anchor. This fixture supplies the trusted-host declaration
     // that a real deployment would supply at construction, so the test still
     // exercises PATHEXT expansion rather than the provenance gate.
     const r = resolveTrustedExecutable("codex", { searchPath: dir });
     if (IS_WINDOWS) {
       // codex.cmd is a valid Windows basename, so it resolves (it is not inside
-      // a declared workspace here) — proving PATHEXT expansion works.
+      // a declared workspace here) â€” proving PATHEXT expansion works.
       assert.equal(r.ok, true, "Windows must find codex.cmd via PATHEXT expansion");
       if (r.ok) assert.equal(r.value.basename.toLowerCase(), "codex.cmd");
     } else {
@@ -297,8 +333,8 @@ test("verification templates are fixed and reference approved ids only", () => {
     assert.equal(Array.isArray(tpl.args), true, `${name} must have a fixed arg list`);
     for (const a of tpl.args) assert.equal(typeof a, "string");
   }
-  assert.equal(VERIFICATION_ARGUMENT_TEMPLATES.typecheck.id, "npx");
-  assert.deepEqual([...VERIFICATION_ARGUMENT_TEMPLATES.typecheck.args], ["tsc", "--noEmit"]);
+  assert.equal(VERIFICATION_ARGUMENT_TEMPLATES.typecheck.id, "node");
+  assert.deepEqual([...VERIFICATION_ARGUMENT_TEMPLATES.typecheck.args], ["/opt/namla-toolchain/node_modules/typescript/lib/tsc.js", "--noEmit"]);
 });
 
 test("no real provider process was executed by this suite", () => {
@@ -429,6 +465,205 @@ test("PATH shadowing and basename verification survive canonicalisation", () => 
   } finally {
     rmSync(evil, { recursive: true, force: true });
   }
+});
+
+const REVIEWED_WSL_SHA256 =
+  "27cc8dd52be326e138a89f8889241b1d8c51dd1978b22eb70be77036ccdee3c2";
+
+test("WSL-1: the Windows WSL trust root is exactly the reviewed digest and is win32-scoped", () => {
+  assert.equal(WINDOWS_APPROVED_WSL_EXECUTABLES.length, 1);
+  assert.equal(
+    WINDOWS_APPROVED_WSL_EXECUTABLES[0].sha256.toLowerCase(),
+    REVIEWED_WSL_SHA256,
+  );
+  assert.deepEqual(
+    approvedWslExecutableDigests("win32"),
+    [REVIEWED_WSL_SHA256],
+  );
+
+  for (const platform of ["linux", "darwin", "freebsd"] as const) {
+    assert.deepEqual(
+      approvedWslExecutableDigests(platform),
+      [],
+      `${platform} must carry no Windows WSL trust root`,
+    );
+  }
+
+  assert.equal(Object.isFrozen(WINDOWS_APPROVED_WSL_EXECUTABLES), true);
+  assert.equal(Object.isFrozen(WINDOWS_APPROVED_WSL_EXECUTABLES[0]), true);
+});
+
+test("WSL-2: an exact external pin authorizes wsl.exe under win32 trust semantics", () => {
+  const dir = tempDir("wsl-exact-pin");
+  try {
+    const candidate = join(dir, "wsl.exe");
+    writeFileSync(candidate, "NAMLA hermetic WSL fixture", { mode: 0o755 });
+    if (!IS_WINDOWS) chmodSync(candidate, 0o755);
+
+    const digest = createHash("sha256")
+      .update(readFileSync(candidate))
+      .digest("hex");
+
+    const r = resolveTrustedExecutable("wsl", {
+      searchPath: dir,
+      workspaceRoots: [],
+      expectedSha256: digest,
+      requireIdentityPin: true,
+      platform: "win32",
+    });
+
+    assert.equal(r.ok, true, `exactly pinned wsl.exe must resolve: ${r.reasonCode}`);
+    if (!r.ok) return;
+
+    assert.equal(r.value.executionAuthorized, true);
+    assert.equal(r.value.authorizationReason, "ok");
+    assert.equal(r.value.basename.toLowerCase(), "wsl.exe");
+    assert.equal(r.value.identity.length, 1);
+    assert.equal(r.value.identity[0].sha256.toLowerCase(), digest);
+    assert.equal(r.value.provenance, "unprovable-on-platform");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("WSL-3: a wrong WSL identity pin is refused with hash-mismatch", () => {
+  const dir = tempDir("wsl-wrong-pin");
+  try {
+    const candidate = join(dir, "wsl.exe");
+    writeFileSync(candidate, "NAMLA different WSL bytes", { mode: 0o755 });
+    if (!IS_WINDOWS) chmodSync(candidate, 0o755);
+
+    const r = resolveTrustedExecutable("wsl", {
+      searchPath: dir,
+      workspaceRoots: [],
+      expectedSha256: "0".repeat(64),
+      requireIdentityPin: true,
+      platform: "win32",
+    });
+
+    assert.equal(r.ok, false);
+    assert.equal(r.reasonCode, "hash-mismatch");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("WSL-4: unpinned WSL discovery never grants Windows execution authority", () => {
+  const dir = tempDir("wsl-unpinned");
+  try {
+    const candidate = join(dir, "wsl.exe");
+    writeFileSync(candidate, "NAMLA unpinned WSL fixture", { mode: 0o755 });
+    if (!IS_WINDOWS) chmodSync(candidate, 0o755);
+
+    const discovered = resolveTrustedExecutable("wsl", {
+      searchPath: dir,
+      workspaceRoots: [],
+      platform: "win32",
+    });
+
+    assert.equal(discovered.ok, true, "discovery and authorization are separate");
+    if (discovered.ok) {
+      assert.equal(discovered.value.executionAuthorized, false);
+      assert.equal(
+        discovered.value.authorizationReason,
+        "executable-provenance-unprovable",
+      );
+    }
+
+    const required = resolveTrustedExecutable("wsl", {
+      searchPath: dir,
+      workspaceRoots: [],
+      requireIdentityPin: true,
+      platform: "win32",
+    });
+
+    assert.equal(required.ok, false);
+    assert.equal(required.reasonCode, "executable-identity-unpinned");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("WSL-5: a workspace WSL shadow cannot outrank the separately pinned executable", () => {
+  const evil = tempDir("wsl-shadow-evil");
+  const good = tempDir("wsl-shadow-good");
+
+  try {
+    const evilExe = join(evil, "wsl.exe");
+    const goodExe = join(good, "wsl.exe");
+
+    writeFileSync(evilExe, "ATTACKER WSL", { mode: 0o755 });
+    writeFileSync(goodExe, "TRUSTED WSL", { mode: 0o755 });
+
+    if (!IS_WINDOWS) {
+      chmodSync(evilExe, 0o755);
+      chmodSync(goodExe, 0o755);
+    }
+
+    const goodDigest = createHash("sha256")
+      .update(readFileSync(goodExe))
+      .digest("hex");
+
+    const r = resolveTrustedExecutable("wsl", {
+      searchPath: evil + delimiter + good,
+      workspaceRoots: [evil],
+      expectedSha256: goodDigest,
+      requireIdentityPin: true,
+      platform: "win32",
+    });
+
+    assert.equal(r.ok, true, `the trusted WSL candidate must survive PATH shadowing: ${r.reasonCode}`);
+    if (!r.ok) return;
+
+    assert.equal(realpathSync(r.value.command), realpathSync(goodExe));
+    assert.equal(r.value.executionAuthorized, true);
+    assert.equal(r.value.identity[0].sha256.toLowerCase(), goodDigest);
+  } finally {
+    rmSync(evil, { recursive: true, force: true });
+    rmSync(good, { recursive: true, force: true });
+  }
+});
+
+test("WSL-6: this host's reviewed wsl.exe authorizes when the approved build is present", (t) => {
+  if (!IS_WINDOWS) return t.skip("integration: win32-only");
+
+  const systemRoot = process.env.SystemRoot ?? process.env.WINDIR;
+  if (!systemRoot) return t.skip("integration: Windows system root unavailable");
+
+  const system32 = join(systemRoot, "System32");
+
+  const discovered = resolveTrustedExecutable("wsl", {
+    searchPath: system32,
+    workspaceRoots: [],
+    platform: "win32",
+  });
+
+  if (!discovered.ok) {
+    return t.skip(`integration: wsl.exe did not resolve (${discovered.reasonCode})`);
+  }
+
+  const measured = discovered.value.identity[0].sha256.toLowerCase();
+  if (!approvedWslExecutableDigests("win32").includes(measured)) {
+    return t.skip(
+      `integration: installed wsl.exe digest ${measured.slice(0, 12)} is not the reviewed build`,
+    );
+  }
+
+  const pinned = resolveTrustedExecutable("wsl", {
+    searchPath: system32,
+    workspaceRoots: [],
+    expectedSha256: REVIEWED_WSL_SHA256,
+    requireIdentityPin: true,
+    platform: "win32",
+  });
+
+  assert.equal(pinned.ok, true, `reviewed host wsl.exe must resolve: ${pinned.reasonCode}`);
+  if (!pinned.ok) return;
+
+  assert.equal(pinned.value.executionAuthorized, true);
+  assert.equal(pinned.value.authorizationReason, "ok");
+  assert.equal(pinned.value.basename.toLowerCase(), "wsl.exe");
+  assert.equal(pinned.value.identity[0].sha256.toLowerCase(), REVIEWED_WSL_SHA256);
 });
 
 test("no real provider process was executed by the canonicalisation suite", () => {

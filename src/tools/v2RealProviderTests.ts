@@ -17,6 +17,7 @@ import { resolve, join } from "path";
 import { detectProviderAvailability } from "../cognitive/nodeProviderProcessDriver";
 import { ProviderExecutableId } from "../cognitive/providerProcessDriver";
 import { NamlaRuntime } from "../v2/runtime/namlaRuntime";
+import { ProjectFactory } from "../v2/factory/projectFactory";
 
 function tempWorkspace(tag: string): string {
   return mkdtempSync(resolve(tmpdir(), `namla-v2-real-provider-${tag}-`));
@@ -52,6 +53,7 @@ test("Opt-In Real Provider Qualification Suite", (t) => {
       objective: "Build a TypeScript library that validates email addresses and includes meaningful positive/negative tests",
       workspaceRoot: ws,
       executionMode: "PRODUCTION_MODE",
+      provider,
       projectClass: "TYPESCRIPT_LIBRARY",
     });
 
@@ -74,7 +76,21 @@ test("Opt-In Real Provider Qualification Suite", (t) => {
     const indexContent = readFileSync(indexFile, "utf8");
 
     // Prove solution was NOT sourced from deterministic fixture generators
-    assert.equal(indexContent.includes("Library mission-real-provider-email-validator ready"), false, "Delivered code must NOT be static ProjectFactory template");
+    const staticTemplateIndex = new ProjectFactory()
+      .createProjectTemplate("TYPESCRIPT_LIBRARY", missionId)
+      .files.find((file) => file.relativePath === "src/index.ts")?.content;
+
+    assert.equal(
+      typeof staticTemplateIndex,
+      "string",
+      "ProjectFactory baseline src/index.ts must exist"
+    );
+
+    assert.notEqual(
+      indexContent,
+      staticTemplateIndex,
+      "Delivered code must NOT equal static ProjectFactory template"
+    );
   } finally {
     rmSync(ws, { recursive: true, force: true });
   }

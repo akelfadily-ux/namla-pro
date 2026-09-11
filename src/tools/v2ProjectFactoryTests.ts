@@ -39,3 +39,19 @@ test("ProjectFactory: Creates valid templates for all 7 project classes", () => 
     assert.equal(template.defaultCommands.length >= 1, true, `${cls} must specify default commands`);
   }
 });
+test("ProjectFactory: FULLSTACK emits canonical integration test", () => {
+  const factory = new ProjectFactory();
+  const template = factory.createProjectTemplate(
+    "FULLSTACK_APPLICATION",
+    "test-fullstack-integration"
+  );
+
+  const integrationTest = template.files.find(
+    (file) => file.relativePath === "tests/integration.test.ts"
+  );
+
+  assert.ok(
+    integrationTest,
+    "FULLSTACK_APPLICATION must emit tests/integration.test.ts required by INTEGRATION_VERIFIER"
+  );
+});

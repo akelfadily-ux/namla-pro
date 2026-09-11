@@ -1,16 +1,27 @@
 /**
- * Trusted Kernel Implementation (§08, P0-T4, P0-P1, P0-P2).
+ * Trusted Kernel Implementation (ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§08, P0-T4, P0-P1, P0-P2).
  *
  * Single authoritative effect and trust boundary for NAMLA PRO V2.
- * Enforces EffectiveAuthority = HardSecurityPolicy ∩ Authorization ∩ Permit ∩ Scope ∩ Budget ∩ Environment.
+ * Enforces EffectiveAuthority = HardSecurityPolicy ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¹ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â© Authorization ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¹ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â© Permit ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¹ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â© Scope ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¹ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â© Budget ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¹ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â© Environment.
  */
 
 import { SafetyGuard } from "../../core/safetyGuard";
 import { ReceiptLog } from "../../core/receiptLog";
 import { looksLikeSecret } from "../../policies/secretProtectionPolicy";
 import { isForbiddenCommand } from "../../policies/commandSafetyPolicy";
-import { resolveTrustedExecutable, TrustedExecutableId } from "../../cognitive/trustedExecutableRegistry";
+import {
+  approvedWindowsNodeRuntimePins,
+  approvedWindowsNodeToolchainPins,
+  resolveTrustedExecutable,
+  TrustedExecutableId,
+  VERIFICATION_ARGUMENT_TEMPLATES,
+} from "../../cognitive/trustedExecutableRegistry";
 import { buildSafeChildEnv } from "../../cognitive/safeProviderRequest";
+import { runVerificationCommand, type VerificationCommandId } from "../../cognitive/nodeProviderProcessDriver";
+import type { VerificationSandboxExecutor } from "../../cognitive/verificationSandbox";
+import { ISOLATED_DOCKER_BUILD_EXECUTABLE_ID } from "../../cognitive/isolatedDockerBuild";
+import type { IsolatedDockerBuildExecutor } from "../../cognitive/isolatedDockerBuild";
+import { resolveRuntimeExecutableUnderPin } from "../../cognitive/containerSandboxBackend";
 import { CapabilityScope, PlanContract } from "../types/contracts";
 import { ArtifactIdentity, EnvironmentIdentity, EvidenceRecord, ProofKind } from "../types/evidence";
 import { IntegratedCandidate } from "../types/missionState";
@@ -41,6 +52,10 @@ export interface SecurityGateSeam {
 export interface TrustedKernelOptions {
   readonly workspaceRoot: string;
   readonly humanAuthorizationGranted?: boolean;
+  readonly verificationSandbox?: VerificationSandboxExecutor | null;
+  readonly verificationSandboxFactory?: ((workspaceAbsolutePath: string) => VerificationSandboxExecutor | null) | null;
+  readonly verificationHumanAuthorized?: boolean;
+  readonly isolatedDockerBuildExecutor?: IsolatedDockerBuildExecutor | null;
   readonly securityGateSeam?: SecurityGateSeam;
 }
 
@@ -91,12 +106,21 @@ export class TrustedKernel {
   private readonly receiptLog: ReceiptLog;
   private readonly workspaceRoot: string;
   private readonly humanAuthorizationGranted: boolean;
+  private readonly verificationSandbox: VerificationSandboxExecutor | null;
+  private readonly verificationSandboxFactory: ((workspaceAbsolutePath: string) => VerificationSandboxExecutor | null) | null;
+  private readonly verificationSandboxCache = new Map<string, VerificationSandboxExecutor>();
+  private readonly verificationHumanAuthorized: boolean;
+  private readonly isolatedDockerBuildExecutor: IsolatedDockerBuildExecutor | null;
   private securityGateSeam: SecurityGateSeam;
   private evidenceCounter = 0;
 
   constructor(options: TrustedKernelOptions) {
     this.workspaceRoot = getCanonicalWorkspaceRoot(options.workspaceRoot);
     this.humanAuthorizationGranted = options.humanAuthorizationGranted ?? true;
+    this.verificationSandbox = options.verificationSandbox ?? null;
+    this.verificationSandboxFactory = options.verificationSandboxFactory ?? null;
+    this.verificationHumanAuthorized = options.verificationHumanAuthorized === true;
+    this.isolatedDockerBuildExecutor = options.isolatedDockerBuildExecutor ?? null;
     this.securityGateSeam = options.securityGateSeam ?? {};
     this.safetyGuard = new SafetyGuard();
     this.receiptLog = new ReceiptLog();
@@ -249,7 +273,229 @@ export class TrustedKernel {
   }
 
   public resolveExecutable(id: TrustedExecutableId) {
-    return resolveTrustedExecutable(id, { workspaceRoots: [this.workspaceRoot] });
+    const workspaceRoots = [this.workspaceRoot];
+
+    if (id === "docker" || id === "podman") {
+      return resolveRuntimeExecutableUnderPin(id, workspaceRoots);
+    }
+
+    if (id === "node") {
+      const approvedPins = approvedWindowsNodeRuntimePins();
+
+      if (approvedPins.length > 0) {
+        for (const expectedSha256 of approvedPins) {
+          const resolved = resolveTrustedExecutable("node", {
+            workspaceRoots,
+            expectedSha256,
+          });
+
+          if (resolved.ok && resolved.value.executionAuthorized) {
+            return resolved;
+          }
+        }
+
+        return resolveTrustedExecutable("node", {
+          workspaceRoots,
+          expectedSha256: approvedPins[0]!,
+        });
+      }
+    }
+
+    if (id === "npm" || id === "npx") {
+      const approvedPins = approvedWindowsNodeToolchainPins(id);
+
+      if (approvedPins.length > 0) {
+        for (const pin of approvedPins) {
+          const resolved = resolveTrustedExecutable(id, {
+            workspaceRoots,
+            expectedSha256: pin.expectedSha256,
+            expectedInterpreterSha256: pin.expectedInterpreterSha256,
+          });
+
+          if (resolved.ok && resolved.value.executionAuthorized) {
+            return resolved;
+          }
+        }
+
+        const firstPin = approvedPins[0]!;
+        return resolveTrustedExecutable(id, {
+          workspaceRoots,
+          expectedSha256: firstPin.expectedSha256,
+          expectedInterpreterSha256: firstPin.expectedInterpreterSha256,
+        });
+      }
+    }
+
+    return resolveTrustedExecutable(id, { workspaceRoots });
+  }
+
+  /**
+   * Dedicated candidate-verification execution boundary.
+   *
+   * Candidate-controlled verification must never fall back to host execution.
+   * Until a verified sandbox is both supplied and explicitly authorized,
+   * execution is refused without emitting command execution evidence.
+   */
+  public executeVerificationCommand(
+    commandId: VerificationCommandId,
+    missionId: string,
+    stageId: string,
+    candidateWorkspaceRelative: string,
+    timeoutMs = 15000
+  ): CommandExecutionResult {
+    const requestContext = {
+      commandId,
+      missionId,
+      stageId,
+      candidateWorkspaceRelative,
+      timeoutMs,
+    };
+    void requestContext;
+
+    if (this.verificationSandbox === null && this.verificationSandboxFactory === null) {
+      return {
+        success: false,
+        exitCode: null,
+        stdout: "",
+        stderr: "Verified sandbox unavailable",
+        reasonCode: "VERIFICATION_SANDBOX_UNAVAILABLE",
+      };
+    }
+
+    if (!this.verificationHumanAuthorized) {
+      return {
+        success: false,
+        exitCode: null,
+        stdout: "",
+        stderr: "Verification authorization refused",
+        reasonCode: "VERIFICATION_AUTHORIZATION_REFUSED",
+      };
+    }
+
+    const workspaceResolution = resolveWorkspacePath(
+      this.workspaceRoot,
+      candidateWorkspaceRelative
+    );
+
+    if (!workspaceResolution.ok) {
+      return {
+        success: false,
+        exitCode: null,
+        stdout: "",
+        stderr: workspaceResolution.reasonCode,
+        reasonCode: "VERIFICATION_WORKSPACE_REFUSED",
+      };
+    }
+
+    const verificationWorkspaceAbsolute =
+      workspaceResolution.canonicalPath ||
+      workspaceResolution.absolutePath;
+
+    let verificationSandbox = this.verificationSandbox;
+
+    if (verificationSandbox === null && this.verificationSandboxFactory !== null) {
+      const cachedSandbox =
+        this.verificationSandboxCache.get(verificationWorkspaceAbsolute);
+
+      if (cachedSandbox !== undefined) {
+        verificationSandbox = cachedSandbox;
+      } else {
+        try {
+          verificationSandbox =
+            this.verificationSandboxFactory(verificationWorkspaceAbsolute);
+        } catch {
+          verificationSandbox = null;
+        }
+
+        if (verificationSandbox !== null) {
+          this.verificationSandboxCache.set(
+            verificationWorkspaceAbsolute,
+            verificationSandbox
+          );
+        }
+      }
+    }
+
+    if (verificationSandbox === null) {
+      return {
+        success: false,
+        exitCode: null,
+        stdout: "",
+        stderr: "Verified sandbox unavailable",
+        reasonCode: "VERIFICATION_SANDBOX_UNAVAILABLE",
+      };
+    }
+    const verification = runVerificationCommand({
+      commandId,
+      humanAuthorized: this.verificationHumanAuthorized,
+      workingDirectoryAbsolute: verificationWorkspaceAbsolute,
+      timeoutMs,
+      maxOutputBytes: 1024 * 1024,
+      sandbox: verificationSandbox,
+    });
+
+    const template = VERIFICATION_ARGUMENT_TEMPLATES[commandId];
+
+    if (verification.status !== "passed") {
+      const failureReason =
+        verification.failureCategory ?? "verification-failed";
+
+      // Emit execution evidence only when sandbox execution actually started.
+      const evidenceRecord = verification.ran
+        ? this.emitCommandExecutionEvidence(
+            missionId,
+            stageId,
+            template.id,
+            template.args,
+            null,
+            false,
+            "",
+            failureReason
+          )
+        : undefined;
+
+      return {
+        success: false,
+        exitCode: null,
+        stdout: "",
+        stderr: failureReason,
+        reasonCode: failureReason,
+        evidenceRecord,
+      };
+    }
+
+    // Sandbox receipts expose no numeric exit code and no stdout/stderr.
+    // Preserve that truth rather than fabricating compatibility values.
+    const evidenceRecord = this.emitCommandExecutionEvidence(
+      missionId,
+      stageId,
+      template.id,
+      template.args,
+      null,
+      true,
+      "",
+      ""
+    );
+
+    this.receiptLog.create({
+      summary: "EXECUTE_VERIFICATION_COMMAND: SUCCESS",
+      status: "approved",
+      details: {
+        commandId,
+        executableId: template.id,
+        args: template.args,
+        exitCode: null,
+      },
+    });
+
+    return {
+      success: true,
+      exitCode: null,
+      stdout: "",
+      stderr: "",
+      reasonCode: "OK",
+      evidenceRecord,
+    };
   }
 
   /**
@@ -356,6 +602,127 @@ export class TrustedKernel {
    * Dedicated executeDockerBuild method (P0-D2, P0-D3, P0-D4, P0-D5).
    * Tight authority boundary for Docker build execution.
    */
+  public executeIsolatedDockerBuild(
+    candidateWorkspaceRelative: string,
+    missionId: string,
+    stageId: string,
+    timeoutMs = 45000
+  ): CommandExecutionResult {
+    if (!this.verificationHumanAuthorized) {
+      return {
+        success: false,
+        exitCode: null,
+        stdout: "",
+        stderr: "Verification authorization refused",
+        reasonCode: "VERIFICATION_AUTHORIZATION_REFUSED",
+      };
+    }
+
+    if (this.isolatedDockerBuildExecutor === null) {
+      return {
+        success: false,
+        exitCode: null,
+        stdout: "",
+        stderr: "Isolated Docker build executor unavailable",
+        reasonCode: "ISOLATED_DOCKER_BUILD_UNAVAILABLE",
+      };
+    }
+
+    const workspaceResolution = resolveWorkspacePath(
+      this.workspaceRoot,
+      candidateWorkspaceRelative
+    );
+
+    if (!workspaceResolution.ok) {
+      return {
+        success: false,
+        exitCode: null,
+        stdout: "",
+        stderr: workspaceResolution.reasonCode,
+        reasonCode: "ISOLATED_DOCKER_WORKSPACE_REFUSED",
+      };
+    }
+
+    const workspaceAbsolutePath =
+      workspaceResolution.canonicalPath || workspaceResolution.absolutePath;
+
+    const candidateCheck = this.isInsideCandidateWorkspace(candidateWorkspaceRelative, "Dockerfile");
+    if (!candidateCheck.ok) {
+      return {
+        success: false,
+        exitCode: null,
+        stdout: "",
+        stderr: "Dockerfile escapes candidate workspace",
+        reasonCode: "CANDIDATE_BOUNDARY_ESCAPE",
+      };
+    }
+
+    const dockerfileRelativePath = `${candidateWorkspaceRelative}/Dockerfile`;
+    if (!this.workspaceFileExists(dockerfileRelativePath)) {
+      return {
+        success: false,
+        exitCode: null,
+        stdout: "",
+        stderr: `Dockerfile absent in candidate workspace ${candidateWorkspaceRelative}`,
+        reasonCode: "DOCKERFILE_ABSENT",
+      };
+    }
+
+    const imageTag = `test-${missionId}`;
+
+    let buildResult: ReturnType<IsolatedDockerBuildExecutor["build"]>;
+    try {
+      buildResult = this.isolatedDockerBuildExecutor.build({
+        workspaceAbsolutePath,
+        missionId,
+        stageId,
+        imageTag,
+        timeoutMs,
+      });
+    } catch {
+      return {
+        success: false,
+        exitCode: null,
+        stdout: "",
+        stderr: "Isolated Docker build executor failed",
+        reasonCode: "ISOLATED_DOCKER_BUILD_EXECUTOR_ERROR",
+      };
+    }
+
+    const evidenceArgs = ["build", "-t", imageTag, "."];
+    const evidenceRecord = this.emitCommandExecutionEvidence(
+      missionId,
+      stageId,
+      ISOLATED_DOCKER_BUILD_EXECUTABLE_ID,
+      evidenceArgs,
+      buildResult.exitCode,
+      buildResult.success,
+      buildResult.stdout.slice(0, 500),
+      buildResult.stderr.slice(0, 500)
+    );
+
+    this.receiptLog.create({
+      summary: `EXECUTE_ISOLATED_DOCKER_BUILD: ${buildResult.success ? "SUCCESS" : "FAILED"}`,
+      status: buildResult.success ? "approved" : "failed",
+      details: {
+        executableId: ISOLATED_DOCKER_BUILD_EXECUTABLE_ID,
+        args: evidenceArgs,
+        exitCode: buildResult.exitCode,
+        reasonCode: buildResult.reasonCode,
+      },
+    });
+
+    return {
+      success: buildResult.success,
+      exitCode: buildResult.exitCode,
+      stdout: buildResult.stdout,
+      stderr: buildResult.stderr,
+      reasonCode: buildResult.reasonCode,
+      evidenceRecord,
+    };
+  }
+
+
   public executeDockerBuild(
     subDirRelative: string,
     missionId: string,

@@ -9,17 +9,44 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from "fs";
+import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
 import { tmpdir } from "os";
 import { resolve, join } from "path";
 import { createHash } from "crypto";
 import { spawnSync } from "child_process";
 import { NamlaRuntime } from "../v2/runtime/namlaRuntime";
+import { TrustedKernel } from "../v2/kernel/trustedKernel";
 import { ProjectClass } from "../v2/factory/projectFactory";
 import { detectProviderAvailability } from "../cognitive/nodeProviderProcessDriver";
+import { createV2TestVerificationSandboxFactory } from "./v2TestVerificationSandbox";
 
 function tempWorkspace(tag: string): string {
   return mkdtempSync(resolve(tmpdir(), `namla-v2-e2e-${tag}-`));
+}
+
+function spawnPackageTool(
+  tool: "npm" | "npx",
+  args: readonly string[],
+  cwd: string,
+  timeout?: number
+) {
+  const resolverKernel = new TrustedKernel({ workspaceRoot: cwd });
+  const resolved = resolverKernel.resolveExecutable(tool);
+
+  if (!resolved.ok || !resolved.value.executionAuthorized) {
+    throw new Error(`E2E_TRUSTED_PACKAGE_TOOL_UNAVAILABLE: ${tool}`);
+  }
+
+  return spawnSync(
+    resolved.value.command,
+    [...resolved.value.prefixArgs, ...args],
+    {
+      cwd,
+      shell: false,
+      encoding: "utf8",
+      ...(timeout !== undefined ? { timeout } : {}),
+    }
+  );
 }
 
 const ALL_PROJECT_CLASSES: ProjectClass[] = [
@@ -72,13 +99,16 @@ for (const projectClass of ALL_PROJECT_CLASSES) {
   test(`V2 Black-Box Clean-Room: ${projectClass} - Full Pipeline & Independent Verification`, () => {
     const ws = tempWorkspace(projectClass.toLowerCase());
     try {
-      const runtime = new NamlaRuntime();
+      const runtime = new NamlaRuntime(undefined, {
+        verificationSandboxFactory: createV2TestVerificationSandboxFactory(),
+      });
       const missionId = `mission-cleanroom-${projectClass.toLowerCase()}`;
 
       // 1. Run NamlaRuntime
       const result = runtime.runMission({
         missionId,
         objective: `Build an autonomous ${projectClass} with full verification and packaging`,
+        humanAuthorizationGranted: true,
         workspaceRoot: ws,
         executionMode: "DETERMINISTIC_FIXTURE_MODE",
         projectClass,
@@ -110,29 +140,14 @@ for (const projectClass of ALL_PROJECT_CLASSES) {
       }
 
       // 4. Black-Box Independent Execution: Build, Typecheck, and Test (FINAL-P0-6)
-      const buildCmd = spawnSync("npm", ["run", "build"], {
-        cwd: deliveryAbsDir,
-        shell: false,
-        encoding: "utf8",
-        timeout: 15000,
-      });
+      const buildCmd = spawnPackageTool("npm", ["run", "build"], deliveryAbsDir, 15000);
       assert.equal(buildCmd.status, 0, `Independent npm run build in delivered workspace must pass: ${buildCmd.stderr || buildCmd.stdout}`);
 
       // Independent Typecheck Execution
-      const typecheckCmd = spawnSync("npx", ["--package=typescript", "tsc", "--noEmit"], {
-        cwd: deliveryAbsDir,
-        shell: false,
-        encoding: "utf8",
-        timeout: 15000,
-      });
+      const typecheckCmd = spawnPackageTool("npx", ["--package=typescript", "tsc", "--noEmit"], deliveryAbsDir, 15000);
       assert.equal(typecheckCmd.status, 0, `Independent typecheck (npx --package=typescript tsc --noEmit) in delivered workspace must pass: ${typecheckCmd.stderr || typecheckCmd.stdout}`);
 
-      const testCmd = spawnSync("npm", ["test"], {
-        cwd: deliveryAbsDir,
-        shell: false,
-        encoding: "utf8",
-        timeout: 15000,
-      });
+      const testCmd = spawnPackageTool("npm", ["test"], deliveryAbsDir, 15000);
       assert.equal(testCmd.status, 0, `Independent npm test in delivered workspace must pass: ${testCmd.stderr || testCmd.stdout}`);
 
       // 5. Executable Class-Specific Smoke Verification (FINAL-P0-7, FINAL-P0-8, Items 3, 4, 5)
@@ -217,12 +232,15 @@ for (const projectClass of ALL_PROJECT_CLASSES) {
 test("V2 Black-Box Clean-Room: 8+ File Multi-WorkPackage Project Run (P0.18)", () => {
   const ws = tempWorkspace("multi-file-8");
   try {
-    const runtime = new NamlaRuntime();
+    const runtime = new NamlaRuntime(undefined, {
+      verificationSandboxFactory: createV2TestVerificationSandboxFactory(),
+    });
     const missionId = "mission-multifile-8";
 
     const result = runtime.runMission({
       missionId,
       objective: "Build a REST API for tasks with CRUD, validation, persistence and tests",
+      humanAuthorizationGranted: true,
       workspaceRoot: ws,
       executionMode: "DETERMINISTIC_FIXTURE_MODE",
       projectClass: "REST_API",
@@ -254,7 +272,7 @@ test("ADVERSARIAL: Failing Build with Passing npm test Fails Clean-Room Qualific
   const ws = tempWorkspace("broken-build");
   try {
     const deliveryAbsDir = join(ws, "delivered");
-    spawnSync("mkdir", ["-p", deliveryAbsDir]);
+    mkdirSync(deliveryAbsDir, { recursive: true });
 
     // Create a package.json where npm test passes, but npm run build fails!
     writeFileSync(
@@ -269,8 +287,8 @@ test("ADVERSARIAL: Failing Build with Passing npm test Fails Clean-Room Qualific
       })
     );
 
-    const buildCmd = spawnSync("npm", ["run", "build"], { cwd: deliveryAbsDir, shell: false, encoding: "utf8" });
-    const testCmd = spawnSync("npm", ["test"], { cwd: deliveryAbsDir, shell: false, encoding: "utf8" });
+    const buildCmd = spawnPackageTool("npm", ["run", "build"], deliveryAbsDir);
+    const testCmd = spawnPackageTool("npm", ["test"], deliveryAbsDir);
 
     assert.notEqual(buildCmd.status, 0, "Broken build must fail");
     assert.equal(testCmd.status, 0, "npm test must pass");
@@ -287,7 +305,7 @@ test("ADVERSARIAL: Failing Typecheck with Passing Build and Test Fails Qualifica
   const ws = tempWorkspace("broken-typecheck");
   try {
     const deliveryAbsDir = join(ws, "delivered");
-    spawnSync("mkdir", ["-p", deliveryAbsDir]);
+    mkdirSync(deliveryAbsDir, { recursive: true });
 
     writeFileSync(
       join(deliveryAbsDir, "package.json"),
@@ -302,12 +320,12 @@ test("ADVERSARIAL: Failing Typecheck with Passing Build and Test Fails Qualifica
     );
 
     // Write a TypeScript file with an intentional type error
-    spawnSync("mkdir", ["-p", join(deliveryAbsDir, "src")]);
+    mkdirSync(join(deliveryAbsDir, "src"), { recursive: true });
     writeFileSync(join(deliveryAbsDir, "src/index.ts"), "const x: number = 'type_error';\n");
 
-    const buildCmd = spawnSync("npm", ["run", "build"], { cwd: deliveryAbsDir, shell: false, encoding: "utf8" });
-    const testCmd = spawnSync("npm", ["test"], { cwd: deliveryAbsDir, shell: false, encoding: "utf8" });
-    const typecheckCmd = spawnSync("npx", ["--package=typescript", "tsc", "--noEmit"], { cwd: deliveryAbsDir, shell: false, encoding: "utf8" });
+    const buildCmd = spawnPackageTool("npm", ["run", "build"], deliveryAbsDir);
+    const testCmd = spawnPackageTool("npm", ["test"], deliveryAbsDir);
+    const typecheckCmd = spawnPackageTool("npx", ["--package=typescript", "tsc", "--noEmit"], deliveryAbsDir);
 
     assert.equal(buildCmd.status, 0, "Build script passes");
     assert.equal(testCmd.status, 0, "Test script passes");
@@ -324,7 +342,7 @@ test("ADVERSARIAL: Docker Unavailability / Daemon Failure is Classified as BLOCK
   const ws = tempWorkspace("docker-blocked");
   try {
     const deliveryAbsDir = join(ws, "delivered");
-    spawnSync("mkdir", ["-p", deliveryAbsDir]);
+    mkdirSync(deliveryAbsDir, { recursive: true });
     writeFileSync(join(deliveryAbsDir, "Dockerfile"), "FROM alpine:latest\nCMD [\"echo\", \"hello\"]\n");
 
     const res = classifyDockerBuild(deliveryAbsDir, "test-blocked-tag");

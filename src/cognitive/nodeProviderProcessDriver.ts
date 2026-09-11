@@ -1,6 +1,6 @@
 /**
- * NodeProviderProcessDriver — the ONE real one-shot process driver, and the
- * ONLY file in Namla Pro that imports `child_process` (Build Law §19).
+ * NodeProviderProcessDriver â€” the ONE real one-shot process driver, and the
+ * ONLY file in Namla Pro that imports `child_process` (Build Law Â§19).
  *
  * It runs exactly one child process with `shell: false`, an executable chosen
  * only from a hard-coded map (never a user path, never mission text), a fixed
@@ -22,15 +22,16 @@
 
 import { spawnSync } from "child_process";
 import { truncateUtf8 } from "./safeWorkspacePath";
-// The env allowlist lives in the ONE outbound request boundary (§26) so there is
+// The env allowlist lives in the ONE outbound request boundary (Â§26) so there is
 // a single definition of which variable names may ever reach a child process.
 import { buildSafeChildEnv } from "./safeProviderRequest";
-import { resolveTrustedExecutable, revalidateResolvedExecutable, VERIFICATION_ARGUMENT_TEMPLATES, type TrustedExecutableId } from "./trustedExecutableRegistry";
+import { classifyCodexStructuredFailure } from "./codexFailureClassifier";
+import { approvedProviderExecutableDigests, resolveTrustedExecutable, revalidateResolvedExecutable, VERIFICATION_ARGUMENT_TEMPLATES, type TrustedExecutableId } from "./trustedExecutableRegistry";
 import { NodeProcessTreeDriver, buildProcessTreeHandle, DEFAULT_TERMINATION_POLICY, type ProcessTreeDriver, type ProcessTreeCleanupReceipt, type TerminationReason } from "./processTree";
-// §35: the verification path no longer constructs a sandbox of its own. It
+// Â§35: the verification path no longer constructs a sandbox of its own. It
 // receives a trusted executor and routes the permit through it, so the
-// hard-coded `new SandboxPolicy(new UnavailableSandboxBackend())` — which made
-// real sandbox routing impossible — is gone along with the host spawn.
+// hard-coded `new SandboxPolicy(new UnavailableSandboxBackend())` â€” which made
+// real sandbox routing impossible â€” is gone along with the host spawn.
 import { buildVerificationSandboxPolicy, type VerificationSandboxExecutor } from "./verificationSandbox";
 import type { SandboxExecutionReceipt, VerificationSafeReason } from "./sandboxPolicy";
 import type {
@@ -52,6 +53,37 @@ function truncate(buffer: string, maxBytes: number): { text: string; truncated: 
   return { text: t.text, truncated: t.truncated };
 }
 
+function resolveApprovedProviderExecutable(
+  provider: ProviderExecutableId,
+  workspaceRoots: readonly string[],
+) {
+  const pins = approvedProviderExecutableDigests(provider);
+
+  if (pins.length === 0) {
+    return resolveTrustedExecutable(provider as TrustedExecutableId, {
+      workspaceRoots,
+    });
+  }
+
+  let resolved = resolveTrustedExecutable(provider as TrustedExecutableId, {
+    workspaceRoots,
+    expectedSha256: pins[0],
+  });
+
+  if (resolved.ok) return resolved;
+
+  for (const pin of pins.slice(1)) {
+    const candidate = resolveTrustedExecutable(provider as TrustedExecutableId, {
+      workspaceRoots,
+      expectedSha256: pin,
+    });
+
+    if (candidate.ok) return candidate;
+    resolved = candidate;
+  }
+
+  return resolved;
+}
 export class NodeProviderProcessDriver implements ProviderProcessDriver {
   readonly isReal = true;
   private spawnSequence = 0;
@@ -75,9 +107,9 @@ export class NodeProviderProcessDriver implements ProviderProcessDriver {
 
   run(spec: ProviderProcessSpec): ProviderProcessResult {
     // Resolve to a TRUSTED ABSOLUTE PATH. A bare name would be resolved by the
-    // inherited PATH, so anything earlier on PATH — including a file dropped in
-    // a generated workspace — would run instead of the real provider.
-    const resolved = resolveTrustedExecutable(spec.executableId as TrustedExecutableId, { workspaceRoots: [spec.workingDirectoryAbsolute] });
+    // inherited PATH, so anything earlier on PATH â€” including a file dropped in
+    // a generated workspace â€” would run instead of the real provider.
+    const resolved = resolveApprovedProviderExecutable(spec.executableId, [spec.workingDirectoryAbsolute]);
     if (!resolved.ok) {
       return {
         ran: false,
@@ -94,12 +126,12 @@ export class NodeProviderProcessDriver implements ProviderProcessDriver {
     // Bounded in real UTF-8 bytes: a 10-emoji prompt is 10 chars but 40 bytes.
     const stdin = truncateUtf8(spec.stdinData, spec.maxStdinBytes).text;
 
-    // §38: an unauthorized resolution is discoverable, never runnable.
+    // Â§38: an unauthorized resolution is discoverable, never runnable.
     if (!resolved.value.executionAuthorized) {
       return { ran: false, exitCode: null, terminationSignalCategory: "none", stdout: "", stderr: "", stdoutTruncated: false, stderrTruncated: false, failureCategory: "spawn-failed" };
     }
 
-    // §38 TOCTOU: the executable was proven above; re-prove its sealed identity
+    // Â§38 TOCTOU: the executable was proven above; re-prove its sealed identity
     // at the last instruction before the process is created, so a file swapped
     // in between validation and spawn is refused rather than run.
     const stillTrusted = revalidateResolvedExecutable(resolved.value);
@@ -154,7 +186,7 @@ export class NodeProviderProcessDriver implements ProviderProcessDriver {
       };
     }
 
-    // Timeout — spawnSync sets error and signal on kill.
+    // Timeout â€” spawnSync sets error and signal on kill.
     const timedOut = Boolean(outcome.error && (outcome.error as NodeJS.ErrnoException).code === "ETIMEDOUT") || outcome.signal === "SIGKILL";
     if (timedOut) {
       return {
@@ -187,6 +219,13 @@ export class NodeProviderProcessDriver implements ProviderProcessDriver {
     const err = truncate(typeof outcome.stderr === "string" ? outcome.stderr : "", spec.maxStderrBytes);
     const exitCode = outcome.status;
 
+    // Codex quota exhaustion is accepted only from structured JSONL failure events.
+    // Agent text and arbitrary stderr text cannot manufacture this classification.
+    const structuredFailure =
+      exitCode !== 0 && spec.executableId === "codex"
+        ? classifyCodexStructuredFailure(out.text, spec.maxStdoutBytes)
+        : null;
+
     return {
       ran: true,
       exitCode,
@@ -195,19 +234,36 @@ export class NodeProviderProcessDriver implements ProviderProcessDriver {
       stderr: err.text,
       stdoutTruncated: out.truncated,
       stderrTruncated: err.truncated,
-      failureCategory: exitCode === 0 ? (out.truncated ? "output-truncated" : "none") : "non-zero-exit",
+      failureCategory:
+        exitCode === 0
+          ? out.truncated
+            ? "output-truncated"
+            : "none"
+          : structuredFailure === "quota-exceeded"
+            ? "quota-exceeded"
+            : "non-zero-exit",
     };
   }
 }
 
-// --- V4 human-authorized allowlisted verification (Build Law §26) ----------
+// --- V4 human-authorized allowlisted verification (Build Law Â§26) ----------
 // This stays inside the ONE child_process module. It spawns a fixed verification
 // executable (resolved through the trusted registry) with a fixed argument list, shell:false, cwd
 // exactly the objective workspace, a timeout, and bounded output. It never runs
 // npm install, never runs Git, never builds an argument from provider/mission
 // text, and never retries. It is invoked ONLY by the human live CLI.
 
-export type VerificationCommandId = "typecheck" | "test" | "build" | "lint";
+export type VerificationCommandId =
+  | "typecheck"
+  | "test"
+  | "build"
+  | "smoke_server"
+  | "smoke_cli"
+  | "smoke_repository"
+  | "smoke_app"
+  | "smoke_index"
+  | "integration"
+  | "lint";
 
 export interface VerificationProcessSpec {
   readonly commandId: VerificationCommandId;
@@ -215,7 +271,7 @@ export interface VerificationProcessSpec {
    * Human authorization for high-risk execution.
    *
    * S-13: REQUIRED. It was optional, and an omitted property is
-   * indistinguishable from a deliberate `false` — so a trusted caller that
+   * indistinguishable from a deliberate `false` â€” so a trusted caller that
    * simply forgot the wiring received a refusal it could not explain. Stating it
    * is now mandatory. The runtime still compares `=== true`, so nothing about
    * the fail-closed behaviour changes; only the ability to omit it silently.
@@ -225,11 +281,11 @@ export interface VerificationProcessSpec {
   readonly timeoutMs: number;
   readonly maxOutputBytes: number;
   /**
-   * The trusted sandbox executor this command runs through (§35).
+   * The trusted sandbox executor this command runs through (Â§35).
    *
    * REQUIRED and explicitly nullable: every call site must state its position.
    * `null` means no verified sandbox could be composed, which makes the command
-   * unavailable — never a reason to run it on the host. There is no default and
+   * unavailable â€” never a reason to run it on the host. There is no default and
    * no implicit backend, because a default here is exactly how a host fallback
    * gets reintroduced.
    */
@@ -248,7 +304,7 @@ export interface VerificationProcessResult {
   /**
    * S-13: `null` means PASSED, and is the only representation of success. It
    * previously carried the string `"none"`, which meant a caller had to know
-   * that one member of the reason vocabulary secretly meant "no failure" — and
+   * that one member of the reason vocabulary secretly meant "no failure" â€” and
    * a failed result could still carry it. Success is now structurally
    * distinguishable from every reason, and `VerificationSafeReason` no longer
    * contains any value that means success.
@@ -256,7 +312,7 @@ export interface VerificationProcessResult {
   readonly failureCategory: VerificationSafeReason | null;
   /**
    * Line count of captured output. The sandbox receipt deliberately exposes no
-   * stdout, so this is 0 whenever `outputObservable` is false — it is NOT a
+   * stdout, so this is 0 whenever `outputObservable` is false â€” it is NOT a
    * claim that the command produced no output.
    */
   readonly outputLineCount: number;
@@ -264,11 +320,11 @@ export interface VerificationProcessResult {
   readonly outputObservable: boolean;
 }
 
-// --- Pre-flight provider availability (Build Law §28 hardening) -------------
+// --- Pre-flight provider availability (Build Law Â§28 hardening) -------------
 // A safe LOCAL availability probe for the human CLI's pre-flight: it runs the
 // provider executable's own `--version` as a bounded child process (shell:false,
 // hard-coded executable, fixed arg, short timeout, windowsHide, safe env). It is
-// NOT a paid provider request — no prompt, no cognition, no cost — and is NEVER
+// NOT a paid provider request â€” no prompt, no cognition, no cost â€” and is NEVER
 // invoked by any automated demo/test. It reports only whether the executable
 // resolved and a short, bounded version token (never raw multi-line output).
 
@@ -280,12 +336,19 @@ export interface ProviderAvailability {
   readonly failureCategory: string;
 }
 
+const DEFAULT_PROVIDER_AVAILABILITY_TIMEOUT_MS =
+  process.platform === "win32" ? 30000 : 8000;
+
 /** Probe one provider's local availability via its `--version` (safe, unpaid, bounded). */
-export function detectProviderAvailability(provider: ProviderExecutableId, timeoutMs = 8000, untrustedRoots: readonly string[] = []): ProviderAvailability {
-  // §38: the trust context is an explicit parameter rather than an omitted one.
+export function detectProviderAvailability(
+  provider: ProviderExecutableId,
+  timeoutMs = DEFAULT_PROVIDER_AVAILABILITY_TIMEOUT_MS,
+  untrustedRoots: readonly string[] = []
+): ProviderAvailability {
+  // Â§38: the trust context is an explicit parameter rather than an omitted one.
   // This call previously passed `{}`, so a provider binary sitting inside the
   // very workspace being processed was eligible for a `--version` execution.
-  const resolved = resolveTrustedExecutable(provider as TrustedExecutableId, { workspaceRoots: untrustedRoots });
+  const resolved = resolveApprovedProviderExecutable(provider, untrustedRoots);
   if (!resolved.ok) {
     return { provider, available: false, version: "", failureCategory: resolved.reasonCode };
   }
@@ -321,18 +384,18 @@ export function detectProviderAvailability(provider: ProviderExecutableId, timeo
 }
 
 /**
- * Run one allowlisted verification command THROUGH the sandbox permit (§35).
+ * Run one allowlisted verification command THROUGH the sandbox permit (Â§35).
  *
  * There is no host execution path in this function. `npm test` and
  * `npm run build` execute whatever a generated `package.json` puts in
  * `scripts`, so a verification command is arbitrary code execution by
- * definition — that is precisely why it must happen inside a container and why
+ * definition â€” that is precisely why it must happen inside a container and why
  * it is NOT reclassified as deterministic or safe to make this easier.
  *
  * The sequence is fixed: authorize, then execute THE EXACT permit that
  * authorization returned. The permit's authority is object identity in an
  * issued-permit WeakSet, so it is never cloned, spread, serialized, or rebuilt
- * between the two calls — a reconstructed permit is a forged permit.
+ * between the two calls â€” a reconstructed permit is a forged permit.
  */
 function verificationFailure(failureCategory: VerificationSafeReason): VerificationProcessResult {
   return { ran: false, exitCode: null, status: "failed", failureCategory, outputLineCount: 0, outputObservable: false };
@@ -342,13 +405,13 @@ function verificationFailure(failureCategory: VerificationSafeReason): Verificat
  * Read a NON-SUCCESS reason out of a receipt that reports a non-success outcome.
  *
  * The receipt's `safeReasonCode` is a full `SandboxReasonCode`, which includes
- * `"ok"` — and `authorize` genuinely pairs `ok: false` with `"ok"` for a
+ * `"ok"` â€” and `authorize` genuinely pairs `ok: false` with `"ok"` for a
  * low-risk request. Passing that straight through would produce a failure whose
  * stated reason is that nothing was wrong, which is the same class of untruth
  * S-13 exists to remove.
  *
  * So `"ok"` is not forwarded. Nor is it replaced by a guess about the cause:
- * the fallback reports only the STRUCTURAL fact the receipt itself asserts —
+ * the fallback reports only the STRUCTURAL fact the receipt itself asserts â€”
  * it was blocked, or it never started. A receipt claiming neither while also
  * claiming no fault is internally contradictory, and `backend-error` says
  * exactly that about the backend, not about the code being verified.
@@ -378,7 +441,7 @@ export function runVerificationCommand(spec: VerificationProcessSpec): Verificat
     // provider or mission text participates in either.
     executableId: entry.id,
     fixedArguments: entry.args,
-    // The REAL host workspace, and network denied (§31/§32).
+    // The REAL host workspace, and network denied (Â§31/Â§32).
     policy: buildVerificationSandboxPolicy(spec.workingDirectoryAbsolute),
     riskLevel: "high-risk",
     humanAuthorized: spec.humanAuthorized === true,
@@ -395,14 +458,14 @@ export function runVerificationCommand(spec: VerificationProcessSpec): Verificat
   }
 
   // Map the receipt truthfully. Output is NOT observable through a sandbox
-  // receipt — it exposes categories, limits and a fingerprint, never stdout —
+  // receipt â€” it exposes categories, limits and a fingerprint, never stdout â€”
   // so no line count is invented and no raw output is surfaced to preserve the
   // old field's shape.
   //
   // Success is ALL THREE conditions, and it is the only branch that reports no
   // reason. The previous mapping computed the reason first and derived success
   // separately, so a receipt claiming `completed` + clean cleanup but
-  // `executionCompleted: false` produced a FAILURE whose reason was "none" — a
+  // `executionCompleted: false` produced a FAILURE whose reason was "none" â€” a
   // failure for no stated reason. Deriving the reason from the failure instead
   // makes that unrepresentable.
   const passed = receipt.exitCategory === "completed" && receipt.executionCompleted && receipt.cleanupComplete;
@@ -416,7 +479,7 @@ export function runVerificationCommand(spec: VerificationProcessSpec): Verificat
     status: "failed",
     // A non-completed exit IS the reason (timed-out, non-zero-exit, ...). A
     // completed exit that still failed means the fault is in what the receipt
-    // reported about it — cleanup, or a contradictory completion claim — so the
+    // reported about it â€” cleanup, or a contradictory completion claim â€” so the
     // receipt's own non-success reason is used.
     failureCategory: receipt.exitCategory !== "completed" ? receipt.exitCategory : safeFailureReason(receipt),
     outputLineCount: 0,

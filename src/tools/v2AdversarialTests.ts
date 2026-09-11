@@ -449,8 +449,8 @@ test("P0-SE7 10-Point Command-Confusion & Source Execution Binding Matrix", () =
           { id: "tr-build", type: "BUILD", verifier: "BUILD_VERIFIER", name: "Build", command: "npm run build", expectedExitCode: 0, provesCriterionIds: ["ac-build"] },
           { id: "tr-test", type: "TEST", verifier: "TEST_SUITE_VERIFIER", name: "Test", command: "npm test", expectedExitCode: 0, provesCriterionIds: ["ac-test"] },
           { id: "tr-typecheck", type: "TYPECHECK", verifier: "TYPECHECK_VERIFIER", name: "Typecheck", command: "npx --package=typescript tsc --noEmit", expectedExitCode: 0, provesCriterionIds: ["ac-typecheck"] },
-          { id: "tr-smoke", type: "SMOKE", verifier: "SMOKE_VERIFIER", name: "Smoke", command: "npx node --test tests/server.test.ts", expectedExitCode: 0, provesCriterionIds: ["ac-smoke"] },
-          { id: "tr-integ", type: "INTEGRATION_TEST", verifier: "INTEGRATION_VERIFIER", name: "Integ", command: "npx node --test tests/integration.test.ts", expectedExitCode: 0, provesCriterionIds: ["ac-integ"] },
+          { id: "tr-smoke", type: "SMOKE", verifier: "SMOKE_VERIFIER", name: "Smoke", command: "node --test tests/server.test.ts", expectedExitCode: 0, provesCriterionIds: ["ac-smoke"] },
+          { id: "tr-integ", type: "INTEGRATION_TEST", verifier: "INTEGRATION_VERIFIER", name: "Integ", command: "node --test tests/integration.test.ts", expectedExitCode: 0, provesCriterionIds: ["ac-integ"] },
           { id: "tr-docker", type: "DOCKER_BUILD", verifier: "DOCKER_BUILD_VERIFIER", name: "Docker", command: "docker build -t test-m-se7 .", expectedExitCode: 0, provesCriterionIds: ["ac-docker"] },
         ],
         securityRequirements: [], expectedArtifacts: [], evidenceRequirements: [], riskClassification: "LOW", completionConditions: [], frozenAt: Date.now(),
@@ -753,7 +753,7 @@ test("P0-D6 8-Point Dedicated Docker Adversarial & Boundary Qualification Matrix
     const origCwd = process.cwd();
     try {
       const resCwd1 = kernel.executeDockerBuild(candRel, "m-d6", "PROMAX");
-      process.chdir("/tmp");
+      process.chdir(tmpdir());
       const resCwd2 = kernel.executeDockerBuild(candRel, "m-d6", "PROMAX");
       assert.equal(resCwd1.reasonCode, resCwd2.reasonCode, "Docker candidate resolution MUST be identical regardless of process.cwd()");
     } finally {
@@ -779,7 +779,7 @@ test("P0-D6 8-Point Dedicated Docker Adversarial & Boundary Qualification Matrix
       const symlinkDirRel = `${candRel}/symlink-escape`;
       const symlinkDirAbs = resolve(ws, symlinkDirRel);
       mkdirSync(resolve(ws, candRel), { recursive: true });
-      symlinkSync(outsideDir, symlinkDirAbs);
+      symlinkSync(outsideDir, symlinkDirAbs, process.platform === "win32" ? "junction" : "dir");
 
       const resSym = kernel.executeDockerBuild(`${candRel}/symlink-escape`, "m-d6", "PROMAX");
       assert.equal(resSym.success, false, "Symlinked candidate cwd escaping workspace MUST be rejected");
@@ -1915,7 +1915,7 @@ test("P0-CB6 8-Point Candidate Boundary & Verifier Path Adversarial Matrix", () 
     const origCwd = process.cwd();
     try {
       // process.cwd() path resolution in ProMax is completely eliminated; kernel handles candidate relative paths
-      process.chdir("/tmp");
+      process.chdir(tmpdir());
       const pmRes8 = kernel.runProMaxVerification(validCandidate, validCtx, [validSourceEv, validEv]);
       assert.equal(pmRes8.success, true, "Verifier path semantics MUST remain identical when process.cwd() changes");
     } finally {
@@ -1959,20 +1959,28 @@ test("P0-B9 12-Point Adversarial Filesystem & Boundary Matrix", () => {
       const outsideFile = resolve(outsideDir, "outside-secret.txt");
       require("fs").writeFileSync(outsideFile, "SECRET_DATA", "utf8");
 
-      // Create symlink inside workspace pointing to file outside workspace
-      const symlinkFileRel = "src/symlink-file.txt";
-      const symlinkFileAbs = resolve(ws, symlinkFileRel);
+      // Create a link-backed file path inside workspace pointing outside.
+      // Windows file symlinks may require Developer Mode/admin, so use a
+      // directory junction there while preserving the same boundary-escape test.
+      let symlinkFileRel = "src/symlink-file.txt";
       mkdirSync(resolve(ws, "src"), { recursive: true });
-      symlinkSync(outsideFile, symlinkFileAbs);
+
+      if (process.platform === "win32") {
+        const linkedDirRel = "src/symlink-file-root";
+        symlinkSync(outsideDir, resolve(ws, linkedDirRel), "junction");
+        symlinkFileRel = `${linkedDirRel}/outside-secret.txt`;
+      } else {
+        symlinkSync(outsideFile, resolve(ws, symlinkFileRel), "file");
+      }
 
       const res6 = kernel.safeReadWorkspaceFile(symlinkFileRel);
-      assert.equal(res6.success, false, "Symlink pointing outside workspace MUST be rejected");
+      assert.equal(res6.success, false, "Link-backed file path escaping workspace MUST be rejected");
       assert.equal(res6.reasonCode, "SYMLINK_ESCAPE_REFUSED");
 
       // 7. Symlink directory escape
       const symlinkDirRel = "src/symlink-dir";
       const symlinkDirAbs = resolve(ws, symlinkDirRel);
-      symlinkSync(outsideDir, symlinkDirAbs);
+      symlinkSync(outsideDir, symlinkDirAbs, process.platform === "win32" ? "junction" : "dir");
 
       const res7 = kernel.safeWriteWorkspaceFile("src/symlink-dir/escaped.ts", "export const x = 1;", "m-b9");
       assert.equal(res7.success, false, "Write through symlink directory escaping workspace MUST be rejected");

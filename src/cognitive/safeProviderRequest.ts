@@ -48,7 +48,8 @@ export type ProviderRequestReasonCode =
   | "provider-request-secret-blocked"
   | "unknown-executable"
   | "empty-prompt"
-  | "forbidden-environment-name";
+  | "forbidden-environment-name"
+  | "provider-request-truncated";
 
 /**
  * High-confidence authentication material. Every one of these is a credential
@@ -193,6 +194,11 @@ export interface ProviderRequestInput {
   readonly maxStdoutBytes: number;
   readonly maxStderrBytes: number;
   readonly maxPromptBytes?: number;
+  /**
+   * Strict callers may refuse any outbound prompt truncation.
+   * Default behavior remains backward-compatible.
+   */
+  readonly rejectOnTruncation?: boolean;
 }
 
 export type SafeProviderRequest =
@@ -278,10 +284,42 @@ export function buildSafeProviderRequest(input: ProviderRequestInput): SafeProvi
   // Bound EVERY outbound surface in real UTF-8 bytes on a valid boundary.
   const promptBound = truncateUtf8(kernel.redactedText, maxPromptBytes);
   const isCodex = input.providerId === "codex";
-  const argvPrompt = isCodex ? truncateUtf8(promptBound.text, MAX_ARGV_FIELD_BYTES).text : "";
-  const stdinData = isCodex ? "" : truncateUtf8(promptBound.text, MAX_STDIN_BYTES).text;
+
+  const argvBound = isCodex
+    ? truncateUtf8(promptBound.text, MAX_ARGV_FIELD_BYTES)
+    : null;
+
+  const stdinBound = isCodex
+    ? null
+    : truncateUtf8(promptBound.text, MAX_STDIN_BYTES);
+
+  const argvPrompt = argvBound?.text ?? "";
+  const stdinData = stdinBound?.text ?? "";
 
   const categories = [...new Set([...kernel.redactionCategories, ...low.markers])].sort();
+
+  const transportTruncated =
+    argvBound?.truncated === true || stdinBound?.truncated === true;
+
+  if (
+    input.rejectOnTruncation === true &&
+    (kernel.truncated || promptBound.truncated || transportTruncated)
+  ) {
+    return {
+      ok: false,
+      spec: null,
+      env: null,
+      receipt: receipt(input, {
+        blocked: true,
+        safeReasonCode: "provider-request-truncated",
+        acceptedBytes: 0,
+        rejectedBytes: utf8Bytes(assembled),
+        redactionCount: kernel.redactionCount + low.count,
+        redactionCategories: categories,
+        safeFingerprint: "spr-blocked",
+      }),
+    };
+  }
   const spec: ProviderProcessSpec = {
     executableId: input.providerId,
     argumentList: isCodex ? [...CODEX_FLAGS, argvPrompt] : [...CLAUDE_FLAGS],

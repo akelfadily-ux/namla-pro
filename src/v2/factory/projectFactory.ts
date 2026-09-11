@@ -210,7 +210,7 @@ export class ProjectFactory {
               content: `export function getUser(id: string) { return { id, username: "user_" + id }; }\nexport function formatUserBadge(user: { id: string; username: string }) { return \`User: \${user.username} (\${user.id})\`; }\n`,
             },
             {
-              relativePath: "tests/fullstack.test.ts",
+              relativePath: "tests/integration.test.ts",
               content: `import test from "node:test";\nimport assert from "node:assert/strict";\nimport { getUser, formatUserBadge } from "../src/shared/types.ts";\n\ntest("Fullstack flow", () => {\n  const u = getUser("42");\n  const badge = formatUserBadge(u);\n  assert.equal(badge, "User: user_42 (42)");\n});\n`,
             },
           ],
@@ -273,7 +273,7 @@ export class ProjectFactory {
             },
             {
               relativePath: "Dockerfile",
-              content: `FROM node:20-alpine\nWORKDIR /app\nCOPY package*.json ./\nRUN npm ci --only=production || true\nCOPY . .\nEXPOSE 3000\nCMD ["node", "src/index.ts"]\n`,
+              content: `FROM node@sha256:afdf98210b07b586eb71fa22ba2e432e058e4cd1304d31ed60888755b8c865fb\nWORKDIR /app\nCOPY package*.json ./\nRUN npm ci --only=production || true\nCOPY . .\nEXPOSE 3000\nCMD ["node", "src/index.ts"]\n`,
             },
             {
               relativePath: "src/index.ts",

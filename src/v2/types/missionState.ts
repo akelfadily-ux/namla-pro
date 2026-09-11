@@ -32,6 +32,7 @@ export type MissionState =
   | "RECOVERING"
   | "REPLANNING"
   | "HUMAN_REQUIRED"
+  | "BLOCKED"
   | "RESUMING"
   | "FAILED"
   | "CANCELLED";

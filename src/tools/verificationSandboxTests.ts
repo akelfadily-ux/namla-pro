@@ -1,11 +1,11 @@
 /**
- * verificationSandboxTests — proof that a verification command executes THROUGH
- * the sandbox permit and can never execute on the host (§35, Fable S-5).
+ * verificationSandboxTests Ã¢â‚¬â€ proof that a verification command executes THROUGH
+ * the sandbox permit and can never execute on the host (Ã‚Â§35, Fable S-5).
  *
  * The defect these tests exist for: `runVerificationCommand` minted a permit
  * with `authorize(...)`, checked only that authorization succeeded, and then
  * ran the command with `spawnSync` on the HOST. The permit was never passed to
- * `execute()` — it authorized nothing. The host spawn was unreachable only
+ * `execute()` Ã¢â‚¬â€ it authorized nothing. The host spawn was unreachable only
  * because the gate was hard-wired to a detection-only backend that can never
  * verify; supplying a verified backend, which is exactly what this milestone
  * does, would have made it live.
@@ -72,7 +72,7 @@ function realisticClaims(): SandboxIsolationClaims {
 
 /**
  * A verified backend that RECORDS what it executed. It performs no isolation
- * and starts nothing — it exists to observe permit routing.
+ * and starts nothing Ã¢â‚¬â€ it exists to observe permit routing.
  */
 class RecordingVerifiedBackend implements SandboxBackend {
   readonly backendId = "recording-verified-fake";
@@ -366,7 +366,7 @@ test("executable and argv come ONLY from the fixed template", () => {
 
 test("no caller-supplied text can influence the executable or argv", () => {
   const { executor } = verifiedExecutor();
-  // The spec carries only a command id, a workspace and numeric bounds — there
+  // The spec carries only a command id, a workspace and numeric bounds Ã¢â‚¬â€ there
   // is no field through which a shell string, flag, or path could arrive.
   const result = runVerificationCommand({
     commandId: "typecheck",
@@ -382,7 +382,7 @@ test("no caller-supplied text can influence the executable or argv", () => {
   for (const injected of ["&&", ";", "|", "$(", "`", "--inspect", "rm "]) {
     assert.equal(joined.includes(injected), false, `argv must not contain ${injected}`);
   }
-  assert.equal(request.executableId, "npx");
+  assert.equal(request.executableId, "node");
 });
 
 test("an unknown command id is refused before anything is authorized", () => {
@@ -406,7 +406,7 @@ test("an unknown command id is refused before anything is authorized", () => {
 test("outcomes map truthfully and invent no data", () => {
   // S-13: success is `null` and ONLY `null`. It was previously the string
   // "none", which meant one member of the reason vocabulary secretly meant "no
-  // failure" — and a FAILED result could carry it too. `null` is not a reason,
+  // failure" Ã¢â‚¬â€ and a FAILED result could carry it too. `null` is not a reason,
   // so that pairing is now unrepresentable rather than merely unused.
   const cases: Array<[SandboxExitCategory, boolean, string | null, "passed" | "failed"]> = [
     ["completed", true, null, "passed"],
@@ -460,7 +460,7 @@ test("this suite starts no container, provider, network call, or child process",
 // --------------------------------- CALLERS DO NOT INVENT AUTHORIZATION ---
 
 test("RealBackedVerificationDriver never invents human authorization", () => {
-  // Constructed WITHOUT the trusted confirmation and without a sandbox — the
+  // Constructed WITHOUT the trusted confirmation and without a sandbox Ã¢â‚¬â€ the
   // defaults a caller gets if it forgets to thread them. Both must fail closed
   // rather than the leaf deciding it is authorized.
   // S-13 removed the constructor defaults, so this position must now be STATED
@@ -511,4 +511,61 @@ test("RealMcpExecutionDriver never invents human authorization", () => {
   const authorized = new RealMcpExecutionDriver({ ...config, humanAuthorized: true });
   authorized.execute({ toolId: "typecheck", antId: "a", districtId: "d", taskId: "t", tick: 1 } as never);
   assert.equal(backend.executeCalls.length, 1, "with the human fact present it proceeds exactly once");
+});
+
+test("P0-TYPECHECK-TRUST: typecheck uses image-owned compiler, never candidate npx", () => {
+  const entry = VERIFICATION_ARGUMENT_TEMPLATES.typecheck;
+
+  assert.equal(
+    entry.id,
+    "node",
+    "TYPECHECK must invoke the trusted image Node runtime directly, never npx"
+  );
+
+  assert.deepEqual(
+    [...entry.args],
+    [
+      "/opt/namla-toolchain/node_modules/typescript/lib/tsc.js",
+      "--noEmit",
+    ],
+    "TYPECHECK must bind to the image-owned TypeScript compiler by absolute path"
+  );
+
+  assert.equal(
+    entry.args.some((arg) => arg.includes("/workspace")),
+    false,
+    "TYPECHECK compiler identity must never come from the candidate workspace"
+  );
+});
+
+test("P0-SMOKE-CLOSED-ARGV: smoke and integration commands are fixed templates", () => {
+  const expected = {
+    smoke_server: ["--test", "tests/server.test.ts"],
+    smoke_cli: ["--test", "tests/cli.test.ts"],
+    smoke_repository: ["--test", "tests/repository.test.ts"],
+    smoke_app: ["--test", "tests/app.test.ts"],
+    smoke_index: ["--test", "tests/index.test.ts"],
+    integration: ["--test", "tests/integration.test.ts"],
+  } as const;
+
+  for (const [commandId, args] of Object.entries(expected)) {
+    const entry = VERIFICATION_ARGUMENT_TEMPLATES[commandId];
+
+    assert.ok(
+      entry,
+      `${commandId} must exist as a closed verification command template`
+    );
+
+    assert.equal(
+      entry.id,
+      "node",
+      `${commandId} must use the trusted Node runtime`
+    );
+
+    assert.deepEqual(
+      [...entry.args],
+      [...args],
+      `${commandId} argv must be fixed and must not come from candidate input`
+    );
+  }
 });

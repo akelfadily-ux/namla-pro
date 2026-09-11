@@ -26,12 +26,18 @@ import { GateInput, StageRecoveryPolicy, LoopBudget, GateVerdict } from "../type
 import { EvidenceRecord, ArtifactIdentity, EnvironmentIdentity } from "../types/evidence";
 import { DeliveryPackage, MissionState, WorkPackageExecution, IntegratedCandidate } from "../types/missionState";
 import { createHash } from "crypto";
+import type { ProviderExecutableId } from "../../cognitive/providerProcessDriver";
+import type { VerificationSandboxExecutor } from "../../cognitive/verificationSandbox";
 
+export interface NamlaRuntimeOptions {
+  readonly verificationSandboxFactory?: ((workspaceAbsolutePath: string) => VerificationSandboxExecutor | null) | null;
+}
 export interface RunMissionRequest {
   readonly missionId: string;
   readonly objective: string;
   readonly workspaceRoot: string;
   readonly executionMode: ExecutionMode;
+  readonly provider?: ProviderExecutableId;
   readonly humanAuthorizationGranted?: boolean;
   readonly projectClass?: ProjectClass;
   readonly simulatedColonyACode?: string;
@@ -55,7 +61,16 @@ export class NamlaRuntime {
   private readonly planEngine = new PlanEngine();
   private readonly protocolEngine = new ProtocolEngine();
   private readonly proDispatcher = new ProDispatcher();
-  private readonly colonyExecutor = new ColonyExecutor();
+  private readonly colonyExecutor: ColonyExecutor;
+  private readonly runtimeOptions: NamlaRuntimeOptions;
+
+  public constructor(
+    colonyExecutor: ColonyExecutor = new ColonyExecutor(),
+    runtimeOptions: NamlaRuntimeOptions = {}
+  ) {
+    this.colonyExecutor = colonyExecutor;
+    this.runtimeOptions = runtimeOptions;
+  }
   private readonly sonAnalyzer = new SonAnalyzer();
   private readonly leggoIntegrator = new LeggoIntegrator();
   private readonly proMaxVerifier = new ProMaxVerifier();
@@ -68,6 +83,8 @@ export class NamlaRuntime {
     const kernel = new TrustedKernel({
       workspaceRoot: request.workspaceRoot,
       humanAuthorizationGranted: request.humanAuthorizationGranted ?? true,
+      verificationSandboxFactory: this.runtimeOptions.verificationSandboxFactory ?? null,
+      verificationHumanAuthorized: request.humanAuthorizationGranted === true,
     });
 
     const loopGate = new NamlaLoopGate();
@@ -236,12 +253,95 @@ export class NamlaRuntime {
     const allWorkPackages = protocolResult.workPackages;
     let allExecutions: WorkPackageExecution[] = [];
     const integratedCandidates: IntegratedCandidate[] = [];
+    const workPackagesByTaskId = new Map(
+      allWorkPackages.map((wp) => [wp.taskSpec.id, wp] as const)
+    );
 
     // Loop through full WorkPackage DAG until all packages complete or fail
     let schedule = this.proDispatcher.computeSchedule(allWorkPackages, allExecutions);
 
     while (!schedule.isComplete && schedule.readyPackages.length > 0) {
       for (const targetWp of schedule.readyPackages) {
+        const previousCandidate =
+          integratedCandidates.length > 0
+            ? integratedCandidates[integratedCandidates.length - 1]
+            : undefined;
+        let dependencyContextPaths: readonly string[] | undefined;
+
+        if (targetWp.taskSpec.dependencies.length > 0) {
+          const dependencyPaths = new Set<string>(["package.json", "tsconfig.json"]);
+          const pendingDependencies = [...targetWp.taskSpec.dependencies];
+          const visitedDependencies = new Set<string>();
+
+          while (pendingDependencies.length > 0) {
+            const dependencyTaskId = pendingDependencies.pop()!;
+
+            if (visitedDependencies.has(dependencyTaskId)) {
+              continue;
+            }
+
+            const dependencyWp = workPackagesByTaskId.get(dependencyTaskId);
+            if (!dependencyWp) {
+              return this.buildResponse(
+                request.missionId,
+                executionMode,
+                "FAILED",
+                kernel,
+                evidencePool,
+                `DAG_DEPENDENCY_CONTEXT_MISSING: ${dependencyTaskId}`
+              );
+            }
+
+            visitedDependencies.add(dependencyTaskId);
+
+            for (const targetFile of dependencyWp.taskSpec.targetFiles) {
+              dependencyPaths.add(targetFile);
+            }
+
+            for (const parentDependency of dependencyWp.taskSpec.dependencies) {
+              pendingDependencies.push(parentDependency);
+            }
+          }
+
+          if (!previousCandidate) {
+            return this.buildResponse(
+              request.missionId,
+              executionMode,
+              "FAILED",
+              kernel,
+              evidencePool,
+              `DAG_DEPENDENCY_CANDIDATE_MISSING: ${targetWp.taskSpec.id}`
+            );
+          }
+
+          // Preserve an existing current-target template when it is already
+          // present in the cumulative candidate. This lets the provider retain
+          // project conventions without making newly-created targets mandatory.
+          for (const targetFile of targetWp.taskSpec.targetFiles) {
+            const targetRead = kernel.safeReadWorkspaceFile(
+              `${previousCandidate.workspacePath}/${targetFile}`
+            );
+
+            if (targetRead.success) {
+              dependencyPaths.add(targetFile);
+              continue;
+            }
+
+            if (targetRead.reasonCode !== "FILE_NOT_FOUND") {
+              return this.buildResponse(
+                request.missionId,
+                executionMode,
+                "FAILED",
+                kernel,
+                evidencePool,
+                `DAG_CURRENT_TARGET_CONTEXT_REFUSED: ${targetFile}: ${targetRead.reasonCode}`
+              );
+            }
+          }
+
+          dependencyContextPaths = [...dependencyPaths];
+        }
+
         const dualExec = this.proDispatcher.createDualExecutions(
           targetWp,
           `workspaces/v2-missions/${request.missionId}`,
@@ -280,13 +380,22 @@ export class NamlaRuntime {
         // --------------------------------------------- 5. COLONY A & B STAGE ---
         currentState = "EXECUTING_AB";
 
+        const colonyExecutionOptions = {
+          mode: executionMode,
+          requiredProvider: request.provider,
+          projectContextWorkspacePath: dependencyContextPaths
+            ? previousCandidate?.workspacePath
+            : undefined,
+          projectContextPaths: dependencyContextPaths,
+        };
+
         let resA: ColonyExecutionResult = this.colonyExecutor.executeWorkPackage(
           targetWp,
           dualExec.executionA,
           boundContext,
           kernel,
           request.simulatedColonyACode,
-          { mode: executionMode }
+          colonyExecutionOptions
         );
 
         let resB: ColonyExecutionResult = this.colonyExecutor.executeWorkPackage(
@@ -295,10 +404,28 @@ export class NamlaRuntime {
           boundContext,
           kernel,
           request.simulatedColonyBCode,
-          { mode: executionMode }
+          colonyExecutionOptions
         );
 
         evidencePool.push(...resA.evidenceRecords, ...resB.evidenceRecords);
+
+        // Provider quota exhaustion is an external blocker, not a code defect.
+        // Stop before LOOP/SON so it cannot be misclassified as REWORK_AB.
+        if (
+          !resA.success &&
+          !resB.success &&
+          (resA.externalBlocker === "PROVIDER_QUOTA_EXCEEDED" ||
+            resB.externalBlocker === "PROVIDER_QUOTA_EXCEEDED")
+        ) {
+          return this.buildResponse(
+            request.missionId,
+            executionMode,
+            "BLOCKED",
+            kernel,
+            evidencePool,
+            "PROVIDER_QUOTA_EXCEEDED"
+          );
+        }
 
         // NAMLA LOOP Gate 5
         const gate5Input: GateInput = {
@@ -328,9 +455,71 @@ export class NamlaRuntime {
             );
             allExecutions.push(rerunExec.executionA, rerunExec.executionB);
 
-            resA = this.colonyExecutor.executeWorkPackage(targetWp, rerunExec.executionA, boundContext, kernel, request.simulatedColonyACode, { mode: executionMode });
-            resB = this.colonyExecutor.executeWorkPackage(targetWp, rerunExec.executionB, boundContext, kernel, request.simulatedColonyBCode, { mode: executionMode });
+            resA = this.colonyExecutor.executeWorkPackage(targetWp, rerunExec.executionA, boundContext, kernel, request.simulatedColonyACode, colonyExecutionOptions);
+            resB = this.colonyExecutor.executeWorkPackage(targetWp, rerunExec.executionB, boundContext, kernel, request.simulatedColonyBCode, colonyExecutionOptions);
             evidencePool.push(...resA.evidenceRecords, ...resB.evidenceRecords);
+
+            // A rerun can itself hit an external provider blocker.
+            if (
+              !resA.success &&
+              !resB.success &&
+              (resA.externalBlocker === "PROVIDER_QUOTA_EXCEEDED" ||
+                resB.externalBlocker === "PROVIDER_QUOTA_EXCEEDED")
+            ) {
+              return this.buildResponse(
+                request.missionId,
+                executionMode,
+                "BLOCKED",
+                kernel,
+                evidencePool,
+                "PROVIDER_QUOTA_EXCEEDED"
+              );
+            }
+
+            // If rework produced no usable colony at all, do not let unrelated
+            // pipeline evidence make Gate 5 appear successful.
+            if (!resA.success && !resB.success) {
+              return this.buildResponse(
+                request.missionId,
+                executionMode,
+                "FAILED",
+                kernel,
+                evidencePool,
+                "COLONY_REWORK_FAILED"
+              );
+            }
+
+            // Re-evaluate Gate 5 against this rerun only. Earlier evidence stays
+            // in the audit pool but cannot prove the fresh Colony A/B execution.
+            const rerunEvidenceRefs = [
+              ...resA.evidenceRecords,
+              ...resB.evidenceRecords,
+            ].map((record) => record.evidenceId);
+
+            const refreshedGate5Input: GateInput = {
+              ...gate5Input,
+              artifactIdentity:
+                resA.outputArtifacts[0] ??
+                resB.outputArtifacts[0] ??
+                dummyArtifact,
+              evidenceRefs: rerunEvidenceRefs,
+            };
+
+            verdict5 = loopGate.evaluateGate(
+              refreshedGate5Input,
+              evidencePool,
+              recoveryPolicy
+            );
+
+            if (verdict5.status !== "PASS") {
+              return this.handleGateFailure(
+                request.missionId,
+                executionMode,
+                verdict5,
+                kernel,
+                evidencePool
+              );
+            }
           } else {
             return this.handleGateFailure(request.missionId, executionMode, verdict5, kernel, evidencePool);
           }
@@ -369,15 +558,13 @@ export class NamlaRuntime {
 
         // --------------------------------------------------- 7. LEGGO STAGE ---
         currentState = "INTEGRATING";
-        const previousCandidate = integratedCandidates.length > 0 ? integratedCandidates[integratedCandidates.length - 1] : undefined;
+
         const leggoRes = this.leggoIntegrator.integrate(targetWp, comparison, resA, resB, boundContext, kernel, previousCandidate);
-        if (!leggoRes.success || !leggoRes.integratedCandidate) {
+        if (!leggoRes.success || !leggoRes.integratedCandidate || !leggoRes.evidenceRecord) {
           return this.buildResponse(request.missionId, executionMode, "FAILED", kernel, evidencePool, leggoRes.reasonCode);
         }
 
-        if (leggoRes.evidenceRecord) {
-          evidencePool.push(leggoRes.evidenceRecord);
-        }
+        evidencePool.push(leggoRes.evidenceRecord);
 
         // NAMLA LOOP Gate 7
         const gate7Input: GateInput = {
@@ -388,7 +575,7 @@ export class NamlaRuntime {
           environmentIdentity: envIdentity,
           requiredAttestations: [],
           requiredAssessments: [],
-          evidenceRefs: evidencePool.map((e) => e.evidenceId),
+          evidenceRefs: [leggoRes.evidenceRecord.evidenceId],
           budget: defaultLoopBudget,
           phase: "CONTRACT_BOUND",
           contractVersion: frozenContract.version,
@@ -426,7 +613,18 @@ export class NamlaRuntime {
 
     // -------------------------------------------------------- 8. PROMAX STAGE ---
     currentState = "VERIFYING";
-    const proMaxRes = kernel.runProMaxVerification(primaryCandidate, boundContext, evidencePool);
+    // Preserve the full audit history, but verify the current candidate only
+    // against evidence that is still active. Invalidated/superseded records
+    // remain auditable without poisoning a successful recovery.
+    const activeEvidencePool = evidencePool.filter(
+      (record) => record.status === "VALID"
+    );
+
+    const proMaxRes = kernel.runProMaxVerification(
+      primaryCandidate,
+      boundContext,
+      activeEvidencePool
+    );
     if (proMaxRes.evidenceRecord) {
       evidencePool.push(proMaxRes.evidenceRecord);
     }
@@ -457,12 +655,16 @@ export class NamlaRuntime {
 
     // ----------------------------------------------------- 9. NAMLA LAB STAGE ---
     currentState = "PACKAGING";
+    const activeLabEvidencePool = evidencePool.filter(
+      (record) => record.status === "VALID"
+    );
+
     const labRes = this.labPackager.packageDeliverables(
       primaryCandidate,
       proMaxRes.assessment,
       boundContext,
       kernel,
-      evidencePool
+      activeLabEvidencePool
     );
 
     if (!labRes.success || !labRes.deliveryPackage) {

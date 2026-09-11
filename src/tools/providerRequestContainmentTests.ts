@@ -305,6 +305,18 @@ test("the default prompt cap is enforced without an explicit override", () => {
   assert.equal(built.receipt.acceptedBytes <= MAX_PROMPT_BYTES, true);
   assert.equal(built.receipt.rejectedBytes > 0, true);
 });
+test("strict provider requests fail closed instead of truncating oversized prompts", () => {
+  const built = buildSafeProviderRequest(baseInput({
+    promptBody: "safe context ".repeat(6000),
+    rejectOnTruncation: true,
+  }));
+
+  assert.equal(built.ok, false);
+  assert.equal(built.spec, null);
+  assert.equal(built.receipt.blocked, true);
+  assert.equal(built.receipt.safeReasonCode, "provider-request-truncated");
+  assert.equal(built.receipt.rejectedBytes > 0, true);
+});
 
 // ------------------------------------------- MANIFEST, RECEIPTS, TERMINAL ---
 

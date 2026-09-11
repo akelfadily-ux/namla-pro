@@ -155,15 +155,17 @@ export class LeggoIntegrator {
       "package.json",
       "tsconfig.json",
       "Dockerfile",
+      "src/index.ts",
       "src/server.ts",
       "src/cli.ts",
       "src/app.ts",
       "src/shared/types.ts",
       "src/repository.ts",
+      "tests/index.test.ts",
       "tests/server.test.ts",
       "tests/cli.test.ts",
       "tests/app.test.ts",
-      "tests/fullstack.test.ts",
+      "tests/integration.test.ts",
       "tests/repository.test.ts",
     ];
     for (const f of commonConfigs) {
