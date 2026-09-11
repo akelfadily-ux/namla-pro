@@ -122,10 +122,31 @@ export type ExecutableResolution = { readonly ok: true; readonly value: Resolved
  * description of the id space; a `.cmd` shim can never become the npm/npx
  * execution target.
  */
-const EXPECTED_BASENAMES: Readonly<Record<TrustedExecutableId, readonly string[]>> =
-  process.platform === "win32"
-    ? { node: ["node.exe", "node"], claude: ["claude.exe", "claude.cmd", "claude.bat", "claude"], codex: ["codex.exe", "codex.cmd", "codex.bat", "codex"], npm: ["npm.cmd", "npm.exe", "npm"], npx: ["npx.cmd", "npx.exe", "npx"], docker: ["docker.exe", "docker"], podman: ["podman.exe", "podman"], wsl: ["wsl.exe", "wsl"] }
-    : { node: ["node"], claude: ["claude"], codex: ["codex"], npm: ["npm"], npx: ["npx"], docker: ["docker"], podman: ["podman"], wsl: ["wsl"] };
+function expectedBasenamesForPlatform(
+  platform: NodeJS.Platform,
+): Readonly<Record<TrustedExecutableId, readonly string[]>> {
+  return platform === "win32"
+    ? {
+        node: ["node.exe", "node"],
+        claude: ["claude.exe", "claude.cmd", "claude.bat", "claude"],
+        codex: ["codex.exe", "codex.cmd", "codex.bat", "codex"],
+        npm: ["npm.cmd", "npm.exe", "npm"],
+        npx: ["npx.cmd", "npx.exe", "npx"],
+        docker: ["docker.exe", "docker"],
+        podman: ["podman.exe", "podman"],
+        wsl: ["wsl.exe", "wsl"],
+      }
+    : {
+        node: ["node"],
+        claude: ["claude"],
+        codex: ["codex"],
+        npm: ["npm"],
+        npx: ["npx"],
+        docker: ["docker"],
+        podman: ["podman"],
+        wsl: ["wsl"],
+      };
+}
 
 /** Windows executable extensions, in the order PATHEXT would apply them. */
 const WINDOWS_EXTENSIONS: readonly string[] = [".com", ".exe", ".cmd", ".bat"];
@@ -480,7 +501,11 @@ function findNodeCliScript(name: "npm" | "npx"): string | null {
 }
 
 /** Is `candidate` inside any of the given workspace roots? Canonical comparison. */
-function isInsideWorkspace(candidate: string, workspaceRoots: readonly string[]): boolean {
+function isInsideWorkspace(
+  candidate: string,
+  workspaceRoots: readonly string[],
+  platform: NodeJS.Platform,
+): boolean {
   const norm = (p: string) => {
     let real = p;
     try {
@@ -489,7 +514,7 @@ function isInsideWorkspace(candidate: string, workspaceRoots: readonly string[])
       /* not yet existing Ã¢â‚¬â€ compare lexically */
     }
     const withSep = real.endsWith(sep) ? real : real + sep;
-    return process.platform === "win32" ? withSep.toLowerCase() : withSep;
+    return platform === "win32" ? withSep.toLowerCase() : withSep;
   };
   const c = norm(candidate);
   return workspaceRoots.some((root) => c.startsWith(norm(root)));
@@ -500,6 +525,8 @@ function isInsideWorkspace(candidate: string, workspaceRoots: readonly string[])
  * code so a receipt can say exactly why an executable was refused.
  */
 function validateCandidate(id: TrustedExecutableId, candidate: string, opts: ResolveOptions): ExecutableResolution {
+  const platform = opts.platform ?? process.platform;
+
   if (!isAbsolute(candidate)) return { ok: false, value: null, reasonCode: "relative-path-refused" };
   if (!existsSync(candidate)) return { ok: false, value: null, reasonCode: "executable-not-found" };
 
@@ -526,22 +553,21 @@ function validateCandidate(id: TrustedExecutableId, candidate: string, opts: Res
   // /var -> /private/var ancestor alias as an executable symlink, which is a
   // false positive rather than a security finding. The lstat refusal above
   // remains the primary defence and is unchanged.
-  const changed = process.platform === "win32" ? realPath.toLowerCase() !== candidate.toLowerCase() : realPath !== candidate;
+  const changed = platform === "win32" ? realPath.toLowerCase() !== candidate.toLowerCase() : realPath !== candidate;
   if (changed) return { ok: false, value: null, reasonCode: "symlink-executable-refused" };
 
   const base = basename(realPath);
-  const expected = EXPECTED_BASENAMES[id];
-  const baseMatches = process.platform === "win32" ? expected.some((e) => e.toLowerCase() === base.toLowerCase()) : expected.includes(base);
+  const expected = expectedBasenamesForPlatform(platform)[id];
+  const baseMatches = platform === "win32" ? expected.some((e) => e.toLowerCase() === base.toLowerCase()) : expected.includes(base);
   if (!baseMatches) return { ok: false, value: null, reasonCode: "basename-mismatch" };
 
   // Untrusted generated code must never supply the toolchain that verifies it.
   // Checked BEFORE provenance so a workspace decoy still reports the reason a
   // reader needs, rather than being masked by a directory-permission verdict.
-  if (isInsideWorkspace(realPath, opts.workspaceRoots ?? [])) return { ok: false, value: null, reasonCode: "workspace-local-executable-refused" };
+  if (isInsideWorkspace(realPath, opts.workspaceRoots ?? [], platform)) return { ok: false, value: null, reasonCode: "workspace-local-executable-refused" };
 
   // Ã‚Â§38: ownership and parent mutability, BEFORE any identity work and long
   // before any process could start.
-  const platform = opts.platform ?? process.platform;
   const provenance = validateProvenance(realPath, platform);
   if (provenance.reasonCode !== "ok") return { ok: false, value: null, reasonCode: provenance.reasonCode };
 
@@ -610,7 +636,7 @@ function validateTrustedFile(candidate: string, opts: ResolveOptions, platform: 
     return fail("executable-not-found");
   }
 
-  if (isInsideWorkspace(realPath, opts.workspaceRoots ?? [])) return fail("workspace-local-executable-refused");
+  if (isInsideWorkspace(realPath, opts.workspaceRoots ?? [], platform)) return fail("workspace-local-executable-refused");
 
   const provenance = validateProvenance(realPath, platform);
   if (provenance.reasonCode !== "ok") return fail(provenance.reasonCode);
