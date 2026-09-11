@@ -27,7 +27,11 @@
     "test:p0:bisect-docker": "node dist/tools/bisectDockerStages.js"
   },
   "devDependencies": {
-    "typescript": "^5.4.0",
-    "@types/node": "^20.11.0"
+    "@types/node": "^20.11.0",
+    "@types/pg": "8.23.1",
+    "typescript": "^5.4.0"
+  },
+  "dependencies": {
+    "pg": "8.23.0"
   }
 }
