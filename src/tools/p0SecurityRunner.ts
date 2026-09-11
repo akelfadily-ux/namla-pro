@@ -49,6 +49,7 @@ const SUITES: readonly string[] = [
   "dist/tools/productionWslLauncherTests.js",
   "dist/tools/productionIsolatedDockerBuildExecutorTests.js",
   "dist/tools/v2PersistenceContractTests.js",
+  "dist/tools/v2PersistenceInMemoryStoreTests.js",
   "dist/tools/twinBundleStoreTests.js",
   "dist/tools/twinBuildLoopTests.js",
   "dist/tools/frozenEvidenceIntegrityTests.js",
