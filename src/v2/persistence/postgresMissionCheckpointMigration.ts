@@ -11,6 +11,23 @@ export const V2_POSTGRES_MIGRATION_VERSION = 1 as const;
 export const V2_POSTGRES_MIGRATION_NAME =
   "v2-mission-checkpoint-v1" as const;
 
+/*
+ * Transaction-scoped advisory lock dedicated to the V2 persistence
+ * migration family.
+ *
+ * SELECT ... FOR UPDATE cannot serialize the very first migration when
+ * the migration receipt row does not exist yet. Two first-time migrators
+ * could both observe "no row" and race to create/insert.
+ *
+ * pg_advisory_xact_lock serializes that bootstrap window and is released
+ * automatically by PostgreSQL on COMMIT or ROLLBACK.
+ */
+const V2_POSTGRES_MIGRATION_LOCK_NAMESPACE =
+  731902 as const;
+
+const V2_POSTGRES_MIGRATION_LOCK_KEY =
+  1 as const;
+
 export type V2PostgresMigrationResult =
   | "APPLIED"
   | "ALREADY_APPLIED";
@@ -48,6 +65,21 @@ export async function migrateV2MissionCheckpointSchema(
 ): Promise<V2PostgresMigrationResult> {
   return database.transaction(
     async (client) => {
+      /*
+       * Must be the first database operation inside this transaction.
+       * This serializes two independent processes attempting the initial
+       * migration against the same PostgreSQL database.
+       */
+      await client.query(
+        `
+SELECT pg_advisory_xact_lock($1, $2)
+        `.trim(),
+        [
+          V2_POSTGRES_MIGRATION_LOCK_NAMESPACE,
+          V2_POSTGRES_MIGRATION_LOCK_KEY,
+        ],
+      );
+
       await client.query(`
 CREATE TABLE IF NOT EXISTS namla_v2_schema_migrations (
   version BIGINT PRIMARY KEY

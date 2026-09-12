@@ -92,10 +92,15 @@ class ScriptedMigrationDatabase
 }
 
 test(
-  "migration creates ledger, schema, and receipt atomically",
+  "migration serializes bootstrap before ledger inspection",
   async () => {
     const db =
       new ScriptedMigrationDatabase([
+        {
+          contains:
+            "pg_advisory_xact_lock",
+          rows: [],
+        },
         {
           contains:
             "CREATE TABLE IF NOT EXISTS namla_v2_schema_migrations",
@@ -142,6 +147,11 @@ test(
       1,
     );
 
+    assert.match(
+      db.calls[0],
+      /pg_advisory_xact_lock/,
+    );
+
     db.assertComplete();
   },
 );
@@ -151,6 +161,11 @@ test(
   async () => {
     const db =
       new ScriptedMigrationDatabase([
+        {
+          contains:
+            "pg_advisory_xact_lock",
+          rows: [],
+        },
         {
           contains:
             "CREATE TABLE IF NOT EXISTS namla_v2_schema_migrations",
@@ -184,7 +199,7 @@ test(
 
     assert.equal(
       db.calls.length,
-      2,
+      3,
     );
 
     db.assertComplete();
@@ -196,6 +211,11 @@ test(
   async () => {
     const db =
       new ScriptedMigrationDatabase([
+        {
+          contains:
+            "pg_advisory_xact_lock",
+          rows: [],
+        },
         {
           contains:
             "CREATE TABLE IF NOT EXISTS namla_v2_schema_migrations",
@@ -235,6 +255,11 @@ test(
       new ScriptedMigrationDatabase([
         {
           contains:
+            "pg_advisory_xact_lock",
+          rows: [],
+        },
+        {
+          contains:
             "CREATE TABLE IF NOT EXISTS namla_v2_schema_migrations",
           rows: [],
         },
@@ -267,6 +292,11 @@ test(
   async () => {
     const db =
       new ScriptedMigrationDatabase([
+        {
+          contains:
+            "pg_advisory_xact_lock",
+          rows: [],
+        },
         {
           contains:
             "CREATE TABLE IF NOT EXISTS namla_v2_schema_migrations",
