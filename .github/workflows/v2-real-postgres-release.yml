@@ -1,0 +1,64 @@
+name: V2 Real PostgreSQL Release
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v2-real-postgres-release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  real-postgres-release:
+    name: Real PostgreSQL V2 persistence release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    services:
+      postgres:
+        image: postgres@sha256:bb3e1a57e5407e0a5280b4211980a5e537f4abd234a87014ac979849a78dd825
+
+        env:
+          POSTGRES_USER: namla
+          POSTGRES_PASSWORD: namla_release_ci_only
+          POSTGRES_DB: namla_v2_release
+
+        ports:
+          - 5432/tcp
+
+        options: >-
+          --health-cmd "pg_isready -U namla -d namla_v2_release"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "20"
+          package-manager-cache: false
+
+      - name: Install dependencies from lockfile
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+      - name: Run mandatory V2 real PostgreSQL release gate
+        env:
+          DATABASE_URL: "postgresql://namla:namla_release_ci_only@127.0.0.1:${{ job.services.postgres.ports[5432] }}/namla_v2_release"
+        run: npm run test:v2:real-postgres-release
