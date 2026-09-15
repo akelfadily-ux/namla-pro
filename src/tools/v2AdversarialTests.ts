@@ -38,6 +38,7 @@ import { EvidenceRecord } from "../v2/types/evidence";
 import { CapabilityScope } from "../v2/types/contracts";
 import { symlinkSync, mkdirSync } from "fs";
 import { createHash } from "crypto";
+import { createV2TestVerificationSandboxFactory } from "./v2TestVerificationSandbox";
 
 function tempWorkspace(tag: string): string {
   return mkdtempSync(resolve(tmpdir(), `namla-v2-adv-${tag}-`));
@@ -46,7 +47,11 @@ function tempWorkspace(tag: string): string {
 test("P0-C9 REGRESSION: Passing Test For AC-1 Must NOT Prove Unbound AC-2", () => {
   const ws = tempWorkspace("bug-p0c9");
   try {
-    const kernel = new TrustedKernel({ workspaceRoot: ws });
+    const kernel = new TrustedKernel({
+      workspaceRoot: ws,
+      verificationSandboxFactory: createV2TestVerificationSandboxFactory(),
+      verificationHumanAuthorized: true,
+    });
     const verifier = new ProMaxVerifier();
     const packager = new LabPackager();
 
@@ -172,7 +177,11 @@ test("P0-RA9 Prototype & Module Function Monkey-Patching Adversarial Regression"
   // 3. Call kernel.runProMaxVerification and assert canonical execution
   const ws = tempWorkspace("ra9-prototype");
   try {
-    const kernel = new TrustedKernel({ workspaceRoot: ws });
+    const kernel = new TrustedKernel({
+      workspaceRoot: ws,
+      verificationSandboxFactory: createV2TestVerificationSandboxFactory(),
+      verificationHumanAuthorized: true,
+    });
     const leggoRel = "workspaces/v2-missions/m-ra9/leggo-integrated";
     kernel.safeWriteWorkspaceFile(`${leggoRel}/package.json`, JSON.stringify({ name: "ra9", version: "1.0.0", scripts: { build: "node -v", test: "node -v" } }), "m-ra9");
     kernel.safeWriteWorkspaceFile(`${leggoRel}/src/index.ts`, "export const x = 1;", "m-ra9");
@@ -214,7 +223,11 @@ test("P0-RA9 Prototype & Module Function Monkey-Patching Adversarial Regression"
 test("P0-RA8 8-Point ECMAScript Runtime Permit Confinement & Boundary Matrix", () => {
   const ws = tempWorkspace("ra8-matrix");
   try {
-    const kernel = new TrustedKernel({ workspaceRoot: ws });
+    const kernel = new TrustedKernel({
+      workspaceRoot: ws,
+      verificationSandboxFactory: createV2TestVerificationSandboxFactory(),
+      verificationHumanAuthorized: true,
+    });
     const fakePermit = { missionId: "mission-A", candidateSnapshotHash: "hash-A", sessionId: "sess-A" };
 
     // 1. ECMAScript private field #activeVerifierPermits cannot be accessed, mutated, or read via JavaScript / as any
@@ -396,7 +409,11 @@ test("P0-RA6 & P0-RA7 Execution Receipt Authenticity, Permit Confinement & Malic
 test("P0-SE7 10-Point Command-Confusion & Source Execution Binding Matrix", () => {
   const ws = tempWorkspace("cmd-confusion");
   try {
-    const kernel = new TrustedKernel({ workspaceRoot: ws });
+    const kernel = new TrustedKernel({
+      workspaceRoot: ws,
+      verificationSandboxFactory: createV2TestVerificationSandboxFactory(),
+      verificationHumanAuthorized: true,
+    });
     const verifier = new ProMaxVerifier();
 
     const leggoRel = "workspaces/v2-missions/m-se7/leggo-integrated";
@@ -618,7 +635,11 @@ test("P0-SE6 REQUIRED NEGATIVE TEST: TEST_SUITE_VERIFIER Backed By Unrelated Com
 test("P0-E7 9-Point Causal Replay & Source Evidence Validation Matrix", () => {
   const ws = tempWorkspace("causal-matrix");
   try {
-    const kernel = new TrustedKernel({ workspaceRoot: ws });
+    const kernel = new TrustedKernel({
+      workspaceRoot: ws,
+      verificationSandboxFactory: createV2TestVerificationSandboxFactory(),
+      verificationHumanAuthorized: true,
+    });
     const verifier = new ProMaxVerifier();
 
     const leggoRel = "workspaces/v2-missions/m-causal/leggo-integrated";
@@ -743,11 +764,44 @@ test("P0-E7 9-Point Causal Replay & Source Evidence Validation Matrix", () => {
 test("P0-D6 8-Point Dedicated Docker Adversarial & Boundary Qualification Matrix", () => {
   const ws = tempWorkspace("d6-matrix");
   try {
-    const kernel = new TrustedKernel({ workspaceRoot: ws });
+    const dockerfile = "FROM scratch\n";
+    const dockerfileHash = createHash("sha256").update(dockerfile).digest("hex");
+    const realDockerRel = "workspaces/v2-missions/m-d6/real-docker-cand";
+    const validDockerRel = "workspaces/v2-missions/m-d6/valid-dockerfile-cand";
+    const allowedIsolatedDockerWorkspaces = new Set([
+      resolve(ws, realDockerRel),
+      resolve(ws, validDockerRel),
+    ]);
+    let isolatedDockerBuildCalls = 0;
+    const isolatedDockerBuildExecutor = {
+      build(request: any) {
+        isolatedDockerBuildCalls += 1;
+        assert.equal(request.missionId, "m-d6");
+        assert.equal(request.stageId, "PROMAX");
+        assert.equal(request.imageTag, "test-m-d6");
+        assert.equal(
+          allowedIsolatedDockerWorkspaces.has(request.workspaceAbsolutePath),
+          true,
+          "Isolated Docker test executor MUST receive only explicitly approved D6 candidate workspaces"
+        );
+        return {
+          success: true,
+          exitCode: 0,
+          stdout: "",
+          stderr: "",
+          reasonCode: "OK",
+        };
+      },
+    };
+    const kernel = new TrustedKernel({
+      workspaceRoot: ws,
+      verificationHumanAuthorized: true,
+      isolatedDockerBuildExecutor,
+    });
     const verifier = new ProMaxVerifier();
 
     const candRel = "workspaces/v2-missions/m-d6/colony_a";
-    kernel.safeWriteWorkspaceFile(`${candRel}/Dockerfile`, "FROM scratch\n", "m-d6");
+    kernel.safeWriteWorkspaceFile(`${candRel}/Dockerfile`, dockerfile, "m-d6");
 
     // 1. Changing process.cwd() does not change Docker candidate resolution
     const origCwd = process.cwd();
@@ -807,8 +861,7 @@ test("P0-D6 8-Point Dedicated Docker Adversarial & Boundary Qualification Matrix
 
     // 5. Real executeDockerBuild command execution evidence chain test (P0-E5)
     // Execute real executeDockerBuild and verify evidenceRecord exists and is linked
-    const realDockerRel = "workspaces/v2-missions/m-d6/real-docker-cand";
-    kernel.safeWriteWorkspaceFile(`${realDockerRel}/Dockerfile`, "FROM scratch\n", "m-d6");
+    kernel.safeWriteWorkspaceFile(`${realDockerRel}/Dockerfile`, dockerfile, "m-d6");
     const realDockerExecRes = kernel.executeDockerBuild(realDockerRel, "m-d6", "PROMAX");
     assert.equal(realDockerExecRes.evidenceRecord !== undefined, true, "executeDockerBuild MUST return a valid evidenceRecord");
     assert.equal(realDockerExecRes.evidenceRecord?.producer, "TRUSTED_KERNEL_COMMAND");
@@ -818,7 +871,7 @@ test("P0-D6 8-Point Dedicated Docker Adversarial & Boundary Qualification Matrix
     const candRealDocker: IntegratedCandidate = {
       candidateId: "cand-real-docker",
       missionId: "m-d6",
-      integratedArtifacts: [{ artifactId: "a1", path: "Dockerfile", sha256: "df-hash", sizeBytes: 13, missionId: "m-d6" }],
+      integratedArtifacts: [{ artifactId: "a1", path: "Dockerfile", sha256: dockerfileHash, sizeBytes: dockerfile.length, missionId: "m-d6" }],
       resolvedConflicts: [],
       sourceTraceability: {},
       workspacePath: realDockerRel,
@@ -844,7 +897,13 @@ test("P0-D6 8-Point Dedicated Docker Adversarial & Boundary Qualification Matrix
     const pmRealDockerRes = kernel.runProMaxVerification(candRealDocker, ctxRealDocker, poolWithRealDocker);
     const dockerProofMap = pmRealDockerRes.proofMappings.find((p) => p.testRequirementId === "tr-docker-real");
     assert.equal(dockerProofMap !== undefined, true);
+    assert.equal(pmRealDockerRes.success, true, "Canonical isolated Docker verification MUST succeed for the valid candidate");
     assert.equal(dockerProofMap?.sourceEvidenceRef !== undefined && dockerProofMap.sourceEvidenceRef.length > 0, true, "Docker proof mapping MUST carry non-empty sourceEvidenceRef");
+    assert.notEqual(
+      dockerProofMap?.sourceEvidenceRef,
+      realDockerExecRes.evidenceRecord?.evidenceId,
+      "Canonical Docker proof MUST bind to isolated-builder evidence, not legacy direct Docker traceability"
+    );
 
     // 6. Docker environment unavailable / Dockerfile absent returns BLOCKED
     const noDockerRel = "workspaces/v2-missions/m-d6/no-dockerfile";
@@ -893,12 +952,11 @@ test("P0-D6 8-Point Dedicated Docker Adversarial & Boundary Qualification Matrix
 
     // 8. Docker build cannot execute arbitrary additional subcommands through verifier API (P0-E6)
     // Create a valid candidate WITH Dockerfile so failure is NOT due to missing Dockerfile
-    const validDockerRel = "workspaces/v2-missions/m-d6/valid-dockerfile-cand";
-    kernel.safeWriteWorkspaceFile(`${validDockerRel}/Dockerfile`, "FROM scratch\n", "m-d6");
+    kernel.safeWriteWorkspaceFile(`${validDockerRel}/Dockerfile`, dockerfile, "m-d6");
     const candValidDocker: IntegratedCandidate = {
       candidateId: "cand-valid-docker",
       missionId: "m-d6",
-      integratedArtifacts: [{ artifactId: "a1", path: "Dockerfile", sha256: "df-hash", sizeBytes: 13, missionId: "m-d6" }],
+      integratedArtifacts: [{ artifactId: "a1", path: "Dockerfile", sha256: dockerfileHash, sizeBytes: dockerfile.length, missionId: "m-d6" }],
       resolvedConflicts: [],
       sourceTraceability: {},
       workspacePath: validDockerRel,
@@ -916,6 +974,7 @@ test("P0-D6 8-Point Dedicated Docker Adversarial & Boundary Qualification Matrix
     assert.equal(proofArb !== undefined, true);
     // If docker run had been executed, CommandSafetyPolicy would throw FORBIDDEN_COMMAND_REFUSED and fail closed
     assert.equal(proofArb?.observation.includes("docker run") === false, true, "Verifier MUST NOT execute raw reqTest.command docker run");
+    assert.equal(isolatedDockerBuildCalls, 2, "Only the two valid canonical D6 Docker candidates may reach the isolated builder");
   } finally {
     rmSync(ws, { recursive: true, force: true });
   }
@@ -1403,7 +1462,11 @@ test("P0-S5 Matrix Case 5: Correct external proof but missing causal artifact/sn
 test("P0-S5 Matrix Case 6: Internally generated ProofMapping with wrong requirement ID -> REJECT", () => {
   const ws = tempWorkspace("s5-case6");
   try {
-    const kernel = new TrustedKernel({ workspaceRoot: ws });
+    const kernel = new TrustedKernel({
+      workspaceRoot: ws,
+      verificationSandboxFactory: createV2TestVerificationSandboxFactory(),
+      verificationHumanAuthorized: true,
+    });
     const verifier = new ProMaxVerifier();
 
     const leggoRelPath = "workspaces/v2-missions/m-s5-6/leggo-integrated";
@@ -1472,7 +1535,11 @@ test("P0-S5 Matrix Case 6: Internally generated ProofMapping with wrong requirem
 test("P0-S5 Matrix Case 7: Proof from previous candidate snapshot after modifying SECOND artifact -> REJECT", () => {
   const ws = tempWorkspace("s5-case7");
   try {
-    const kernel = new TrustedKernel({ workspaceRoot: ws });
+    const kernel = new TrustedKernel({
+      workspaceRoot: ws,
+      verificationSandboxFactory: createV2TestVerificationSandboxFactory(),
+      verificationHumanAuthorized: true,
+    });
     const verifier = new ProMaxVerifier();
 
     const leggoRelPath = "workspaces/v2-missions/m-s5-7/leggo-integrated";
@@ -1778,7 +1845,11 @@ test("P0-P8: Comprehensive Provenance Attack Matrix Rejection Suite", () => {
 test("P0-CB6 8-Point Candidate Boundary & Verifier Path Adversarial Matrix", () => {
   const ws = tempWorkspace("cb6-matrix");
   try {
-    const kernel = new TrustedKernel({ workspaceRoot: ws });
+    const kernel = new TrustedKernel({
+      workspaceRoot: ws,
+      verificationSandboxFactory: createV2TestVerificationSandboxFactory(),
+      verificationHumanAuthorized: true,
+    });
     const verifier = new ProMaxVerifier();
     const packager = new LabPackager();
 
