@@ -3,10 +3,18 @@
 Canonical baseline: `8e864e3325d764887d0630610d14702730830721`; tree: `e2095d56f0e4dcdead31451fe8c86c9d51a18113`.
 Donor selection is by immutable commit and blob identities, not by branch names.
 
-## Current batch: C1 - Productization domain dependency closure
+## Current batch: C2 - budget validation and supervisor contract
+Input commit: `82d6b88485099c5c9271f51ba2b22bfee5657345`; input tree: `1dd05a6ac907b6e256865bd749b34405c3a7b994`.
+The budget source is adapted, not byte-identical; supervisor is an exact interface-only copy.
+Review and limits: [C2_REVIEW.md](C2_REVIEW.md).
+Status: C2_SOURCE_SELECTED; typecheck/build/focused/P0 results require the actual C2 receipt.
+No provider execution, database reservation, scheduler or canonical runtime wiring is performed.
+C1 remains a separate local checkpoint. C2 performs no Git integration, staging, commit or push.
+
+## Completed source batch: C1 - Productization domain dependency closure
 Seven donor source/test files are selected unchanged. This batch does not wire a new runtime.
 The two donor test suites plus the C1 boundary suite are registered in the existing P0 runner.
-Status: SOURCE_IMPORT_SELECTED; build and P0 evidence must come from the accompanying run receipt.
+Status: C1_SOURCE_CHECKPOINTED at `82d6b88485099c5c9271f51ba2b22bfee5657345`; prior local P0: 1299 passed, 0 failed, 11 platform skips. Runtime wiring was not performed.
 A successful file copy alone is not a passed test, merge completion, or production qualification.
 
 ### Boundaries and review findings
@@ -78,7 +86,7 @@ Source: `44977cf5e6816388a0838d50e4f7eaea0b133224`; common ancestor: `50cd4ef819
 | package-lock.json | MODIFY | BOTH_CHANGED_REVIEW | HUMAN_REVIEW_REQUIRED |
 | package.json | MODIFY | BOTH_CHANGED_REVIEW | HUMAN_REVIEW_REQUIRED |
 | src/application/ant-allocator.ts | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
-| src/application/budget-controller.ts | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
+| src/application/budget-controller.ts | ADD | NEW_PATH_REVIEW | C2_ADAPTED_VALIDATOR_UNWIRED |
 | src/application/gate-engine.ts | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
 | src/application/model-gateway.ts | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
 | src/application/namla-loop.ts | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
@@ -86,7 +94,7 @@ Source: `44977cf5e6816388a0838d50e4f7eaea0b133224`; common ancestor: `50cd4ef819
 | src/application/operation-fingerprint.ts | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
 | src/application/policy-engine.ts | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
 | src/application/scheduler.ts | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
-| src/application/supervisor.ts | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
+| src/application/supervisor.ts | ADD | NEW_PATH_REVIEW | C2_CONTRACT_IMPORTED_UNWIRED |
 | src/application/tool-gateway.ts | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
 | src/bootstrap/container.ts | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
 | src/bootstrap/trustedRecoveryBootstrap.ts | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
@@ -185,9 +193,9 @@ Source: `655f9f2c973437fa58ab7e4e99b963988c1c5f7e`; common ancestor: `9e4d0e60ff
 | validation-report.json | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
 
 ## Completion accounting and next work
-Productization: 7 of 50 donor paths selected in C1; 43 donor paths still require decisions, including donor runner changes.
+Productization: 9 of 50 donor paths selected across C1/C2 (8 exact source copies and 1 adapted validator); 41 donor paths still require decisions, including donor runner changes.
 FINAL-02: 13 of 56 paths already identical to baseline; 43 still require review. No FINAL-02 source imported by C1.
-Next: reconcile Productization application services with the canonical V2 effect/authority boundaries before selecting C2.
+Next: reconcile remaining gateway and application-service capabilities with the single canonical V2 effect/authority boundary. No donor scheduler or old database authority is implicitly selected.
 No parallel active scheduler, second authority system or silent budget reset is accepted by this source batch.
 
 ## Preservation and release limits
