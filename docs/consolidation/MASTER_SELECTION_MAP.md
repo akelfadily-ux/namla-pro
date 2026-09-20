@@ -3,11 +3,19 @@
 Canonical baseline: `8e864e3325d764887d0630610d14702730830721`; tree: `e2095d56f0e4dcdead31451fe8c86c9d51a18113`.
 Donor selection is by immutable commit and blob identities, not by branch names.
 
-## Current batch: C2 - budget validation and supervisor contract
+## Current batch: C3 - local check aggregation and agent identifiers
+Input commit: `aed0fd1bfd737a4062ab7682e75f009174646711`; input tree: `2f2904f8b7b15b3d9fe9b3847ff2897ab3abeed7`.
+Both sources are adapted; neither is an exact donor copy or a canonical authority replacement.
+Review and limits: [C3_REVIEW.md](C3_REVIEW.md).
+Status: C3_SOURCE_SELECTED; typecheck/build/focused/P0 results require the actual C3 receipt.
+No canonical gate wiring, task dispatch, lease, provider or database operation is introduced.
+C1 and C2 remain separate checkpoints. C3 performs no Git integration, staging, commit or push.
+
+## Completed source batch: C2 - budget validation and supervisor contract
 Input commit: `82d6b88485099c5c9271f51ba2b22bfee5657345`; input tree: `1dd05a6ac907b6e256865bd749b34405c3a7b994`.
 The budget source is adapted, not byte-identical; supervisor is an exact interface-only copy.
 Review and limits: [C2_REVIEW.md](C2_REVIEW.md).
-Status: C2_SOURCE_SELECTED; typecheck/build/focused/P0 results require the actual C2 receipt.
+Status: C2_SOURCE_CHECKPOINTED at `aed0fd1bfd737a4062ab7682e75f009174646711`; prior local P0: 1329 passed, 0 failed, 11 platform skips. Runtime wiring was not performed.
 No provider execution, database reservation, scheduler or canonical runtime wiring is performed.
 C1 remains a separate local checkpoint. C2 performs no Git integration, staging, commit or push.
 
@@ -85,9 +93,9 @@ Source: `44977cf5e6816388a0838d50e4f7eaea0b133224`; common ancestor: `50cd4ef819
 | docs/security/EXECUTABLE_THREAT_MODEL.md | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
 | package-lock.json | MODIFY | BOTH_CHANGED_REVIEW | HUMAN_REVIEW_REQUIRED |
 | package.json | MODIFY | BOTH_CHANGED_REVIEW | HUMAN_REVIEW_REQUIRED |
-| src/application/ant-allocator.ts | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
+| src/application/ant-allocator.ts | ADD | NEW_PATH_REVIEW | C3_ADAPTED_IDENTIFIER_ALLOCATOR_UNWIRED |
 | src/application/budget-controller.ts | ADD | NEW_PATH_REVIEW | C2_ADAPTED_VALIDATOR_UNWIRED |
-| src/application/gate-engine.ts | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
+| src/application/gate-engine.ts | ADD | NEW_PATH_REVIEW | C3_ADAPTED_CHECK_AGGREGATOR_UNWIRED |
 | src/application/model-gateway.ts | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
 | src/application/namla-loop.ts | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
 | src/application/namla-service.ts | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
@@ -193,7 +201,7 @@ Source: `655f9f2c973437fa58ab7e4e99b963988c1c5f7e`; common ancestor: `9e4d0e60ff
 | validation-report.json | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
 
 ## Completion accounting and next work
-Productization: 9 of 50 donor paths selected across C1/C2 (8 exact source copies and 1 adapted validator); 41 donor paths still require decisions, including donor runner changes.
+Productization: 11 of 50 donor paths selected across C1/C2/C3 (8 exact source copies and 3 adapted components); 39 donor paths still require decisions, including donor runner changes.
 FINAL-02: 13 of 56 paths already identical to baseline; 43 still require review. No FINAL-02 source imported by C1.
 Next: reconcile remaining gateway and application-service capabilities with the single canonical V2 effect/authority boundary. No donor scheduler or old database authority is implicitly selected.
 No parallel active scheduler, second authority system or silent budget reset is accepted by this source batch.
