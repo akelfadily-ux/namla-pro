@@ -3,11 +3,20 @@
 Canonical baseline: `8e864e3325d764887d0630610d14702730830721`; tree: `e2095d56f0e4dcdead31451fe8c86c9d51a18113`.
 Donor selection is by immutable commit and blob identities, not by branch names.
 
-## Current batch: C4 - operation input identity using the retained V2 codec
+## Current batch: C5 - policy preflight with canonical workspace containment
+Input commit: `c71c0bedbd96893ff81162d3bcb01f40861cbe69`; input tree: `a21af5ef99ecd1eefd6cf047853ee6b0978eac98`.
+The donor PolicyEngine is adapted. Canonical V2 and command classifier sources remain unchanged.
+Review and deliberate compatibility restrictions: [C5_REVIEW.md](C5_REVIEW.md).
+Status: C5_SOURCE_SELECTED; typecheck/build/focused/P0 results require the actual C5 receipt.
+Policy version 2 is entitlement preflight only. Raw execution and unbound Git writes are refused.
+Explicit configured roots and structured read-only Git do not create execution permits.
+C1-C4 remain separate checkpoints. ToolGateway and trusted effect-boundary wiring remain pending.
+
+## Completed source batch: C4 - operation input identity using the retained V2 codec
 Input commit: `308c901533058e9f96bc8ecf17976c90326e6502`; input tree: `1741bbccad38a609793b9adb1fc87d87fc55ca6d`.
 The donor helper is adapted, not copied verbatim. V2 codec and persisted V2 identities stay unchanged.
 Review, version compatibility and admission limits: [C4_REVIEW.md](C4_REVIEW.md).
-Status: C4_SOURCE_SELECTED; typecheck/build/focused/P0 results require the actual C4 receipt.
+Status: C4_SOURCE_CHECKPOINTED at `c71c0bedbd96893ff81162d3bcb01f40861cbe69`; prior local P0: 1401 passed, 0 failed, 11 platform skips. Runtime wiring was not performed.
 Productization input fingerprints use version 2. No legacy fallback, record migration, replay or authority is introduced.
 C1-C3 remain separate checkpoints. ToolGateway, persistence and runtime wiring remain pending.
 
@@ -108,7 +117,7 @@ Source: `44977cf5e6816388a0838d50e4f7eaea0b133224`; common ancestor: `50cd4ef819
 | src/application/namla-loop.ts | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
 | src/application/namla-service.ts | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
 | src/application/operation-fingerprint.ts | ADD | NEW_PATH_REVIEW | C4_ADAPTED_V2_CODEC_BINDING_UNWIRED |
-| src/application/policy-engine.ts | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
+| src/application/policy-engine.ts | ADD | NEW_PATH_REVIEW | C5_ADAPTED_ENTITLEMENT_PREFLIGHT_UNWIRED |
 | src/application/scheduler.ts | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
 | src/application/supervisor.ts | ADD | NEW_PATH_REVIEW | C2_CONTRACT_IMPORTED_UNWIRED |
 | src/application/tool-gateway.ts | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
@@ -209,7 +218,7 @@ Source: `655f9f2c973437fa58ab7e4e99b963988c1c5f7e`; common ancestor: `9e4d0e60ff
 | validation-report.json | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
 
 ## Completion accounting and next work
-Productization: 12 of 50 donor paths selected across C1/C2/C3/C4 (8 exact source copies and 4 adapted components); 38 donor paths still require decisions, including donor runner changes.
+Productization: 13 of 50 donor paths selected across C1/C2/C3/C4/C5 (8 exact source copies and 5 adapted components); 37 donor paths still require decisions, including donor runner changes.
 FINAL-02: 13 of 56 paths already identical to baseline; 43 still require review. No FINAL-02 source imported by C1.
 Next: reconcile remaining gateway and application-service capabilities with the single canonical V2 effect/authority boundary. No donor scheduler or old database authority is implicitly selected.
 No parallel active scheduler, second authority system or silent budget reset is accepted by this source batch.

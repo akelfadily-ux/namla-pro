@@ -31,6 +31,7 @@ const IS_POSIX = PLATFORM === "linux" || PLATFORM === "darwin";
 
 /** Suites run on every platform. */
 const SUITES: readonly string[] = [
+  "dist/tools/productizationPolicyEngineTests.js",
   "dist/tools/productizationOperationFingerprintTests.js",
   "dist/tools/productizationGateAllocatorTests.js",
   "dist/tools/productizationBudgetControllerTests.js",
