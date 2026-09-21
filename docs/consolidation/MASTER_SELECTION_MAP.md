@@ -3,11 +3,21 @@
 Canonical baseline: `8e864e3325d764887d0630610d14702730830721`; tree: `e2095d56f0e4dcdead31451fe8c86c9d51a18113`.
 Donor selection is by immutable commit and blob identities, not by branch names.
 
-## Current batch: C5 - policy preflight with canonical workspace containment
+## Current batch: C6 - V2 operation coordination; trusted executor binding pending
+Input commit: `fb8b8d5784da2f864230a77f55971f1a9ee7ff12`; input tree: `6c882e8c6a738b6d1db31b491add35806f67d365`.
+The donor ToolGateway is adapted to the existing V2 store port, not copied verbatim.
+Review, compatibility and trust requirements: [C6_REVIEW.md](C6_REVIEW.md).
+Status: C6_SOURCE_SELECTED; actual typecheck/build/focused/P0 evidence requires the C6 receipt.
+Mandatory executor is a trusted composition-root port, NOT a supplied kernel implementation or permit.
+No ToolAdapter.execute fallback, donor SQL authority, bootstrap or active scheduler is imported.
+Uncertain outcomes are quarantined; higher-epoch reclaims cannot automatically execute again.
+No real PostgreSQL gateway, factory replay, budget-effect atomicity or exactly-once qualification is claimed.
+
+## Completed source batch: C5 - policy preflight with canonical workspace containment
 Input commit: `c71c0bedbd96893ff81162d3bcb01f40861cbe69`; input tree: `a21af5ef99ecd1eefd6cf047853ee6b0978eac98`.
 The donor PolicyEngine is adapted. Canonical V2 and command classifier sources remain unchanged.
 Review and deliberate compatibility restrictions: [C5_REVIEW.md](C5_REVIEW.md).
-Status: C5_SOURCE_SELECTED; typecheck/build/focused/P0 results require the actual C5 receipt.
+Status: C5_SOURCE_CHECKPOINTED at `fb8b8d5784da2f864230a77f55971f1a9ee7ff12`; prior local P0: 1445 passed, 0 failed, 11 platform skips. Runtime wiring was not performed.
 Policy version 2 is entitlement preflight only. Raw execution and unbound Git writes are refused.
 Explicit configured roots and structured read-only Git do not create execution permits.
 C1-C4 remain separate checkpoints. ToolGateway and trusted effect-boundary wiring remain pending.
@@ -120,7 +130,7 @@ Source: `44977cf5e6816388a0838d50e4f7eaea0b133224`; common ancestor: `50cd4ef819
 | src/application/policy-engine.ts | ADD | NEW_PATH_REVIEW | C5_ADAPTED_ENTITLEMENT_PREFLIGHT_UNWIRED |
 | src/application/scheduler.ts | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
 | src/application/supervisor.ts | ADD | NEW_PATH_REVIEW | C2_CONTRACT_IMPORTED_UNWIRED |
-| src/application/tool-gateway.ts | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
+| src/application/tool-gateway.ts | ADD | NEW_PATH_REVIEW | C6_ADAPTED_COORDINATOR_EXECUTOR_WIRING_PENDING |
 | src/bootstrap/container.ts | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
 | src/bootstrap/trustedRecoveryBootstrap.ts | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
 | src/domain/contracts.ts | ADD | NEW_PATH_REVIEW | C1_SOURCE_IMPORTED_UNWIRED |
@@ -218,7 +228,7 @@ Source: `655f9f2c973437fa58ab7e4e99b963988c1c5f7e`; common ancestor: `9e4d0e60ff
 | validation-report.json | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
 
 ## Completion accounting and next work
-Productization: 13 of 50 donor paths selected across C1/C2/C3/C4/C5 (8 exact source copies and 5 adapted components); 37 donor paths still require decisions, including donor runner changes.
+Productization: 14 of 50 donor paths selected across C1/C2/C3/C4/C5/C6 (8 exact source copies and 6 adapted components); 36 donor paths still require decisions, including donor runner changes. C6 executor binding and live execution qualification remain pending.
 FINAL-02: 13 of 56 paths already identical to baseline; 43 still require review. No FINAL-02 source imported by C1.
 Next: reconcile remaining gateway and application-service capabilities with the single canonical V2 effect/authority boundary. No donor scheduler or old database authority is implicitly selected.
 No parallel active scheduler, second authority system or silent budget reset is accepted by this source batch.
