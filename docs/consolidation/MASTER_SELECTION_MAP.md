@@ -3,11 +3,17 @@
 Canonical baseline: `8e864e3325d764887d0630610d14702730830721`; tree: `e2095d56f0e4dcdead31451fe8c86c9d51a18113`.
 Donor selection is by immutable commit and blob identities, not by branch names.
 
-## Current batch: C6 - V2 operation coordination; trusted executor binding pending
+## Current batch: C7 - Productization donor closure
+Input commit: `eb4d4599b4ab3f229b4959a13c2887ebc88441d4`; input tree: `ab38588fd896a3ed7a1342e9d7f70fe9f2790b0d`.
+C7 resolves every remaining Productization donor path without importing a parallel runtime, scheduler, recovery authority, persistence schema, package definition or P0 runner.
+Review and final dispositions: [C7_PRODUCTIZATION_CLOSURE.md](C7_PRODUCTIZATION_CLOSURE.md).
+Status: C7_SOURCE_SELECTED; focused/P0 evidence and checkpoint commit are produced by the C7 closure run.
+
+## Completed source batch: C6 - V2 operation coordination; trusted executor binding pending
 Input commit: `fb8b8d5784da2f864230a77f55971f1a9ee7ff12`; input tree: `6c882e8c6a738b6d1db31b491add35806f67d365`.
 The donor ToolGateway is adapted to the existing V2 store port, not copied verbatim.
 Review, compatibility and trust requirements: [C6_REVIEW.md](C6_REVIEW.md).
-Status: C6_SOURCE_SELECTED; actual typecheck/build/focused/P0 evidence requires the C6 receipt.
+Status: C6_SOURCE_CHECKPOINTED at `eb4d4599b4ab3f229b4959a13c2887ebc88441d4`; prior local P0: 1487 passed, 0 failed, 11 platform skips.
 Mandatory executor is a trusted composition-root port, NOT a supplied kernel implementation or permit.
 No ToolAdapter.execute fallback, donor SQL authority, bootstrap or active scheduler is imported.
 Uncertain outcomes are quarantined; higher-epoch reclaims cannot automatically execute again.
@@ -113,56 +119,56 @@ Source: `44977cf5e6816388a0838d50e4f7eaea0b133224`; common ancestor: `50cd4ef819
 
 | Path | Donor change | Baseline content classification | Decision |
 |---|---|---|---|
-| docs/productization/DECISIONS.md | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
-| docs/productization/MIGRATION_MAP.md | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
-| docs/productization/PROGRESS.md | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
-| docs/productization/QUALITY_GATES.md | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
-| docs/security/EXECUTABLE_THREAT_MODEL.md | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
-| package-lock.json | MODIFY | BOTH_CHANGED_REVIEW | HUMAN_REVIEW_REQUIRED |
-| package.json | MODIFY | BOTH_CHANGED_REVIEW | HUMAN_REVIEW_REQUIRED |
+| docs/productization/DECISIONS.md | ADD | NEW_PATH_REVIEW | PRESERVED_IN_DONOR_SNAPSHOT_NOT_LIVE_STATUS |
+| docs/productization/MIGRATION_MAP.md | ADD | NEW_PATH_REVIEW | PRESERVED_IN_DONOR_SNAPSHOT_NOT_LIVE_STATUS |
+| docs/productization/PROGRESS.md | ADD | NEW_PATH_REVIEW | PRESERVED_IN_DONOR_SNAPSHOT_NOT_LIVE_STATUS |
+| docs/productization/QUALITY_GATES.md | ADD | NEW_PATH_REVIEW | PRESERVED_IN_DONOR_SNAPSHOT_NOT_LIVE_STATUS |
+| docs/security/EXECUTABLE_THREAT_MODEL.md | ADD | NEW_PATH_REVIEW | C7_FINDING_EXTRACTED_TO_CANONICAL_REGRESSION |
+| package-lock.json | MODIFY | BOTH_CHANGED_REVIEW | CANONICAL_RETAINED_DONOR_TEST_STACK_NOT_SELECTED |
+| package.json | MODIFY | BOTH_CHANGED_REVIEW | CANONICAL_RETAINED_DONOR_TEST_STACK_NOT_SELECTED |
 | src/application/ant-allocator.ts | ADD | NEW_PATH_REVIEW | C3_ADAPTED_IDENTIFIER_ALLOCATOR_UNWIRED |
 | src/application/budget-controller.ts | ADD | NEW_PATH_REVIEW | C2_ADAPTED_VALIDATOR_UNWIRED |
 | src/application/gate-engine.ts | ADD | NEW_PATH_REVIEW | C3_ADAPTED_CHECK_AGGREGATOR_UNWIRED |
-| src/application/model-gateway.ts | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
-| src/application/namla-loop.ts | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
-| src/application/namla-service.ts | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
+| src/application/model-gateway.ts | ADD | NEW_PATH_REVIEW | SUPERSEDED_BY_CANONICAL_PROVIDER_AND_BUDGET_AUTHORITY |
+| src/application/namla-loop.ts | ADD | NEW_PATH_REVIEW | SUPERSEDED_PARALLEL_RUNTIME_NOT_IMPORTED |
+| src/application/namla-service.ts | ADD | NEW_PATH_REVIEW | SUPERSEDED_PARALLEL_RUNTIME_NOT_IMPORTED |
 | src/application/operation-fingerprint.ts | ADD | NEW_PATH_REVIEW | C4_ADAPTED_V2_CODEC_BINDING_UNWIRED |
 | src/application/policy-engine.ts | ADD | NEW_PATH_REVIEW | C5_ADAPTED_ENTITLEMENT_PREFLIGHT_UNWIRED |
-| src/application/scheduler.ts | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
+| src/application/scheduler.ts | ADD | NEW_PATH_REVIEW | SUPERSEDED_PARALLEL_SCHEDULER_NOT_IMPORTED |
 | src/application/supervisor.ts | ADD | NEW_PATH_REVIEW | C2_CONTRACT_IMPORTED_UNWIRED |
 | src/application/tool-gateway.ts | ADD | NEW_PATH_REVIEW | C6_ADAPTED_COORDINATOR_EXECUTOR_WIRING_PENDING |
-| src/bootstrap/container.ts | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
-| src/bootstrap/trustedRecoveryBootstrap.ts | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
+| src/bootstrap/container.ts | ADD | NEW_PATH_REVIEW | SUPERSEDED_PARALLEL_COMPOSITION_ROOT_NOT_IMPORTED |
+| src/bootstrap/trustedRecoveryBootstrap.ts | ADD | NEW_PATH_REVIEW | REJECTED_SECOND_RECOVERY_AUTHORITY_NOT_IMPORTED |
 | src/domain/contracts.ts | ADD | NEW_PATH_REVIEW | C1_SOURCE_IMPORTED_UNWIRED |
 | src/domain/errors.ts | ADD | NEW_PATH_REVIEW | C1_SOURCE_IMPORTED_UNWIRED |
 | src/domain/lifecycle.ts | ADD | NEW_PATH_REVIEW | C1_SOURCE_IMPORTED_UNWIRED |
 | src/domain/types.ts | ADD | NEW_PATH_REVIEW | C1_SOURCE_IMPORTED_UNWIRED |
 | src/domain/unit-of-work.ts | ADD | NEW_PATH_REVIEW | C1_SOURCE_IMPORTED_UNWIRED |
-| src/infrastructure/persistence/inMemoryUnitOfWork.ts | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
-| src/infrastructure/persistence/migrations.ts | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
-| src/infrastructure/persistence/migrations/001_initial_schema.sql | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
-| src/infrastructure/persistence/postgresStateRepository.ts | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
-| src/infrastructure/persistence/postgresUnitOfWork.ts | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
-| src/tools/actualPostgresServerIntegrationTests.ts | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
-| src/tools/applicationEngineTests.ts | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
-| src/tools/applicationIntegrationTests.ts | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
+| src/infrastructure/persistence/inMemoryUnitOfWork.ts | ADD | NEW_PATH_REVIEW | REJECTED_SECOND_STATE_SYSTEM_NOT_IMPORTED |
+| src/infrastructure/persistence/migrations.ts | ADD | NEW_PATH_REVIEW | REJECTED_SECOND_SCHEMA_AND_AUTHORITY_NOT_IMPORTED |
+| src/infrastructure/persistence/migrations/001_initial_schema.sql | ADD | NEW_PATH_REVIEW | REJECTED_SECOND_SCHEMA_AND_AUTHORITY_NOT_IMPORTED |
+| src/infrastructure/persistence/postgresStateRepository.ts | ADD | NEW_PATH_REVIEW | REJECTED_SECOND_SCHEMA_AND_AUTHORITY_NOT_IMPORTED |
+| src/infrastructure/persistence/postgresUnitOfWork.ts | ADD | NEW_PATH_REVIEW | REJECTED_SECOND_SCHEMA_AND_AUTHORITY_NOT_IMPORTED |
+| src/tools/actualPostgresServerIntegrationTests.ts | ADD | NEW_PATH_REVIEW | PRESERVED_DONOR_TEST_TIED_TO_REJECTED_SCHEMA |
+| src/tools/applicationEngineTests.ts | ADD | NEW_PATH_REVIEW | PRESERVED_DONOR_TEST_TIED_TO_SUPERSEDED_RUNTIME |
+| src/tools/applicationIntegrationTests.ts | ADD | NEW_PATH_REVIEW | PRESERVED_DONOR_TEST_TIED_TO_SUPERSEDED_RUNTIME |
 | src/tools/architectureLayerTests.ts | ADD | NEW_PATH_REVIEW | C1_SOURCE_IMPORTED_UNWIRED |
-| src/tools/ciInvariantTests.ts | MODIFY | DONOR_ONLY_CHANGE_REVIEW | HUMAN_REVIEW_REQUIRED |
+| src/tools/ciInvariantTests.ts | MODIFY | DONOR_ONLY_CHANGE_REVIEW | CANONICAL_RETAINED_DONOR_STATUS_DOC_ASSERTION_NOT_APPLICABLE |
 | src/tools/domainLifecycleTests.ts | ADD | NEW_PATH_REVIEW | C1_SOURCE_IMPORTED_UNWIRED |
-| src/tools/executableProvenanceTests.ts | MODIFY | BOTH_CHANGED_REVIEW | HUMAN_REVIEW_REQUIRED |
-| src/tools/extremeQualityTests.ts | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
-| src/tools/goldenPostgresServerE2ETests.ts | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
-| src/tools/goldenRuntimeE2ETests.ts | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
-| src/tools/isolatedWorkspaceSmokeTests.ts | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
-| src/tools/p0SecurityRunner.ts | MODIFY | BOTH_CHANGED_REVIEW | C1_P0_REGISTRATION_ONLY_DONOR_REVIEW_PENDING |
-| src/tools/pgMemIntegrationTests.ts | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
-| src/tools/pglitePostgresEngineTests.ts | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
-| src/tools/postgresIntegrationTests.ts | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
-| src/tools/postgresPoolTransactionMockTests.ts | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
-| src/tools/postgresReleaseRunner.ts | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
-| src/tools/stateSchedulerTests.ts | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
-| src/tools/trustedExecutableTests.ts | MODIFY | BOTH_CHANGED_REVIEW | HUMAN_REVIEW_REQUIRED |
-| tsconfig.json | MODIFY | DONOR_ONLY_CHANGE_REVIEW | HUMAN_REVIEW_REQUIRED |
+| src/tools/executableProvenanceTests.ts | MODIFY | BOTH_CHANGED_REVIEW | C7_ASSERTION_EXTRACTED_CANONICAL_SUITE_UNCHANGED |
+| src/tools/extremeQualityTests.ts | ADD | NEW_PATH_REVIEW | PRESERVED_DONOR_TEST_TIED_TO_REJECTED_STATE_SYSTEM |
+| src/tools/goldenPostgresServerE2ETests.ts | ADD | NEW_PATH_REVIEW | PRESERVED_DONOR_TEST_TIED_TO_REJECTED_SCHEMA |
+| src/tools/goldenRuntimeE2ETests.ts | ADD | NEW_PATH_REVIEW | PRESERVED_DONOR_TEST_TIED_TO_SUPERSEDED_RUNTIME |
+| src/tools/isolatedWorkspaceSmokeTests.ts | ADD | NEW_PATH_REVIEW | PRESERVED_DONOR_TEST_TIED_TO_SUPERSEDED_RUNTIME |
+| src/tools/p0SecurityRunner.ts | MODIFY | BOTH_CHANGED_REVIEW | CANONICAL_RUNNER_RETAINED_DONOR_REPLACEMENT_REJECTED |
+| src/tools/pgMemIntegrationTests.ts | ADD | NEW_PATH_REVIEW | PRESERVED_DONOR_TEST_TIED_TO_REJECTED_SCHEMA |
+| src/tools/pglitePostgresEngineTests.ts | ADD | NEW_PATH_REVIEW | PRESERVED_DONOR_TEST_TIED_TO_REJECTED_SCHEMA |
+| src/tools/postgresIntegrationTests.ts | ADD | NEW_PATH_REVIEW | PRESERVED_DONOR_TEST_TIED_TO_REJECTED_SCHEMA |
+| src/tools/postgresPoolTransactionMockTests.ts | ADD | NEW_PATH_REVIEW | PRESERVED_DONOR_TEST_TIED_TO_REJECTED_SCHEMA |
+| src/tools/postgresReleaseRunner.ts | ADD | NEW_PATH_REVIEW | REJECTED_PARALLEL_RELEASE_GATE_NOT_IMPORTED |
+| src/tools/stateSchedulerTests.ts | ADD | NEW_PATH_REVIEW | PRESERVED_DONOR_TEST_TIED_TO_SUPERSEDED_SCHEDULER |
+| src/tools/trustedExecutableTests.ts | MODIFY | BOTH_CHANGED_REVIEW | CANONICAL_RETAINED_DONOR_REGRESSION_DELETIONS_REJECTED |
+| tsconfig.json | MODIFY | DONOR_ONLY_CHANGE_REVIEW | CANONICAL_RETAINED_DONOR_COMPILER_CONFIG_NOT_SELECTED |
 
 ### FINAL-02
 
@@ -228,10 +234,11 @@ Source: `655f9f2c973437fa58ab7e4e99b963988c1c5f7e`; common ancestor: `9e4d0e60ff
 | validation-report.json | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
 
 ## Completion accounting and next work
-Productization: 14 of 50 donor paths selected across C1/C2/C3/C4/C5/C6 (8 exact source copies and 6 adapted components); 36 donor paths still require decisions, including donor runner changes. C6 executor binding and live execution qualification remain pending.
-FINAL-02: 13 of 56 paths already identical to baseline; 43 still require review. No FINAL-02 source imported by C1.
-Next: reconcile remaining gateway and application-service capabilities with the single canonical V2 effect/authority boundary. No donor scheduler or old database authority is implicitly selected.
-No parallel active scheduler, second authority system or silent budget reset is accepted by this source batch.
+Productization: 50 of 50 donor paths now have explicit dispositions. Fourteen paths were selected/adapted across C1-C6; the remaining donor paths are explicitly preserved, superseded, or rejected in C7. Productization donor review is closed.
+C6 trusted-executor binding and live execution qualification remain canonical runtime work; closing the donor ledger does not claim those runtime tasks are complete.
+FINAL-02: 13 of 56 paths are already identical to the canonical baseline; 43 still require explicit review.
+Next: close FINAL-02 against the same canonical V2 effect/authority boundary, then run the unified release gates before any human-only promotion to main.
+No parallel active scheduler, second authority system, second recovery authority, second SQL schema, or silent budget reset is accepted.
 
 ## Preservation and release limits
 Existing audit bundle SHA-256: `a667fe3819af53a166db2f8fb0f0297e47a77d685ef4f5888c0d49a4ef815ab9`.
