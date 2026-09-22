@@ -159,7 +159,7 @@ export class TrustedKernel {
         (allowedScope) =>
           allowedScope.capability === capability.capability &&
           validateCapabilityScope(capability.target, allowedScope.target) &&
-          (!capability.readOnly || allowedScope.readOnly === capability.readOnly)
+          (capability.readOnly || allowedScope.readOnly === false)
       );
       if (!scopeMatch) {
         return { authorized: false, reasonCode: "PLAN_CONTRACT_SCOPE_EXCEEDED" };

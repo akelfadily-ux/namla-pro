@@ -156,6 +156,27 @@ type LockedTaskAuthorityResult =
         LockedTaskAuthorityFailureReason;
     };
 
+export interface ValidateDurableOperationClaimInput {
+  readonly operationKey: string;
+  readonly authority: TaskExecutionAuthority;
+  readonly claimToken: string;
+  readonly claimEpoch: number;
+}
+
+export type PostgresOperationClaimValidationResult =
+  | {
+      readonly ok: true;
+      readonly status: "VALID";
+      readonly reasonCode: "ok";
+      readonly record: OperationExecutionRecord;
+      readonly now: number;
+    }
+  | {
+      readonly ok: false;
+      readonly status: "REFUSED";
+      readonly reasonCode: PostgresOperationFinalizeReasonCode;
+    };
+
 export interface AcquireTaskLeaseInput {
   readonly missionId: string;
   readonly taskId: string;
@@ -1044,6 +1065,116 @@ RETURNING operation_key
             decision.inputFingerprint,
           record:
             decision.record,
+        };
+      },
+    );
+  }
+
+  /**
+   * Read-only current-fence check for an already claimed operation.
+   *
+   * The task lease and operation row are locked in one transaction and the
+   * existing pure finalize predicate is reused to validate current ownership,
+   * lease identity, claim token/epoch and claim expiry. No row is updated.
+   */
+  public async validateOperationClaim(
+    input: ValidateDurableOperationClaimInput,
+  ): Promise<PostgresOperationClaimValidationResult> {
+    return this.database.transaction(
+      async (client) => {
+        const verified =
+          await this.lockTaskAuthority(
+            client,
+            input.authority,
+          );
+
+        if (!verified.ok) {
+          return {
+            ok: false,
+            status: "REFUSED",
+            reasonCode:
+              verified.reasonCode,
+          };
+        }
+
+        const locked =
+          await client.query<OperationClaimRow>(
+            `
+SELECT
+  mission_id,
+  operation_key,
+  task_id,
+  authority_scope,
+  operation_type,
+  input_fingerprint,
+  status,
+  claim_owner_worker_id,
+  claim_task_lease_token,
+  claim_task_lease_epoch,
+  claim_token,
+  claim_epoch,
+  claim_expires_at,
+  result,
+  error_text,
+  created_at,
+  updated_at,
+  finished_at
+FROM namla_v2_operation_claims
+WHERE mission_id = $1
+  AND operation_key = $2
+FOR UPDATE
+            `.trim(),
+            [
+              input.authority.missionId,
+              input.operationKey,
+            ],
+          );
+
+        if (locked.rows.length === 0) {
+          return {
+            ok: false,
+            status: "REFUSED",
+            reasonCode:
+              "operation-not-found",
+          };
+        }
+
+        if (locked.rows.length !== 1) {
+          throw new Error(
+            "POSTGRES_EXECUTION_AUTHORITY_VALIDATE_CLAIM_CARDINALITY_VIOLATION",
+          );
+        }
+
+        const record =
+          decodeOperationRow(
+            locked.rows[0],
+          );
+
+        const decision =
+          completeOperationClaim(
+            record,
+            verified.authority,
+            input.claimToken,
+            input.claimEpoch,
+            verified.now,
+          );
+
+        if (!decision.ok) {
+          return {
+            ok: false,
+            status: "REFUSED",
+            reasonCode:
+              decision.reasonCode,
+          };
+        }
+
+        return {
+          ok: true,
+          status: "VALID",
+          reasonCode: "ok",
+          record,
+          now:
+            verified.now,
         };
       },
     );

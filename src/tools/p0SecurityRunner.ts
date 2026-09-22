@@ -33,6 +33,8 @@ const IS_POSIX = PLATFORM === "linux" || PLATFORM === "darwin";
 const SUITES: readonly string[] = [
   "dist/tools/final02DonorClosureTests.js",
   "dist/tools/productizationExecutableThreatModelTests.js",
+  "dist/tools/canonicalTrustedToolExecutorTests.js",
+  "dist/tools/v2ExecutionAuthorityClaimFenceTests.js",
   "dist/tools/productizationToolGatewayTests.js",
   "dist/tools/productizationPolicyEngineTests.js",
   "dist/tools/productizationOperationFingerprintTests.js",
