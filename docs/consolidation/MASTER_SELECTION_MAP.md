@@ -3,11 +3,17 @@
 Canonical baseline: `8e864e3325d764887d0630610d14702730830721`; tree: `e2095d56f0e4dcdead31451fe8c86c9d51a18113`.
 Donor selection is by immutable commit and blob identities, not by branch names.
 
-## Current batch: C7 - Productization donor closure
+## Current batch: C8 - FINAL-02 donor closure
+Input commit: `cba1ead1d1b8d206513bf8cdaef0a74846e6613b`; input tree: `ce856cc6df233d8464493faea64bef71e1eef0ad`.
+C8 resolves every remaining FINAL-02 donor path while retaining one canonical V2 authority/effect plane.
+Review and final dispositions: [C8_FINAL02_CLOSURE.md](C8_FINAL02_CLOSURE.md).
+Status: C8_SOURCE_SELECTED; focused/P0 evidence and checkpoint commit are produced by the C8 closure run.
+
+## Completed source batch: C7 - Productization donor closure
 Input commit: `eb4d4599b4ab3f229b4959a13c2887ebc88441d4`; input tree: `ab38588fd896a3ed7a1342e9d7f70fe9f2790b0d`.
-C7 resolves every remaining Productization donor path without importing a parallel runtime, scheduler, recovery authority, persistence schema, package definition or P0 runner.
+C7 resolved all 50 Productization contribution paths.
 Review and final dispositions: [C7_PRODUCTIZATION_CLOSURE.md](C7_PRODUCTIZATION_CLOSURE.md).
-Status: C7_SOURCE_SELECTED; focused/P0 evidence and checkpoint commit are produced by the C7 closure run.
+Status: C7_SOURCE_CHECKPOINTED at `cba1ead1d1b8d206513bf8cdaef0a74846e6613b`; prior local P0: 1493 passed, 0 failed, 11 platform skips.
 
 ## Completed source batch: C6 - V2 operation coordination; trusted executor binding pending
 Input commit: `fb8b8d5784da2f864230a77f55971f1a9ee7ff12`; input tree: `6c882e8c6a738b6d1db31b491add35806f67d365`.
@@ -176,69 +182,70 @@ Source: `655f9f2c973437fa58ab7e4e99b963988c1c5f7e`; common ancestor: `9e4d0e60ff
 
 | Path | Donor change | Baseline content classification | Decision |
 |---|---|---|---|
-| FINAL02_CLEAN_HANDOFF.zip | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
-| FINAL02_PRODUCTION_INTEGRATION_RUNTIME.patch | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
-| README.md | MODIFY | BOTH_CHANGED_REVIEW | HUMAN_REVIEW_REQUIRED |
-| docs/30-final02-execution-runtime.md | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
+| FINAL02_CLEAN_HANDOFF.zip | ADD | NEW_PATH_REVIEW | PRESERVED_DONOR_ARTIFACT_NOT_APPLIED |
+| FINAL02_PRODUCTION_INTEGRATION_RUNTIME.patch | ADD | NEW_PATH_REVIEW | PRESERVED_DONOR_PATCH_NOT_APPLIED |
+| README.md | MODIFY | BOTH_CHANGED_REVIEW | CANONICAL_README_RETAINED_DONOR_STATUS_NOT_IMPORTED |
+| docs/30-final02-execution-runtime.md | ADD | NEW_PATH_REVIEW | PRESERVED_DONOR_ARCHITECTURE_NOT_CANONICAL_RUNTIME |
 | src/cognitive/containerSandboxBackend.ts | MODIFY | EXACT_IN_BASE | NO_COPY_NEEDED |
 | src/cognitive/dockerStageBisection.ts | MODIFY | EXACT_IN_BASE | NO_COPY_NEEDED |
 | src/cognitive/sandboxPolicy.ts | MODIFY | EXACT_IN_BASE | NO_COPY_NEEDED |
-| src/cognitive/smokeWorkspace.ts | MODIFY | DONOR_ONLY_CHANGE_REVIEW | HUMAN_REVIEW_REQUIRED |
-| src/examples/demoNamolaTwinEmpireV1.ts | MODIFY | DONOR_ONLY_CHANGE_REVIEW | HUMAN_REVIEW_REQUIRED |
-| src/examples/demoTwinColonyFoundation.ts | MODIFY | DONOR_ONLY_CHANGE_REVIEW | HUMAN_REVIEW_REQUIRED |
+| src/cognitive/smokeWorkspace.ts | MODIFY | DONOR_ONLY_CHANGE_REVIEW | CANONICAL_RETAINED_FINAL02_WORKSPACE_EXPANSION_NOT_SELECTED |
+| src/examples/demoNamolaTwinEmpireV1.ts | MODIFY | DONOR_ONLY_CHANGE_REVIEW | CANONICAL_DEMO_RETAINED_FINAL02_OPERATION_MODEL_NOT_SELECTED |
+| src/examples/demoTwinColonyFoundation.ts | MODIFY | DONOR_ONLY_CHANGE_REVIEW | CANONICAL_DEMO_RETAINED_FINAL02_OPERATION_MODEL_NOT_SELECTED |
 | src/tools/containerIsolationProbe.ts | MODIFY | EXACT_IN_BASE | NO_COPY_NEEDED |
 | src/tools/containerSandboxTests.ts | MODIFY | EXACT_IN_BASE | NO_COPY_NEEDED |
-| src/tools/executableProvenanceTests.ts | MODIFY | BOTH_CHANGED_REVIEW | HUMAN_REVIEW_REQUIRED |
-| src/tools/final02AssertionInvariantsTests.ts | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
-| src/tools/final02AutomatedAcceptanceGateTests.ts | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
-| src/tools/final02BaselineParity.ts | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
-| src/tools/final02ExecutionRuntimeTests.ts | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
-| src/tools/frozenEvidenceIntegrityTests.ts | MODIFY | DONOR_ONLY_CHANGE_REVIEW | HUMAN_REVIEW_REQUIRED |
-| src/tools/generateP05ValidationEvidence.ts | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
+| src/tools/executableProvenanceTests.ts | MODIFY | BOTH_CHANGED_REVIEW | CANONICAL_STRONGER_PROVENANCE_SUITE_RETAINED |
+| src/tools/final02AssertionInvariantsTests.ts | ADD | NEW_PATH_REVIEW | PRESERVED_DONOR_TEST_TIED_TO_REJECTED_PARALLEL_RUNTIME |
+| src/tools/final02AutomatedAcceptanceGateTests.ts | ADD | NEW_PATH_REVIEW | PRESERVED_DONOR_TEST_TIED_TO_REJECTED_PARALLEL_RUNTIME |
+| src/tools/final02BaselineParity.ts | ADD | NEW_PATH_REVIEW | PRESERVED_DONOR_RELEASE_TOOL_NOT_CANONICAL_GATE |
+| src/tools/final02ExecutionRuntimeTests.ts | ADD | NEW_PATH_REVIEW | PRESERVED_DONOR_TEST_TIED_TO_REJECTED_PARALLEL_RUNTIME |
+| src/tools/frozenEvidenceIntegrityTests.ts | MODIFY | DONOR_ONLY_CHANGE_REVIEW | CANONICAL_RETAINED_FINAL02_OPERATION_MODEL_NOT_SELECTED |
+| src/tools/generateP05ValidationEvidence.ts | ADD | NEW_PATH_REVIEW | PRESERVED_DONOR_EVIDENCE_GENERATOR_NOT_RELEASE_AUTHORITY |
 | src/tools/hostMountClaimTests.ts | ADD | EXACT_IN_BASE | NO_COPY_NEEDED |
-| src/tools/p0SecurityRunner.ts | MODIFY | BOTH_CHANGED_REVIEW | C1_P0_REGISTRATION_ONLY_DONOR_REVIEW_PENDING |
+| src/tools/p0SecurityRunner.ts | MODIFY | BOTH_CHANGED_REVIEW | CANONICAL_RUNNER_RETAINED_DONOR_FINAL02_REGISTRATION_NOT_IMPORTED |
 | src/tools/probeTimeoutTruthTests.ts | MODIFY | EXACT_IN_BASE | NO_COPY_NEEDED |
 | src/tools/readOnlySourceMountTests.ts | ADD | EXACT_IN_BASE | NO_COPY_NEEDED |
-| src/tools/testFixtures/final02SandboxSigner.ts | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
-| src/tools/trustedExecutableTests.ts | MODIFY | BOTH_CHANGED_REVIEW | HUMAN_REVIEW_REQUIRED |
-| src/tools/twinBuildLoopTests.ts | MODIFY | DONOR_ONLY_CHANGE_REVIEW | HUMAN_REVIEW_REQUIRED |
+| src/tools/testFixtures/final02SandboxSigner.ts | ADD | NEW_PATH_REVIEW | PRESERVED_DONOR_FIXTURE_TIED_TO_REJECTED_TRUST_STORE |
+| src/tools/trustedExecutableTests.ts | MODIFY | BOTH_CHANGED_REVIEW | CANONICAL_STRONGER_TRUST_SUITE_RETAINED |
+| src/tools/twinBuildLoopTests.ts | MODIFY | DONOR_ONLY_CHANGE_REVIEW | CANONICAL_RETAINED_FINAL02_OPERATION_MODEL_NOT_SELECTED |
 | src/tools/twinRunMetricsTests.ts | ADD | EXACT_IN_BASE | NO_COPY_NEEDED |
-| src/tools/verificationSandboxTests.ts | MODIFY | BOTH_CHANGED_REVIEW | HUMAN_REVIEW_REQUIRED |
+| src/tools/verificationSandboxTests.ts | MODIFY | BOTH_CHANGED_REVIEW | CANONICAL_STRONGER_SANDBOX_SUITE_RETAINED |
 | src/tools/windowsContainerIdentityTests.ts | ADD | EXACT_IN_BASE | NO_COPY_NEEDED |
 | src/tools/windowsDockerTrustPinTests.ts | ADD | EXACT_IN_BASE | NO_COPY_NEEDED |
 | src/tools/windowsEnvFilePolicyTests.ts | ADD | EXACT_IN_BASE | NO_COPY_NEEDED |
-| src/twin/colonyForge.ts | MODIFY | DONOR_ONLY_CHANGE_REVIEW | HUMAN_REVIEW_REQUIRED |
-| src/twin/final02/baselineMaterializer.ts | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
-| src/twin/final02/conflictEngine.ts | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
-| src/twin/final02/contracts.ts | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
-| src/twin/final02/executionPlanBuilder.ts | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
-| src/twin/final02/final02Coordinator.ts | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
-| src/twin/final02/frozenArtifactResolver.ts | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
-| src/twin/final02/materializer.ts | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
-| src/twin/final02/productionTrustStore.ts | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
-| src/twin/final02/regressionRunner.ts | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
-| src/twin/final02/repairEngine.ts | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
-| src/twin/final02/sandboxReceiptVerifier.ts | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
-| src/twin/final02/treeDigest.ts | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
-| src/twin/final02/verificationRunner.ts | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
-| src/twin/final02/workspaceManager.ts | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
-| src/twin/final02ExecutionRuntime.ts | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
-| src/twin/frozenBundleValidator.ts | MODIFY | DONOR_ONLY_CHANGE_REVIEW | HUMAN_REVIEW_REQUIRED |
-| src/twin/mergeForge.ts | MODIFY | DONOR_ONLY_CHANGE_REVIEW | HUMAN_REVIEW_REQUIRED |
-| src/twin/namolaSovereignCourt.ts | MODIFY | DONOR_ONLY_CHANGE_REVIEW | HUMAN_REVIEW_REQUIRED |
-| src/twin/twinColonyLiveRunner.ts | MODIFY | DONOR_ONLY_CHANGE_REVIEW | HUMAN_REVIEW_REQUIRED |
-| src/twin/twinColonyTypes.ts | MODIFY | DONOR_ONLY_CHANGE_REVIEW | HUMAN_REVIEW_REQUIRED |
-| src/twin/twinPostColonyPipeline.ts | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
-| src/twin/twinResumeRunner.ts | MODIFY | DONOR_ONLY_CHANGE_REVIEW | HUMAN_REVIEW_REQUIRED |
+| src/twin/colonyForge.ts | MODIFY | DONOR_ONLY_CHANGE_REVIEW | CANONICAL_RETAINED_FINAL02_OPERATION_MODEL_NOT_SELECTED |
+| src/twin/final02/baselineMaterializer.ts | ADD | NEW_PATH_REVIEW | REJECTED_PARALLEL_FINAL02_RUNTIME_NOT_IMPORTED |
+| src/twin/final02/conflictEngine.ts | ADD | NEW_PATH_REVIEW | REJECTED_PARALLEL_FINAL02_RUNTIME_NOT_IMPORTED |
+| src/twin/final02/contracts.ts | ADD | NEW_PATH_REVIEW | REJECTED_PARALLEL_FINAL02_RUNTIME_NOT_IMPORTED |
+| src/twin/final02/executionPlanBuilder.ts | ADD | NEW_PATH_REVIEW | REJECTED_PARALLEL_FINAL02_RUNTIME_NOT_IMPORTED |
+| src/twin/final02/final02Coordinator.ts | ADD | NEW_PATH_REVIEW | REJECTED_PARALLEL_FINAL02_RUNTIME_NOT_IMPORTED |
+| src/twin/final02/frozenArtifactResolver.ts | ADD | NEW_PATH_REVIEW | REJECTED_PARALLEL_FINAL02_RUNTIME_NOT_IMPORTED |
+| src/twin/final02/materializer.ts | ADD | NEW_PATH_REVIEW | REJECTED_PARALLEL_FINAL02_RUNTIME_NOT_IMPORTED |
+| src/twin/final02/productionTrustStore.ts | ADD | NEW_PATH_REVIEW | REJECTED_SECOND_TRUST_STORE_NOT_IMPORTED |
+| src/twin/final02/regressionRunner.ts | ADD | NEW_PATH_REVIEW | REJECTED_PARALLEL_FINAL02_RUNTIME_NOT_IMPORTED |
+| src/twin/final02/repairEngine.ts | ADD | NEW_PATH_REVIEW | REJECTED_PARALLEL_FINAL02_RUNTIME_NOT_IMPORTED |
+| src/twin/final02/sandboxReceiptVerifier.ts | ADD | NEW_PATH_REVIEW | REJECTED_SECOND_SANDBOX_TRUST_SURFACE_NOT_IMPORTED |
+| src/twin/final02/treeDigest.ts | ADD | NEW_PATH_REVIEW | PRESERVED_DONOR_UTILITY_TIED_TO_REJECTED_RUNTIME |
+| src/twin/final02/verificationRunner.ts | ADD | NEW_PATH_REVIEW | REJECTED_PARALLEL_FINAL02_RUNTIME_NOT_IMPORTED |
+| src/twin/final02/workspaceManager.ts | ADD | NEW_PATH_REVIEW | REJECTED_PARALLEL_FINAL02_RUNTIME_NOT_IMPORTED |
+| src/twin/final02ExecutionRuntime.ts | ADD | NEW_PATH_REVIEW | REJECTED_PARALLEL_FINAL02_RUNTIME_NOT_IMPORTED |
+| src/twin/frozenBundleValidator.ts | MODIFY | DONOR_ONLY_CHANGE_REVIEW | CANONICAL_RETAINED_FINAL02_OPERATION_MODEL_NOT_SELECTED |
+| src/twin/mergeForge.ts | MODIFY | DONOR_ONLY_CHANGE_REVIEW | CANONICAL_EFFECT_BOUNDARY_RETAINED_DONOR_HOST_RUNTIME_REJECTED |
+| src/twin/namolaSovereignCourt.ts | MODIFY | DONOR_ONLY_CHANGE_REVIEW | CANONICAL_RETAINED_FINAL02_OPERATION_MODEL_NOT_SELECTED |
+| src/twin/twinColonyLiveRunner.ts | MODIFY | DONOR_ONLY_CHANGE_REVIEW | CANONICAL_RETAINED_FINAL02_OPERATION_MODEL_NOT_SELECTED |
+| src/twin/twinColonyTypes.ts | MODIFY | DONOR_ONLY_CHANGE_REVIEW | CANONICAL_RETAINED_FINAL02_OPERATION_MODEL_NOT_SELECTED |
+| src/twin/twinPostColonyPipeline.ts | ADD | NEW_PATH_REVIEW | REJECTED_PARALLEL_TWIN_PIPELINE_NOT_IMPORTED |
+| src/twin/twinResumeRunner.ts | MODIFY | DONOR_ONLY_CHANGE_REVIEW | CANONICAL_RETAINED_FINAL02_OPERATION_MODEL_NOT_SELECTED |
 | src/twin/twinRunMetrics.ts | ADD | EXACT_IN_BASE | NO_COPY_NEEDED |
-| validation-report.json | ADD | NEW_PATH_REVIEW | HUMAN_REVIEW_REQUIRED |
+| validation-report.json | ADD | NEW_PATH_REVIEW | PRESERVED_DONOR_EVIDENCE_SNAPSHOT_NOT_RELEASE_TRUTH |
 
 ## Completion accounting and next work
-Productization: 50 of 50 donor paths now have explicit dispositions. Fourteen paths were selected/adapted across C1-C6; the remaining donor paths are explicitly preserved, superseded, or rejected in C7. Productization donor review is closed.
-C6 trusted-executor binding and live execution qualification remain canonical runtime work; closing the donor ledger does not claim those runtime tasks are complete.
-FINAL-02: 13 of 56 paths are already identical to the canonical baseline; 43 still require explicit review.
-Next: close FINAL-02 against the same canonical V2 effect/authority boundary, then run the unified release gates before any human-only promotion to main.
-No parallel active scheduler, second authority system, second recovery authority, second SQL schema, or silent budget reset is accepted.
+Productization: 50 of 50 donor paths have explicit dispositions; Productization donor review is closed.
+FINAL-02: 56 of 56 donor paths now have explicit dispositions. Exact canonical paths require no copy; remaining donor paths are explicitly preserved, superseded, or rejected in C8. FINAL-02 donor review is closed.
+Donor-branch reconciliation is complete: no Productization or FINAL-02 path remains pending.
+C6 trusted-executor binding, canonical factory/orchestrator execution and replay, and release qualification remain canonical runtime work; donor closure does not claim those tasks are complete.
+Next: run unified local/real-PostgreSQL/CI qualification, finish canonical runtime gaps, then perform human-only promotion to main.
+No parallel active scheduler, second authority system, second recovery authority, second SQL schema, second trust store, or silent budget reset is accepted.
 
 ## Preservation and release limits
 Existing audit bundle SHA-256: `a667fe3819af53a166db2f8fb0f0297e47a77d685ef4f5888c0d49a4ef815ab9`.
