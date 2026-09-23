@@ -78,6 +78,7 @@ const SUITES: readonly string[] = [
   "dist/tools/v2CanonicalRuntimeRecoveryCheckpointTests.js",
   "dist/tools/v2CanonicalRuntimeRecoveryPersistenceTests.js",
   "dist/tools/v2CanonicalRuntimeRecoveryPostgresTests.js",
+  "dist/tools/v2DurableCanonicalRuntimeOrchestratorTests.js",
   "dist/tools/v2OperationIdentityTests.js",
   "dist/tools/v2ExecutionAuthorityTests.js",
   "dist/tools/v2ExecutionAuthorityMigrationTests.js",
