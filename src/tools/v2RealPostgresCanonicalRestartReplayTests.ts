@@ -38,6 +38,10 @@ import {
 } from "../v2/persistence/postgresCanonicalRuntimeRecoveryMigration";
 
 import {
+  V2_POSTGRES_CANONICAL_RUNTIME_RECOVERY_TABLE,
+} from "../v2/persistence/postgresCanonicalRuntimeRecoverySchema";
+
+import {
   V2_CANONICAL_RUNTIME_RECOVERY_CHECKPOINT_SCHEMA,
   type CanonicalRuntimeRecoveryCheckpoint,
 } from "../v2/persistence/canonicalRuntimeRecoveryCheckpoint";
@@ -1040,7 +1044,7 @@ test(
 SELECT
   (
     SELECT checkpoint_version::text
-    FROM namla_v2_canonical_runtime_recovery
+    FROM ${V2_POSTGRES_CANONICAL_RUNTIME_RECOVERY_TABLE}
     WHERE mission_id = $1
   ) AS recovery_version,
   (
