@@ -42,6 +42,24 @@ test(
 );
 
 test(
+  "C9D2 release runner makes real PostgreSQL process restart/replay mandatory",
+  () => {
+    const source =
+      readFileSync(
+        releaseRunnerPath(),
+        "utf8",
+      );
+
+    assert.equal(
+      source.includes(
+        "dist/tools/v2RealPostgresCanonicalRestartReplayTests.js",
+      ),
+      true,
+    );
+  },
+);
+
+test(
   "R1B-PG3 release runner remains DATABASE_URL-gated and fail closed",
   () => {
     const source =
