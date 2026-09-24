@@ -177,6 +177,28 @@ export type PostgresOperationClaimValidationResult =
       readonly reasonCode: PostgresOperationFinalizeReasonCode;
     };
 
+export interface ReadCompletedDurableOperationInput {
+  readonly missionId: string;
+  readonly operationKey: string;
+}
+
+export type PostgresCompletedOperationReadResult =
+  | {
+      readonly ok: true;
+      readonly status: "COMPLETED";
+      readonly reasonCode: "ok";
+      readonly record: OperationExecutionRecord;
+      readonly completedValue: unknown;
+    }
+  | {
+      readonly ok: false;
+      readonly status: "REFUSED";
+      readonly reasonCode:
+        | "invalid-field"
+        | "operation-not-found"
+        | "operation-not-completed";
+    };
+
 export interface AcquireTaskLeaseInput {
   readonly missionId: string;
   readonly taskId: string;
@@ -1178,6 +1200,98 @@ FOR UPDATE
         };
       },
     );
+  }
+
+  /**
+   * Read-only durable-result lookup.
+   *
+   * This does not mint authority, claim work, renew leases or mutate a row.
+   * Consumers must independently verify operation type/scope/fingerprint/result
+   * binding before treating the returned value as evidence.
+   */
+  public async readCompletedOperation(
+    input: ReadCompletedDurableOperationInput,
+  ): Promise<PostgresCompletedOperationReadResult> {
+    if (
+      !validField(input.missionId) ||
+      !validField(input.operationKey)
+    ) {
+      return {
+        ok: false,
+        status: "REFUSED",
+        reasonCode: "invalid-field",
+      };
+    }
+
+    const loaded =
+      await this.database.query<OperationClaimRow>(
+        `
+SELECT
+  mission_id,
+  operation_key,
+  task_id,
+  authority_scope,
+  operation_type,
+  input_fingerprint,
+  status,
+  claim_owner_worker_id,
+  claim_task_lease_token,
+  claim_task_lease_epoch,
+  claim_token,
+  claim_epoch,
+  claim_expires_at,
+  result,
+  error_text,
+  created_at,
+  updated_at,
+  finished_at
+FROM namla_v2_operation_claims
+WHERE mission_id = $1
+  AND operation_key = $2
+        `.trim(),
+        [
+          input.missionId,
+          input.operationKey,
+        ],
+      );
+
+    if (loaded.rows.length === 0) {
+      return {
+        ok: false,
+        status: "REFUSED",
+        reasonCode: "operation-not-found",
+      };
+    }
+
+    if (loaded.rows.length !== 1) {
+      throw new Error(
+        "POSTGRES_EXECUTION_AUTHORITY_READ_COMPLETED_CARDINALITY_VIOLATION",
+      );
+    }
+
+    const record =
+      decodeOperationRow(
+        loaded.rows[0],
+      );
+
+    if (record.status !== "COMPLETED") {
+      return {
+        ok: false,
+        status: "REFUSED",
+        reasonCode: "operation-not-completed",
+      };
+    }
+
+    return {
+      ok: true,
+      status: "COMPLETED",
+      reasonCode: "ok",
+      record,
+      completedValue:
+        completedValueFrom(
+          loaded.rows[0],
+        ),
+    };
   }
 
   public async completeOperation(
