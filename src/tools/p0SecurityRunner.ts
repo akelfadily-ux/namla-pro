@@ -68,6 +68,7 @@ const SUITES: readonly string[] = [
   "dist/tools/v2CanonicalRuntimeAdapterTests.js",
   "dist/tools/v2CanonicalPlanTestFactoryTests.js",
   "dist/tools/v2CanonicalPostProMaxFactoriesTests.js",
+  "dist/tools/v2CanonicalFactoryActivationTests.js",
   "dist/tools/v2CanonicalRuntimeStepperTests.js",
   "dist/tools/v2CanonicalRuntimeCursorStoreContractTests.js",
   "dist/tools/v2CanonicalRuntimeCursorInMemoryStoreTests.js",

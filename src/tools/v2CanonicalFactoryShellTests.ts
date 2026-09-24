@@ -18,21 +18,20 @@ import {
 const EXPECTED_RUNTIME_BACKED = [
   "EER",
   "PLAN",
+  "PLAN_TEST",
   "PRO",
   "SON",
   "LEGGO",
   "PROMAX",
-  "NAMLA_LAB",
-] as const;
-
-const EXPECTED_SHELL_ONLY = [
-  "PLAN_TEST",
   "FINAL_SPRINT_COURT",
   "LIHU",
   "DEVOPS",
   "API_INTEGRATION",
   "SECURITY",
+  "NAMLA_LAB",
 ] as const;
+
+const EXPECTED_SHELL_ONLY = [] as const;
 
 test(
   "10E4 shell registry is one-to-one with the 10E3 canonical factory order",
@@ -111,34 +110,22 @@ test(
 );
 
 test(
-  "10E4 shell-only factories fail closed and cannot claim runtime availability",
+  "C9C3 no canonical factory remains shell-only after atomic activation",
   () => {
-    for (
-      const id
-      of EXPECTED_SHELL_ONLY
-    ) {
-      const shell =
-        getCanonicalFactoryShell(id);
+    assert.deepEqual(
+      CANONICAL_SHELL_ONLY_FACTORY_IDS,
+      EXPECTED_SHELL_ONLY,
+    );
 
-      assert.deepEqual(
-        shell.implementation,
-        {
-          kind:
-            "MISSING_RUNTIME_IMPLEMENTATION",
-          stepperBinding:
-            "UNAVAILABLE",
-          executionPolicy:
-            "FAIL_CLOSED",
-          reasonCode:
-            "CANONICAL_FACTORY_RUNTIME_UNIMPLEMENTED",
-        },
-      );
-    }
+    assert.equal(
+      CANONICAL_SHELL_ONLY_FACTORY_IDS.length,
+      0,
+    );
   },
 );
 
 test(
-  "10E4 PLAN_TEST remains a distinct fail-closed factory before the frozen contract boundary",
+  "C9C3 PLAN_TEST remains distinct and runtime-backed before the frozen contract boundary",
   () => {
     const plan =
       getCanonicalFactoryShell("PLAN");
@@ -158,7 +145,7 @@ test(
 
     assert.equal(
       planTest.implementation.kind,
-      "MISSING_RUNTIME_IMPLEMENTATION",
+      "EXISTING_CAPABILITY",
     );
 
     assert.equal(

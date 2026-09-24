@@ -27,6 +27,12 @@ const EXPECTED_BINDINGS = [
     requiredContextPhase: "PRE_FREEZE",
   },
   {
+    factoryId: "PLAN_TEST",
+    owner: "PlanTestFactory",
+    methods: ["validateAndFreezePlan"],
+    requiredContextPhase: "PRE_FREEZE",
+  },
+  {
     factoryId: "PRO",
     owner: "ProDispatcher",
     methods: [
@@ -55,6 +61,36 @@ const EXPECTED_BINDINGS = [
     requiredContextPhase: "CONTRACT_BOUND",
   },
   {
+    factoryId: "FINAL_SPRINT_COURT",
+    owner: "FinalSprintCourtFactory",
+    methods: ["adjudicate"],
+    requiredContextPhase: "CONTRACT_BOUND",
+  },
+  {
+    factoryId: "LIHU",
+    owner: "LihuFactory",
+    methods: ["evaluate"],
+    requiredContextPhase: "CONTRACT_BOUND",
+  },
+  {
+    factoryId: "DEVOPS",
+    owner: "DevOpsFactory",
+    methods: ["qualifyRelease"],
+    requiredContextPhase: "CONTRACT_BOUND",
+  },
+  {
+    factoryId: "API_INTEGRATION",
+    owner: "ApiIntegrationFactory",
+    methods: ["verifyIntegrations"],
+    requiredContextPhase: "CONTRACT_BOUND",
+  },
+  {
+    factoryId: "SECURITY",
+    owner: "SecurityFactory",
+    methods: ["verifySecurity"],
+    requiredContextPhase: "CONTRACT_BOUND",
+  },
+  {
     factoryId: "NAMLA_LAB",
     owner: "LabPackager",
     methods: ["packageDeliverables"],
@@ -74,7 +110,7 @@ test(
 
     assert.equal(
       CANONICAL_RUNTIME_ADAPTER_BINDINGS.length,
-      7,
+      13,
     );
   },
 );
@@ -109,7 +145,7 @@ test(
           (binding) =>
             binding.factoryId,
         ),
-      ["EER", "PLAN"],
+      ["EER", "PLAN", "PLAN_TEST"],
     );
   },
 );
@@ -133,6 +169,11 @@ test(
         "SON",
         "LEGGO",
         "PROMAX",
+        "FINAL_SPRINT_COURT",
+        "LIHU",
+        "DEVOPS",
+        "API_INTEGRATION",
+        "SECURITY",
         "NAMLA_LAB",
       ],
     );
@@ -182,29 +223,17 @@ test(
 );
 
 test(
-  "10E5 shell-only factories remain unavailable and fail closed",
+  "C9C3 no canonical runtime adapter remains unavailable",
   () => {
-    for (
-      const factoryId
-      of CANONICAL_SHELL_ONLY_FACTORY_IDS
-    ) {
-      const resolution =
-        resolveCanonicalRuntimeAdapter(
-          factoryId,
-        );
+    assert.equal(
+      CANONICAL_SHELL_ONLY_FACTORY_IDS.length,
+      0,
+    );
 
-      assert.deepEqual(
-        resolution,
-        {
-          kind: "UNAVAILABLE",
-          factoryId,
-          executionPolicy:
-            "FAIL_CLOSED",
-          reasonCode:
-            "CANONICAL_FACTORY_RUNTIME_UNIMPLEMENTED",
-        },
-      );
-    }
+    assert.equal(
+      CANONICAL_RUNTIME_ADAPTER_BINDINGS.length,
+      CANONICAL_RUNTIME_BACKED_FACTORY_IDS.length,
+    );
   },
 );
 

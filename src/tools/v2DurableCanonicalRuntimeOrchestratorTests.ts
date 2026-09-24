@@ -931,7 +931,7 @@ test(
 );
 
 test(
-  "C9B shell-only PLAN_TEST remains fail-closed and never asks the completion authority",
+  "C9C3 activated PLAN_TEST still requires durable completion authority before advancing",
   async () => {
     const store =
       new SeedStore(
@@ -964,7 +964,7 @@ test(
 
     assert.equal(
       inspection.decision.kind,
-      "FACTORY_UNAVAILABLE",
+      "RUN_FACTORY",
     );
 
     const result =
@@ -975,17 +975,31 @@ test(
           ),
         );
 
-    assert.equal(
+    assert.ok(
       result.ok,
-      false,
-    );
-    assert.equal(
       result.reasonCode,
-      "factory-unavailable",
     );
+
+    if (!result.ok) return;
+
+    assert.equal(
+      result.status,
+      "FACTORY_ADVANCED",
+    );
+
+    assert.equal(
+      result.checkpoint.cursor.nodeId,
+      "LOOP_AFTER_PLAN_TEST",
+    );
+
+    assert.equal(
+      result.checkpoint.cursor.contractPhase,
+      "PRE_FREEZE",
+    );
+
     assert.equal(
       authority.calls,
-      0,
+      1,
     );
   },
 );

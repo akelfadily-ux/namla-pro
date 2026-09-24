@@ -520,7 +520,7 @@ test(
 );
 
 test(
-  "10E5 PLAN_TEST remains explicit and unavailable instead of being aliased to PROTOCOL",
+  "C9C3 PLAN_TEST is explicit, bound, and advances only to its NAMLA LOOP gate",
   () => {
     const cursor =
       cursorAt(
@@ -532,22 +532,31 @@ test(
         cursor,
       );
 
+    assert.equal(
+      decision.kind,
+      "RUN_FACTORY",
+    );
+
+    if (
+      decision.kind !==
+        "RUN_FACTORY"
+    ) {
+      return;
+    }
+
+    assert.equal(
+      decision.factoryId,
+      "PLAN_TEST",
+    );
+
+    assert.equal(
+      decision.requiredContextPhase,
+      "PRE_FREEZE",
+    );
+
     assert.deepEqual(
-      decision,
-      {
-        kind:
-          "FACTORY_UNAVAILABLE",
-        factoryId:
-          "PLAN_TEST",
-        nodeIndex:
-          indexOfNode(
-            "PLAN_TEST",
-          ),
-        executionPolicy:
-          "FAIL_CLOSED",
-        reasonCode:
-          "CANONICAL_FACTORY_RUNTIME_UNIMPLEMENTED",
-      },
+      decision.adapterBinding.methods,
+      ["validateAndFreezePlan"],
     );
 
     const advance =
@@ -567,16 +576,21 @@ test(
 
     assert.equal(
       advance.ok,
-      false,
+      true,
     );
 
-    if (advance.ok) {
+    if (!advance.ok) {
       return;
     }
 
     assert.equal(
-      advance.reasonCode,
-      "factory-runtime-unimplemented",
+      advance.cursor.nodeId,
+      "LOOP_AFTER_PLAN_TEST",
+    );
+
+    assert.equal(
+      advance.cursor.contractPhase,
+      "PRE_FREEZE",
     );
   },
 );

@@ -11,10 +11,18 @@
 
 import type { EerEngine } from "../eer/eerEngine";
 import type { PlanEngine } from "../plan/planEngine";
+import type { PlanTestFactory } from "../planTest/planTestFactory";
 import type { ProDispatcher } from "../pro/proDispatcher";
 import type { SonAnalyzer } from "../son/sonAnalyzer";
 import type { LeggoIntegrator } from "../leggo/leggoIntegrator";
 import type { ProMaxVerifier } from "../promax/proMaxVerifier";
+import type {
+  ApiIntegrationFactory,
+  DevOpsFactory,
+  FinalSprintCourtFactory,
+  LihuFactory,
+  SecurityFactory,
+} from "../assurance/postProMaxAssuranceFactories";
 import type { LabPackager } from "../lab/labPackager";
 
 import {
@@ -33,6 +41,9 @@ export interface CanonicalRuntimeAdapterBundle {
   readonly PLAN:
     Pick<PlanEngine, "generatePlan">;
 
+  readonly PLAN_TEST:
+    Pick<PlanTestFactory, "validateAndFreezePlan">;
+
   readonly PRO:
     Pick<
       ProDispatcher,
@@ -49,6 +60,21 @@ export interface CanonicalRuntimeAdapterBundle {
 
   readonly PROMAX:
     Pick<ProMaxVerifier, "verifyCandidate">;
+
+  readonly FINAL_SPRINT_COURT:
+    Pick<FinalSprintCourtFactory, "adjudicate">;
+
+  readonly LIHU:
+    Pick<LihuFactory, "evaluate">;
+
+  readonly DEVOPS:
+    Pick<DevOpsFactory, "qualifyRelease">;
+
+  readonly API_INTEGRATION:
+    Pick<ApiIntegrationFactory, "verifyIntegrations">;
+
+  readonly SECURITY:
+    Pick<SecurityFactory, "verifySecurity">;
 
   readonly NAMLA_LAB:
     Pick<LabPackager, "packageDeliverables">;
@@ -140,6 +166,13 @@ export const CANONICAL_RUNTIME_ADAPTER_BINDINGS:
       ),
 
       binding(
+        "PLAN_TEST",
+        "PlanTestFactory",
+        ["validateAndFreezePlan"],
+        "PRE_FREEZE",
+      ),
+
+      binding(
         "PRO",
         "ProDispatcher",
         [
@@ -168,6 +201,41 @@ export const CANONICAL_RUNTIME_ADAPTER_BINDINGS:
         "PROMAX",
         "ProMaxVerifier",
         ["verifyCandidate"],
+        "CONTRACT_BOUND",
+      ),
+
+      binding(
+        "FINAL_SPRINT_COURT",
+        "FinalSprintCourtFactory",
+        ["adjudicate"],
+        "CONTRACT_BOUND",
+      ),
+
+      binding(
+        "LIHU",
+        "LihuFactory",
+        ["evaluate"],
+        "CONTRACT_BOUND",
+      ),
+
+      binding(
+        "DEVOPS",
+        "DevOpsFactory",
+        ["qualifyRelease"],
+        "CONTRACT_BOUND",
+      ),
+
+      binding(
+        "API_INTEGRATION",
+        "ApiIntegrationFactory",
+        ["verifyIntegrations"],
+        "CONTRACT_BOUND",
+      ),
+
+      binding(
+        "SECURITY",
+        "SecurityFactory",
+        ["verifySecurity"],
         "CONTRACT_BOUND",
       ),
 
