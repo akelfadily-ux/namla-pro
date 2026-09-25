@@ -183,7 +183,6 @@ function completion(
         checkpoint.checkpointVersion,
       cursorStepVersion:
         checkpoint.cursor.stepVersion,
-      outputFingerprint,
     });
 
   return {

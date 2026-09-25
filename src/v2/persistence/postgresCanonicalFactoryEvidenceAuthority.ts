@@ -50,7 +50,7 @@ import type {
 } from "./postgresExecutionAuthorityStore";
 
 export const CANONICAL_FACTORY_COMPLETION_OPERATION_TYPE =
-  "canonical.factory-completion.v1" as const;
+  "canonical.factory-completion.v2" as const;
 
 export const CANONICAL_ASSURANCE_PROOF_OPERATION_TYPE =
   "canonical.assurance-proof.v1" as const;
@@ -66,7 +66,6 @@ export interface CanonicalFactoryCompletionKeyInput {
   readonly factoryId: CanonicalFactoryId;
   readonly checkpointVersion: number;
   readonly cursorStepVersion: number;
-  readonly outputFingerprint: string;
 }
 
 export interface CanonicalAssuranceProofKeyInput {
@@ -245,13 +244,12 @@ export function canonicalFactoryCompletionOperationKey(
   return (
     "factory-completion:" +
     digest(
-      "NAMLA_V2_CANONICAL_FACTORY_COMPLETION",
+      "NAMLA_V2_CANONICAL_FACTORY_COMPLETION_STEP",
       {
         missionId: input.missionId,
         factoryId: input.factoryId,
         checkpointVersion: input.checkpointVersion,
         cursorStepVersion: input.cursorStepVersion,
-        outputFingerprint: input.outputFingerprint,
       },
     )
   );
@@ -414,8 +412,6 @@ export class PostgresCanonicalFactoryEvidenceAuthority
           completion.checkpointVersion,
         cursorStepVersion:
           completion.cursorStepVersion,
-        outputFingerprint:
-          completion.outputFingerprint,
       });
 
     if (

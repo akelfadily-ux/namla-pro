@@ -75,7 +75,6 @@ function completion(
         1,
       cursorStepVersion:
         1,
-      outputFingerprint,
     });
 
   return {

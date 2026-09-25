@@ -149,7 +149,6 @@ function completion():
       factoryId: "PLAN_TEST",
       checkpointVersion: 3,
       cursorStepVersion: 5,
-      outputFingerprint,
     });
 
   return {
@@ -373,6 +372,58 @@ test(
         reasonCode:
           "operation-not-completed",
       },
+    );
+  },
+);
+
+test(
+  "C9E1B factory completion key is stable per canonical step while the durable fingerprint remains output-bound",
+  async () => {
+    const first =
+      completion();
+
+    const second = {
+      ...first,
+      outputFingerprint:
+        "c".repeat(64),
+    };
+
+    assert.equal(
+      first.operationKey,
+      second.operationKey,
+    );
+
+    const firstRecord =
+      factoryRecord(first);
+
+    const secondRecord =
+      factoryRecord(second);
+
+    assert.notEqual(
+      firstRecord.inputFingerprint,
+      secondRecord.inputFingerprint,
+    );
+
+    const result =
+      await new PostgresCanonicalFactoryEvidenceAuthority(
+        new FakeReader(
+          completedRead(
+            firstRecord,
+            first,
+          ),
+        ),
+      ).verifyFactoryCompletion(
+        second,
+      );
+
+    assert.equal(
+      result.ok,
+      false,
+    );
+
+    assert.equal(
+      result.reasonCode,
+      "DURABLE_COMPLETION_BINDING_MISMATCH",
     );
   },
 );
