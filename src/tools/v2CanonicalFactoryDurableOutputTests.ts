@@ -211,10 +211,13 @@ test(
 );
 
 test(
-  "C9E1A output operation key is deterministic and bound to completion fingerprint",
-  () => {
+  "C9E1C output operation key is stable per canonical step while input fingerprint remains output-bound",
+  async () => {
+    const value =
+      output();
+
     const first =
-      completion();
+      completion(value);
 
     const second = {
       ...first,
@@ -227,17 +230,44 @@ test(
         first,
       ),
       canonicalFactoryOutputOperationKey(
-        first,
+        second,
       ),
     );
 
     assert.notEqual(
-      canonicalFactoryOutputOperationKey(
+      canonicalFactoryOutputInputFingerprint(
         first,
       ),
-      canonicalFactoryOutputOperationKey(
+      canonicalFactoryOutputInputFingerprint(
         second,
       ),
+    );
+
+    const result =
+      await readCanonicalFactoryOutput(
+        new Reader({
+          ok:
+            true,
+          status:
+            "COMPLETED",
+          reasonCode:
+            "ok",
+          record:
+            record(first),
+          completedValue:
+            value,
+        }),
+        second,
+      );
+
+    assert.equal(
+      result.ok,
+      false,
+    );
+
+    assert.equal(
+      result.reasonCode,
+      "output-binding-mismatch",
     );
   },
 );

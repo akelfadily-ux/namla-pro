@@ -29,7 +29,7 @@ import {
 } from "../persistence/postgresCanonicalFactoryEvidenceAuthority";
 
 export const CANONICAL_FACTORY_OUTPUT_OPERATION_TYPE =
-  "canonical.factory-output.v1" as const;
+  "canonical.factory-output.v2" as const;
 
 function digest(
   domain: string,
@@ -67,12 +67,10 @@ export function canonicalFactoryOutputOperationKey(
   return (
     "factory-output:" +
     digest(
-      "NAMLA_V2_CANONICAL_FACTORY_OUTPUT_OPERATION",
+      "NAMLA_V2_CANONICAL_FACTORY_OUTPUT_STEP",
       {
         operationKey:
           completion.operationKey,
-        outputFingerprint:
-          completion.outputFingerprint,
       },
     )
   );

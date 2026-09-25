@@ -14,8 +14,8 @@ C9E1A defines that output contract before adding a writer.
 Completion and output are separate durable operation records.
 
 - `canonical.factory-completion.v2` remains the C9D/C9B authority token.
-- `canonical.factory-output.v1` stores the heterogeneous factory output.
-- The output operation key is deterministic from the exact completion.
+- `canonical.factory-output.v2` stores the heterogeneous factory output.
+- The output operation key is deterministic from the canonical completion step identity and does not vary with output content.
 - The output operation is bound to the same canonical factory task id and
   authority scope.
 - Its operation input fingerprint is computed from the exact completion.
