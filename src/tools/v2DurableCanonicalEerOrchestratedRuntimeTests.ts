@@ -791,3 +791,269 @@ test(
     );
   },
 );
+
+test(
+  "C9E3A verified EER evidence passes LOOP_AFTER_EER and advances only to PLAN",
+  async () => {
+    const f =
+      fixture();
+
+    const result =
+      await f.runtime
+        .startThroughEerGate(
+          input(),
+        );
+
+    assert.ok(
+      result.ok,
+      result.reasonCode,
+    );
+
+    if (!result.ok) return;
+
+    assert.equal(
+      result.status,
+      "STARTED_TO_PLAN",
+    );
+
+    assert.equal(
+      result.checkpoint
+        .checkpointVersion,
+      3,
+    );
+
+    assert.equal(
+      result.checkpoint
+        .cursor.stepVersion,
+      3,
+    );
+
+    assert.equal(
+      result.checkpoint
+        .cursor.nodeId,
+      "PLAN",
+    );
+
+    assert.equal(
+      result.checkpoint
+        .cursor.nodeKind,
+      "FACTORY",
+    );
+
+    assert.equal(
+      result.verdict.status,
+      "PASS",
+    );
+
+    assert.equal(
+      result.verdict.nextAction,
+      "NEXT",
+    );
+
+    assert.equal(
+      f.execution.operations.size,
+      2,
+    );
+
+    assert.equal(
+      f.execution.acquireCalls,
+      1,
+    );
+  },
+);
+
+test(
+  "C9E3A restart at LOOP_AFTER_EER re-verifies EER and advances gate without another EER lease",
+  async () => {
+    const f =
+      fixture();
+
+    const eer =
+      await f.runtime
+        .startAndRunEer(
+          input(),
+        );
+
+    assert.ok(eer.ok);
+
+    if (!eer.ok) return;
+
+    const leasesBefore =
+      f.execution.acquireCalls;
+
+    const fresh =
+      new DurableCanonicalEerOrchestratedRuntime({
+        missionId:
+          MISSION,
+        recoveryStore:
+          f.recovery,
+        executionStore:
+          f.execution,
+      });
+
+    const resumed =
+      await fresh
+        .resumeThroughEerGate(
+          input(),
+        );
+
+    assert.ok(
+      resumed.ok,
+      resumed.reasonCode,
+    );
+
+    if (!resumed.ok) return;
+
+    assert.equal(
+      resumed.status,
+      "RESUMED_TO_PLAN",
+    );
+
+    assert.equal(
+      resumed.checkpoint
+        .cursor.nodeId,
+      "PLAN",
+    );
+
+    assert.equal(
+      f.execution.acquireCalls,
+      leasesBefore,
+    );
+  },
+);
+
+test(
+  "C9E3A restart after durable gate advancement is idempotently recognized at PLAN",
+  async () => {
+    const f =
+      fixture();
+
+    const first =
+      await f.runtime
+        .startThroughEerGate(
+          input(),
+        );
+
+    assert.ok(first.ok);
+
+    if (!first.ok) return;
+
+    const leasesBefore =
+      f.execution.acquireCalls;
+
+    const fresh =
+      new DurableCanonicalEerOrchestratedRuntime({
+        missionId:
+          MISSION,
+        recoveryStore:
+          f.recovery,
+        executionStore:
+          f.execution,
+      });
+
+    const resumed =
+      await fresh
+        .resumeThroughEerGate(
+          input(),
+        );
+
+    assert.ok(
+      resumed.ok,
+      resumed.reasonCode,
+    );
+
+    if (!resumed.ok) return;
+
+    assert.equal(
+      resumed.status,
+      "ALREADY_AT_PLAN",
+    );
+
+    assert.equal(
+      resumed.checkpoint
+        .checkpointVersion,
+      3,
+    );
+
+    assert.equal(
+      resumed.checkpoint
+        .cursor.nodeId,
+      "PLAN",
+    );
+
+    assert.equal(
+      f.execution.acquireCalls,
+      leasesBefore,
+    );
+  },
+);
+
+test(
+  "C9E3A exhausted tick budget blocks at LOOP_AFTER_EER and cannot enter PLAN",
+  async () => {
+    const f =
+      fixture();
+
+    const zeroBudget = {
+      ...input(),
+      context: {
+        ...context(),
+        budgets: {
+          virtualTicks:
+            0,
+          providerCalls:
+            5,
+          maxFixAttempts:
+            3,
+        },
+      },
+    };
+
+    const result =
+      await f.runtime
+        .startThroughEerGate(
+          zeroBudget,
+        );
+
+    assert.ok(
+      result.ok,
+      result.reasonCode,
+    );
+
+    if (!result.ok) return;
+
+    assert.equal(
+      result.status,
+      "GATE_BLOCKED",
+    );
+
+    assert.equal(
+      result.verdict.status,
+      "HUMAN_REQUIRED",
+    );
+
+    assert.equal(
+      result.verdict.nextAction,
+      "HUMAN_REQUIRED",
+    );
+
+    assert.equal(
+      result.checkpoint
+        .cursor.nodeId,
+      "LOOP_AFTER_EER",
+    );
+
+    const durable =
+      await f.recovery.load(
+        MISSION,
+        null,
+      );
+
+    assert.ok(durable);
+
+    assert.equal(
+      durable?.cursor.nodeId,
+      "LOOP_AFTER_EER",
+    );
+  },
+);

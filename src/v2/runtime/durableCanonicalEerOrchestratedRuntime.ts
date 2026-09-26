@@ -1,4 +1,12 @@
+import {
+  createHash,
+} from "node:crypto";
+
 import { types } from "node:util";
+
+import {
+  canonicalizeOperationValue,
+} from "../kernel/operationIdentity";
 
 import type {
   EerExecutionResult,
@@ -38,6 +46,16 @@ import {
 import type {
   PreFreezeStageContext,
 } from "../types/stageContext";
+
+import type {
+  ArtifactIdentity,
+  EnvironmentIdentity,
+  EvidenceRecord,
+} from "../types/evidence";
+
+import type {
+  GateVerdict,
+} from "../types/namlaLoopTypes";
 
 export interface DurableCanonicalEerOrchestratedRuntimeOptions {
   readonly missionId: string;
@@ -90,6 +108,206 @@ export type DurableCanonicalEerOrchestratedResult =
       readonly checkpoint?:
         CanonicalRuntimeRecoveryCheckpoint;
     };
+
+export type DurableCanonicalEerGateAdvanceResult =
+  | {
+      readonly ok: true;
+      readonly status:
+        | "STARTED_TO_PLAN"
+        | "RESUMED_TO_PLAN";
+      readonly reasonCode: "ok";
+      readonly checkpoint:
+        CanonicalRuntimeRecoveryCheckpoint;
+      readonly completion:
+        CanonicalFactoryCompletion;
+      readonly output:
+        EerExecutionResult;
+      readonly verdict:
+        GateVerdict;
+    }
+  | {
+      readonly ok: true;
+      readonly status:
+        "ALREADY_AT_PLAN";
+      readonly reasonCode: "ok";
+      readonly checkpoint:
+        CanonicalRuntimeRecoveryCheckpoint;
+    }
+  | {
+      readonly ok: true;
+      readonly status:
+        "GATE_BLOCKED";
+      readonly reasonCode: "ok";
+      readonly checkpoint:
+        CanonicalRuntimeRecoveryCheckpoint;
+      readonly completion:
+        CanonicalFactoryCompletion;
+      readonly output:
+        EerExecutionResult;
+      readonly verdict:
+        GateVerdict;
+    }
+  | {
+      readonly ok: false;
+      readonly status: "REFUSED";
+      readonly reasonCode:
+        | "input-invalid"
+        | "recovery-read-failed"
+        | "eer-stage-refused"
+        | "unexpected-step"
+        | "gate-refused";
+      readonly detailReasonCode?: string;
+      readonly checkpoint?:
+        CanonicalRuntimeRecoveryCheckpoint;
+    };
+
+function digestGateValue(
+  domain: string,
+  value: unknown,
+): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify([
+        domain,
+        1,
+        canonicalizeOperationValue(
+          value,
+        ),
+      ]),
+      "utf8",
+    )
+    .digest("hex");
+}
+
+function buildVerifiedEerGateEvidence(
+  completion:
+    CanonicalFactoryCompletion,
+  output:
+    EerExecutionResult,
+  checkpoint:
+    CanonicalRuntimeRecoveryCheckpoint,
+): {
+  readonly artifactIdentity:
+    ArtifactIdentity;
+  readonly environmentIdentity:
+    EnvironmentIdentity;
+  readonly evidence:
+    EvidenceRecord;
+} {
+  const canonicalOutput =
+    canonicalizeOperationValue(
+      output,
+    );
+
+  const encoded =
+    JSON.stringify(
+      canonicalOutput,
+    );
+
+  const environmentIdentity:
+    EnvironmentIdentity =
+      Object.freeze({
+        platform:
+          process.platform,
+        nodeVersion:
+          process.version,
+        cwd:
+          process.cwd(),
+        envFingerprint:
+          digestGateValue(
+            "NAMLA_V2_EER_GATE_ENVIRONMENT",
+            {
+              platform:
+                process.platform,
+              nodeVersion:
+                process.version,
+              cwd:
+                process.cwd(),
+            },
+          ),
+      });
+
+  const artifactIdentity:
+    ArtifactIdentity =
+      Object.freeze({
+        artifactId:
+          `canonical-eer-output:${completion.operationKey}`,
+        path:
+          `durable://canonical-factory/EER/${completion.operationKey}`,
+        sha256:
+          completion.outputFingerprint,
+        sizeBytes:
+          Buffer.byteLength(
+            encoded,
+            "utf8",
+          ),
+        missionId:
+          completion.missionId,
+      });
+
+  const evidenceId =
+    "eer-gate:" +
+    digestGateValue(
+      "NAMLA_V2_EER_GATE_EVIDENCE_ID",
+      {
+        operationKey:
+          completion.operationKey,
+        outputFingerprint:
+          completion.outputFingerprint,
+      },
+    );
+
+  const evidenceBody = {
+    evidenceId,
+    producer:
+      "DurableCanonicalEerOrchestratedRuntime",
+    missionId:
+      completion.missionId,
+    stageId:
+      "LOOP_AFTER_EER",
+    proofKind:
+      "QUALIFICATION_PROOF" as const,
+    artifactIdentity,
+    environmentIdentity,
+    timestamp:
+      checkpoint.savedAt,
+    sequenceNumber:
+      1,
+    status:
+      "VALID" as const,
+    details: {
+      completionOperationKey:
+        completion.operationKey,
+      completionResultRef:
+        completion.resultRef,
+      outputFingerprint:
+        completion.outputFingerprint,
+      completionVerified:
+        true,
+      outputVerified:
+        true,
+      authoritySensitive:
+        false,
+    },
+  };
+
+  const evidence:
+    EvidenceRecord =
+      Object.freeze({
+        ...evidenceBody,
+        hash:
+          digestGateValue(
+            "NAMLA_V2_EER_GATE_EVIDENCE",
+            evidenceBody,
+          ),
+      });
+
+  return Object.freeze({
+    artifactIdentity,
+    environmentIdentity,
+    evidence,
+  });
+}
 
 const COMPLETION_FIELDS = [
   "schemaVersion",
@@ -297,6 +515,12 @@ export class DurableCanonicalEerOrchestratedRuntime {
 
     this.executionStore =
       options.executionStore;
+
+    this.recoveryStore =
+      options.recoveryStore;
+
+    this.maxLivelockThreshold =
+      options.maxLivelockThreshold ?? 3;
   }
 
   private readonly missionId:
@@ -304,6 +528,12 @@ export class DurableCanonicalEerOrchestratedRuntime {
 
   private readonly executionStore:
     CanonicalEerExecutionStore;
+
+  private readonly recoveryStore:
+    CanonicalRuntimeRecoveryStore;
+
+  private readonly maxLivelockThreshold:
+    number;
 
   public async startAndRunEer(
     raw:
@@ -401,6 +631,339 @@ export class DurableCanonicalEerOrchestratedRuntime {
       input,
       "RESUMED_AND_ADVANCED",
     );
+  }
+
+  public async startThroughEerGate(
+    raw:
+      DurableCanonicalEerOrchestratedInput,
+  ): Promise<
+    DurableCanonicalEerGateAdvanceResult
+  > {
+    const eer =
+      await this.startAndRunEer(
+        raw,
+      );
+
+    if (!eer.ok) {
+      return Object.freeze({
+        ok: false as const,
+        status:
+          "REFUSED" as const,
+        reasonCode:
+          eer.reasonCode ===
+            "input-invalid"
+            ? "input-invalid" as const
+            : "eer-stage-refused" as const,
+        detailReasonCode:
+          eer.detailReasonCode ??
+          eer.reasonCode,
+        ...(eer.checkpoint
+          ? {
+              checkpoint:
+                eer.checkpoint,
+            }
+          : {}),
+      });
+    }
+
+    return this.advanceVerifiedEerGate(
+      eer,
+      "STARTED_TO_PLAN",
+    );
+  }
+
+  public async resumeThroughEerGate(
+    raw:
+      DurableCanonicalEerOrchestratedInput,
+  ): Promise<
+    DurableCanonicalEerGateAdvanceResult
+  > {
+    const input =
+      capturedInput(
+        raw,
+        this.missionId,
+      );
+
+    if (!input) {
+      return Object.freeze({
+        ok: false as const,
+        status:
+          "REFUSED" as const,
+        reasonCode:
+          "input-invalid" as const,
+      });
+    }
+
+    let current:
+      CanonicalRuntimeRecoveryCheckpoint |
+      null;
+
+    try {
+      current =
+        await this.recoveryStore.load(
+          this.missionId,
+          null,
+        );
+    } catch {
+      return Object.freeze({
+        ok: false as const,
+        status:
+          "REFUSED" as const,
+        reasonCode:
+          "recovery-read-failed" as const,
+      });
+    }
+
+    if (
+      current &&
+      current.cursor.nodeId ===
+        "PLAN" &&
+      current.cursor.nodeKind ===
+        "FACTORY" &&
+      current.cursor.contractPhase ===
+        "PRE_FREEZE"
+    ) {
+      return Object.freeze({
+        ok: true as const,
+        status:
+          "ALREADY_AT_PLAN" as const,
+        reasonCode:
+          "ok" as const,
+        checkpoint:
+          current,
+      });
+    }
+
+    const eer =
+      await this.resumeAndRunEer(
+        raw,
+      );
+
+    if (!eer.ok) {
+      return Object.freeze({
+        ok: false as const,
+        status:
+          "REFUSED" as const,
+        reasonCode:
+          eer.reasonCode ===
+            "input-invalid"
+            ? "input-invalid" as const
+            : "eer-stage-refused" as const,
+        detailReasonCode:
+          eer.detailReasonCode ??
+          eer.reasonCode,
+        ...(eer.checkpoint
+          ? {
+              checkpoint:
+                eer.checkpoint,
+            }
+          : {}),
+      });
+    }
+
+    return this.advanceVerifiedEerGate(
+      eer,
+      "RESUMED_TO_PLAN",
+    );
+  }
+
+  private async advanceVerifiedEerGate(
+    eer:
+      Extract<
+        DurableCanonicalEerOrchestratedResult,
+        {
+          readonly ok: true;
+        }
+      >,
+    advancedStatus:
+      | "STARTED_TO_PLAN"
+      | "RESUMED_TO_PLAN",
+  ): Promise<
+    DurableCanonicalEerGateAdvanceResult
+  > {
+    if (
+      eer.checkpoint.cursor.nodeId !==
+        "LOOP_AFTER_EER" ||
+      eer.checkpoint.cursor.nodeKind !==
+        "GATE"
+    ) {
+      return Object.freeze({
+        ok: false as const,
+        status:
+          "REFUSED" as const,
+        reasonCode:
+          "unexpected-step" as const,
+        checkpoint:
+          eer.checkpoint,
+      });
+    }
+
+    const proof =
+      buildVerifiedEerGateEvidence(
+        eer.completion,
+        eer.output,
+        eer.checkpoint,
+      );
+
+    const gate =
+      await this.control
+        .evaluateGate({
+          artifactIdentity:
+            proof.artifactIdentity,
+          environmentIdentity:
+            proof.environmentIdentity,
+          policyVersions:
+            eer.output.eerOutput
+              ? [
+                  ...(
+                    this.recoveryPolicyVersions(
+                      eer,
+                    )
+                  ),
+                ]
+              : [],
+          requiredAttestations: [
+            "CANONICAL_FACTORY_COMPLETION_VERIFIED",
+            "CANONICAL_FACTORY_OUTPUT_VERIFIED",
+          ],
+          requiredAssessments: [
+            "EER_OUTPUT_SCHEMA_VALID",
+            "EER_AUTHORITY_SENSITIVE_FALSE",
+          ],
+          evidenceRefs: [
+            proof.evidence.evidenceId,
+          ],
+          evidencePool: [
+            proof.evidence,
+          ],
+          policy: {
+            stageId:
+              "LOOP_AFTER_EER",
+            allowedActions: [
+              "FIX",
+              "FAIL_CLOSED",
+              "HUMAN_REQUIRED",
+            ],
+            maxRetriesPerStage:
+              this.maxLivelockThreshold,
+          },
+        });
+
+    if (!gate.ok) {
+      return Object.freeze({
+        ok: false as const,
+        status:
+          "REFUSED" as const,
+        reasonCode:
+          "gate-refused" as const,
+        detailReasonCode:
+          gate.detailReasonCode ??
+          gate.reasonCode,
+        ...(gate.checkpoint
+          ? {
+              checkpoint:
+                gate.checkpoint,
+            }
+          : {}),
+      });
+    }
+
+    if (
+      gate.status !==
+        "GATE_ADVANCED"
+    ) {
+      if (!gate.verdict) {
+        return Object.freeze({
+          ok: false as const,
+          status:
+            "REFUSED" as const,
+          reasonCode:
+            "gate-refused" as const,
+          detailReasonCode:
+            gate.status,
+          checkpoint:
+            gate.checkpoint,
+        });
+      }
+
+      return Object.freeze({
+        ok: true as const,
+        status:
+          "GATE_BLOCKED" as const,
+        reasonCode:
+          "ok" as const,
+        checkpoint:
+          gate.checkpoint,
+        completion:
+          eer.completion,
+        output:
+          eer.output,
+        verdict:
+          gate.verdict,
+      });
+    }
+
+    if (
+      !gate.verdict ||
+      gate.verdict.status !==
+        "PASS" ||
+      gate.verdict.nextAction !==
+        "NEXT" ||
+      gate.checkpoint.cursor.nodeId !==
+        "PLAN" ||
+      gate.checkpoint.cursor.nodeKind !==
+        "FACTORY" ||
+      gate.checkpoint.cursor.contractPhase !==
+        "PRE_FREEZE" ||
+      gate.checkpoint.checkpointVersion !==
+        eer.checkpoint.checkpointVersion + 1 ||
+      gate.checkpoint.cursor.stepVersion !==
+        eer.checkpoint.cursor.stepVersion + 1
+    ) {
+      return Object.freeze({
+        ok: false as const,
+        status:
+          "REFUSED" as const,
+        reasonCode:
+          "unexpected-step" as const,
+        detailReasonCode:
+          "EER_GATE_ADVANCEMENT_INVARIANT_FAILED",
+        checkpoint:
+          gate.checkpoint,
+      });
+    }
+
+    return Object.freeze({
+      ok: true as const,
+      status:
+        advancedStatus,
+      reasonCode:
+        "ok" as const,
+      checkpoint:
+        gate.checkpoint,
+      completion:
+        eer.completion,
+      output:
+        eer.output,
+      verdict:
+        gate.verdict,
+    });
+  }
+
+  private recoveryPolicyVersions(
+    _eer:
+      Extract<
+        DurableCanonicalEerOrchestratedResult,
+        {
+          readonly ok: true;
+        }
+      >,
+  ): readonly string[] {
+    return Object.freeze([
+      "namla-loop-v1",
+      "canonical-factory-completion-v2",
+      "canonical-factory-output-v2",
+    ]);
   }
 
   private async runCurrentEer(
