@@ -420,7 +420,7 @@ function stringArray(
   }
 }
 
-function captureContext(
+export function captureCanonicalEerPreFreezeContext(
   value: unknown,
 ): PreFreezeStageContext | null {
   const data =
@@ -633,7 +633,7 @@ function captureEerOutput(
   });
 }
 
-function captureEerResult(
+export function restoreCanonicalEerExecutionResult(
   value: unknown,
   missionId: string,
   objective: string,
@@ -795,7 +795,7 @@ export class DurableCanonicalEerRuntime {
     DurableCanonicalEerRuntimeResult
   > {
     const context =
-      captureContext(
+      captureCanonicalEerPreFreezeContext(
         rawInput.context,
       );
 
@@ -911,7 +911,7 @@ export class DurableCanonicalEerRuntime {
       }
 
       const output =
-        captureEerResult(
+        restoreCanonicalEerExecutionResult(
           durableOutput.output,
           context.missionId,
           input.objective,
@@ -977,7 +977,7 @@ export class DurableCanonicalEerRuntime {
     }
 
     const output =
-      captureEerResult(
+      restoreCanonicalEerExecutionResult(
         rawOutput,
         context.missionId,
         input.objective,
