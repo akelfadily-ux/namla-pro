@@ -60,6 +60,24 @@ test(
 );
 
 test(
+  "C9E2B release runner requires the real PostgreSQL EER orchestrated restart proof",
+  () => {
+    const source =
+      readFileSync(
+        releaseRunnerPath(),
+        "utf8",
+      );
+
+    assert.equal(
+      source.includes(
+        "dist/tools/v2RealPostgresEerOrchestratedRestartTests.js",
+      ),
+      true,
+    );
+  },
+);
+
+test(
   "R1B-PG3 release runner remains DATABASE_URL-gated and fail closed",
   () => {
     const source =

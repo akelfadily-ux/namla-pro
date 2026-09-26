@@ -28,6 +28,7 @@ const result =
       "dist/tools/v2RealPostgresReleaseTests.js",
       "dist/tools/v2RealPostgresExecutionAuthorityTests.js",
       "dist/tools/v2RealPostgresCanonicalRestartReplayTests.js",
+      "dist/tools/v2RealPostgresEerOrchestratedRestartTests.js",
     ],
     {
       stdio: "inherit",
